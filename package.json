@@ -1,0 +1,14 @@
+{
+  "name": "more-more-code",
+  "version": "1.0.0",
+  "description": "",
+  "workspaces": [
+    "packages/*"
+  ],
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+   "scripts": {
+    "dev:cli": "bun run --watch packages/cli/src/index.tsx"
+  }
+}
