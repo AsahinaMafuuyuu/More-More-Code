@@ -49,11 +49,6 @@ export default function InputBar({ onSubmit, disabled = false }: Props) {
         setSelectedIndex
     } = useCommandsMenu();
 
-    const handleCommandExecute = useCallback((index: number) => {
-        // 当用户执行一个命令时，执行该命令的回调
-        const command = resolveCommand(index);
-        handleCommand(command);
-    }, [])
 
     const handleTextareaContentChange = useCallback(() => {
         // 当用户输入内容时，触发该回调
@@ -102,6 +97,12 @@ export default function InputBar({ onSubmit, disabled = false }: Props) {
             textarea.insertText(command.value + ' ') // 插入命令的value
         }
     }, [renderer])
+
+    const handleCommandExecute = useCallback((index: number) => {
+        // 当用户执行一个命令时，执行该命令的回调
+        const command = resolveCommand(index);
+        handleCommand(command);
+    }, [resolveCommand, handleCommand])
     useEffect(() => {
         // 添加提交事件
         const textarea = textareaRef.current;
@@ -123,7 +124,7 @@ export default function InputBar({ onSubmit, disabled = false }: Props) {
             // 如果命令菜单显示，则执行选中的命令
             const command = resolveCommand(selectedIndex);
             handleCommand(command);
-            return ;
+            return;
         }
 
         handleSubmit(); // 触发提交事件
