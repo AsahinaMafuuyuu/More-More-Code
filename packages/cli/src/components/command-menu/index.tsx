@@ -3,6 +3,7 @@ import type { RefObject } from 'react';
 import { TextAttributes, type ScrollBoxRenderable } from '@opentui/core';
 import { getFilteredCommands } from './filter-commands';
 import { COMMANDS } from './commands';
+import { useTheme } from '../../providers/theme';
 
 const MAX_VISIBLE_ITEMS = 8; // 最大可见命令数
 const COMMAND_COL_WIDTH = Math.max(...COMMANDS.map(cmd => cmd.name.length)) + 4; // 找出最长命令名的长度，并加上额外的空格用于对齐
@@ -23,6 +24,7 @@ export function CommandMenu({
     onSelect,
     onExecute
 }: CommandMenuProps) {
+    const { colors } = useTheme(); // 使用useTheme()获取主题颜色
     const filteredCommands = getFilteredCommands(query); // 根据查询字符串过滤命令列表
     const visibleHeight = Math.min(filteredCommands.length, MAX_VISIBLE_ITEMS); // 计算可见命令的高度
 
@@ -43,15 +45,14 @@ export function CommandMenu({
             {filteredCommands.map((command, index) => {
                 const isSelected = index === selectedIndex; // 判断当前命令是否被选中
                 return (
-                    <box 
-                    
-                    key={index} 
-                    flexDirection='row'
-                    paddingLeft={1} 
-                    height={1}
-                    backgroundColor={isSelected? "#8bccf7" : undefined}
-                    onMouseMove={() => onSelect(index)}
-                    onMouseDown={() => onExecute(index)}
+                    <box
+                        key={index}
+                        flexDirection='row'
+                        paddingLeft={1}
+                        height={1}
+                        backgroundColor={isSelected ? colors.selection : undefined}
+                        onMouseMove={() => onSelect(index)}
+                        onMouseDown={() => onExecute(index)}
                     >
                         {/* 用来装title和description */}
                         <box width={COMMAND_COL_WIDTH} flexShrink={0}>

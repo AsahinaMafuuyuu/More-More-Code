@@ -7,6 +7,10 @@ import type { Command } from "./command-menu/types";
 import { CommandMenu } from "./command-menu";
 import StatusBar from "./status-bar";
 import { useCommandsMenu } from "./command-menu/use-commands-menu";
+import { useToast } from "../providers/toast";
+import { useKeyboardLayer } from "../providers/keyboard-layer";
+import { useDialog } from "../providers/dialog";
+import { useTheme } from "../providers/theme";
 
 interface Props {
     onSubmit: Function,
@@ -37,6 +41,10 @@ export default function InputBar({ onSubmit, disabled = false }: Props) {
     const textareaRef = useRef<TextareaRenderable>(null);
     const onSubmitRef = useRef<() => void>(() => { });
     const renderer = useRenderer();
+    const toast = useToast(); // 使用useToast()获取toast上下文对象
+    const dialog = useDialog(); // 使用useDialog()获取dialog上下文对象
+    const { isTopLayer, setResponder } = useKeyboardLayer();
+    const { colors } = useTheme();
 
     // 结构useCommandsMenu()返回的对象
     const {
@@ -91,12 +99,14 @@ export default function InputBar({ onSubmit, disabled = false }: Props) {
         textarea.setText('') // 清空输入框
         if (command.action) {
             command.action({
-                exit: () => renderer.destroy() // 销毁渲染器
+                exit: () => renderer.destroy(), // 销毁渲染器
+                toast, // 显示toast
+                dialog,
             }); // 执行命令的action
         } else {
             textarea.insertText(command.value + ' ') // 插入命令的value
         }
-    }, [renderer])
+    }, [renderer, toast])
 
     const handleCommandExecute = useCallback((index: number) => {
         // 当用户执行一个命令时，执行该命令的回调
@@ -130,13 +140,28 @@ export default function InputBar({ onSubmit, disabled = false }: Props) {
         handleSubmit(); // 触发提交事件
     }
 
+    // 当用户按下Ctrl+C时，清空输入框内容
+    useEffect(() => {
+        setResponder("base", () => {
+            if (disabled) {
+                return false;
+            }
+            const textarea = textareaRef.current;
+            if (textarea && textarea.plainText.length > 0) {
+                textarea.setText(''); // 清空输入框
+                return true;
+            }
+            return false;
+        })
+        return () => setResponder("base", null)
+    }, [disabled, setResponder]);
 
     return (
         <box
             width="100%"
             alignItems="center">
             {/* 添加左侧边框显色 */}
-            <box width="80%" border={["left"]} borderColor="#1edff0"
+            <box width="80%" border={["left"]} borderColor={colors.primary}
             >
                 {/* 添加输入框 */}
                 <box
@@ -144,7 +169,7 @@ export default function InputBar({ onSubmit, disabled = false }: Props) {
                     justifyContent="center"
                     paddingX={2}
                     paddingY={1}
-                    backgroundColor="#1A1A24"
+                    backgroundColor={colors.surface}
                     width="100%"
                     gap={1}
                 >
@@ -154,7 +179,7 @@ export default function InputBar({ onSubmit, disabled = false }: Props) {
                         bottom='100%'
                         left={0}
                         width="100%"
-                        backgroundColor="#1A1A24"
+                        backgroundColor={colors.surface}
                         zIndex={10}
                     >
                         <CommandMenu
@@ -169,7 +194,7 @@ export default function InputBar({ onSubmit, disabled = false }: Props) {
 
                     <textarea
                         ref={textareaRef}
-                        focused={!disabled}
+                        focused={!disabled && (isTopLayer("base") || isTopLayer("command"))}
                         placeholder='Ask anything..."Fix a bug in the database"'
                         width="100%"
                         overflow="scroll"
