@@ -3,6 +3,7 @@ import { ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import { getFilteredCommands } from "./filter-commands";
 import type { Command } from "./types";
+import { useKeyboardLayer } from "../../providers/keyboard-layer";
 
 type useCommandsMenuReturn = {
     showCommandMenu: boolean; // 是否显示命令菜单
@@ -20,10 +21,17 @@ export function useCommandsMenu(): useCommandsMenuReturn {
     const [selectedIndex, setSelectedIndex] = useState(0); // 选中的命令索引
     const scrollRef = useRef<ScrollBoxRenderable | null>(null);
     const commandQuery = showCommandMenu && textValue.startsWith('/') ? textValue.slice(1) : ''; // 命令菜单的查询条件
+    const { push, pop, isTopLayer} = useKeyboardLayer(); // 获取键盘层控制函数
 
     const filteredCommands = useMemo(() => {
         return getFilteredCommands(commandQuery);
     }, [commandQuery]); // 获取过滤后的命令
+
+    // 关闭命令菜单的回调
+    const close =  () => { 
+        setShowCommandMenu(false);
+        pop("command");
+    };
 
     // 输入框内容改变的回调
     const handleContentChange = (text: string) => {
@@ -40,8 +48,13 @@ export function useCommandsMenu(): useCommandsMenuReturn {
         // 如果前缀是/并且后面一个字符不是空格，则显示命令菜单
         if (prefix !== null && !prefix.includes(' ')) {
             setShowCommandMenu(true);
+            // 添加键盘层控制函数
+            push("command", () => { 
+                close();
+                return true;
+            });
         } else {
-            setShowCommandMenu(false);
+            close();
         }
     };
 
@@ -49,18 +62,18 @@ export function useCommandsMenu(): useCommandsMenuReturn {
     const resolveCommand = (index: number) => {
         const command = filteredCommands[index]; // 获取选中的命令
         if (command) {
-            setShowCommandMenu(false);
+           close()
         }
         return command;
     };
 
     // 监听键盘事件,上下键切换命令菜单的选中项
     useKeyboard((key) => {
-        if (!showCommandMenu) {
+        if (!showCommandMenu || !isTopLayer("command")) { // 如果命令菜单未显示或者当前不是命令菜单的键盘层，则返回
             return;
         }
         if (key.name === 'escape') {
-            setShowCommandMenu(false);
+            close();
 
         } else if (key.name === 'up') {
             key.preventDefault();
@@ -95,7 +108,7 @@ export function useCommandsMenu(): useCommandsMenuReturn {
                 return newIndex;
             })
 
-        } else if (key.name === 'enter'|| key.name === 'tab') {
+        } else if (key.name === 'enter' ) {
             // 监听回车和tab键，触发解析命令的回调
             const command = resolveCommand(selectedIndex);
             if (command) {
