@@ -14,7 +14,7 @@ import { useTheme } from "../providers/theme";
 
 interface Props {
     onSubmit: Function,
-    disabled: Boolean
+    disabled?: Boolean
 }
 
 export const TEXTAREA_KEY_BINDING: KeyBinding[] = [
@@ -106,7 +106,7 @@ export default function InputBar({ onSubmit, disabled = false }: Props) {
         } else {
             textarea.insertText(command.value + ' ') // 插入命令的value
         }
-    }, [renderer, toast])
+    }, [renderer, toast, dialog])
 
     const handleCommandExecute = useCallback((index: number) => {
         // 当用户执行一个命令时，执行该命令的回调
