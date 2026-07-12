@@ -1,0 +1,19 @@
+{
+    "name": "@more-more-code/server",
+    "type": "module",
+    "private": true,
+    "exports": {
+        ".": "./src/index.ts"
+    },
+    "scripts": {
+        "dev": "bun run --hot src/index.ts"
+    },
+    "dependencies": {
+        "@hono/zod-validator": "^0.8.0",
+        "@more-more-code/shared": "workspace:*",
+        "@more-more-code/database": "workspace:*",
+        "dotenv": "^17.4.2",
+        "hono": "^4.12.28",
+        "zod": "^4.4.3"
+    }
+}
