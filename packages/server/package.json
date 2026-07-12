@@ -10,8 +10,10 @@
     },
     "dependencies": {
         "@hono/zod-validator": "^0.8.0",
-        "@more-more-code/shared": "workspace:*",
         "@more-more-code/database": "workspace:*",
+        "@more-more-code/shared": "workspace:*",
+        "@sentry/bun": "^10.65.0",
+        "@sentry/hono": "^10.65.0",
         "dotenv": "^17.4.2",
         "hono": "^4.12.28",
         "zod": "^4.4.3"
