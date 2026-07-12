@@ -9,6 +9,7 @@
   "author": "",
   "license": "ISC",
    "scripts": {
-    "dev:cli": "bun run --watch packages/cli/src/index.tsx"
+    "dev:cli": "bun run --watch packages/cli/src/index.tsx",
+    "dev:server": "bun run --hot packages/server/src/index.ts"
   }
 }

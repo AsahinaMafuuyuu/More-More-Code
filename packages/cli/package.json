@@ -1,5 +1,5 @@
 {
-  "name": "cli",
+  "name": "@more-more-code/cli",
   "module": "src/index.tsx",
   "type": "module",
   "private": true,
@@ -7,6 +7,7 @@
     "dev": "bun run --watch src/index.tsx"
   },
   "devDependencies": {
+    "@more-more-code/server": "workspace:*",
     "@types/bun": "latest",
     "@types/react": "^19.2.17"
   },
@@ -14,10 +15,13 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "@more-more-code/shared": "workspace:*",
     "@opentui/core": "^0.4.2",
     "@opentui/react": "^0.4.2",
+    "hono": "^4.12.28",
     "opentui-spinner": "^0.0.7",
     "react": "^19.2.6",
-    "react-router": "^8.1.0"
+    "react-router": "^8.1.0",
+    "zod": "^4.4.3"
   }
 }
