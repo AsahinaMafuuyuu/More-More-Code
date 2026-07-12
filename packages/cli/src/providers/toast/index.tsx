@@ -4,7 +4,8 @@ import {
     useCallback,
     useRef,
     useState,
-    use
+    use,
+    useMemo
 } from 'react';
 
 import type { ReactNode } from 'react'; // ReactNode类型表示React组件的子节点类型
@@ -59,9 +60,7 @@ export function ToastProvider({ children }: ToastProviderProps) {
         }, duration).unref();
     }, [clearCurrentTimeout])
 
-    const value: ToastContextValue = {
-        show,
-    };
+    const value = useMemo(() => ({ show }), [show]); // 使用useMemo缓存show函数，避免不必要的重新渲染
 
     return (
         <ToastContext.Provider value={value}>

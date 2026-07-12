@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator"
 import { z } from "zod";
 import { findSupportedChatModel } from "@more-more-code/shared";
-import { db } from "@more-more-code/database"
+import { db } from "@more-more-code/database/client"
 import { Role, Mode, MessageStatus } from "@more-more-code/database/enums";
 
 

@@ -1,4 +1,4 @@
-import "dotenv/config" // 从环境变量中加载环境变量
+import dotenv from "dotenv" // 从环境变量中加载环境变量
 import { PrismaPg } from "@prisma/adapter-pg"
 import { PrismaClient } from "../generated/prisma/client.ts"
 
