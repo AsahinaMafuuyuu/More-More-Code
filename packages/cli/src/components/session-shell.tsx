@@ -8,12 +8,14 @@ type Props = {
     onSubmit: (text: string) => void;
     inputDisabled?: boolean;
     loading?: boolean;
+    interruptible?: boolean;
 };
 
 export function SessionShell({ children,
     onSubmit,
     inputDisabled = false,
-    loading = false
+    loading = false,
+    interruptible = false, // 允许中断
 }
     : Props) {
     return (
@@ -47,10 +49,17 @@ export function SessionShell({ children,
                 height={1}
                 gap={2}
                 paddingLeft={1}
-            
+
             >
                 <box flexDirection="row" alignItems="center" gap={2}>
-                    {loading && <Spinner />}
+                    {
+                        loading ? (
+                            <>
+                                <Spinner />
+                                {interruptible && <text>esc to interrupt</text>}
+                            </>
+                        ) : null
+                    }
                 </box>
 
                 {/* 按tab切换智能体 */}

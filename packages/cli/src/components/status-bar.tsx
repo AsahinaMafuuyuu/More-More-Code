@@ -1,6 +1,7 @@
 // 显示模型状态栏
 import { TextAttributes } from "@opentui/core";
 import { useTheme } from "../providers/theme";
+import { DEFAULT_CHAT_MODEL_ID } from "@more-more-code/shared";
 
 export default function StatusBar() {
     const { colors } = useTheme();
@@ -10,7 +11,7 @@ export default function StatusBar() {
             <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>
                 &#8250;
             </text>
-            <text>opus-4.6</text>
+            <text>{DEFAULT_CHAT_MODEL_ID}</text>
         </box>
     )
 }
