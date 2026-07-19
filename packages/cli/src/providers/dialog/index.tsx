@@ -1,3 +1,9 @@
+/**
+ * Dialog	
+ * 模态窗口，例如选择主题、选择模型	
+ * 通常需要用户处理
+ */
+
 import { createContext, useContext, useState, useCallback } from "react";
 import type { ReactNode } from "react";
 import { TextAttributes, RGBA } from "@opentui/core";

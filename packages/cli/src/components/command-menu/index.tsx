@@ -1,4 +1,7 @@
 // 开发命令菜单组件
+/**
+ * 主要是渲染命令list，而不是命令panel
+ */
 import type { RefObject } from 'react';
 import { TextAttributes, type ScrollBoxRenderable } from '@opentui/core';
 import { getFilteredCommands } from './filter-commands';

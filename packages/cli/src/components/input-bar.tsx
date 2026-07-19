@@ -2,7 +2,8 @@
 import { type KeyBinding } from "@opentui/core";
 import { useRef, useCallback, useEffect, use } from "react";
 import type { TextareaRenderable } from "@opentui/core";
-import { useRenderer } from "@opentui/react";
+import { useNavigate } from "react-router";
+import { useKeyboard, useRenderer } from "@opentui/react";
 import type { Command } from "./command-menu/types";
 import { CommandMenu } from "./command-menu";
 import StatusBar from "./status-bar";
@@ -11,6 +12,8 @@ import { useToast } from "../providers/toast";
 import { useKeyboardLayer } from "../providers/keyboard-layer";
 import { useDialog } from "../providers/dialog";
 import { useTheme } from "../providers/theme";
+import { usePromptConfig } from "../providers/prompt-config";
+import { Mode } from "@more-more-code/database";
 
 interface Props {
     onSubmit: Function,
@@ -38,6 +41,7 @@ export const TEXTAREA_KEY_BINDING: KeyBinding[] = [
     }
 ]
 export default function InputBar({ onSubmit, disabled = false }: Props) {
+    const { mode, model, toggleMode, setMode, setModel } = usePromptConfig();
     const textareaRef = useRef<TextareaRenderable>(null);
     const onSubmitRef = useRef<() => void>(() => { });
     const renderer = useRenderer();
@@ -45,6 +49,7 @@ export default function InputBar({ onSubmit, disabled = false }: Props) {
     const dialog = useDialog(); // 使用useDialog()获取dialog上下文对象
     const { isTopLayer, setResponder } = useKeyboardLayer();
     const { colors } = useTheme();
+    const navigate = useNavigate();
 
     // 结构useCommandsMenu()返回的对象
     const {
@@ -102,17 +107,33 @@ export default function InputBar({ onSubmit, disabled = false }: Props) {
                 exit: () => renderer.destroy(), // 销毁渲染器
                 toast, // 显示toast
                 dialog,
+                navigate,
+                mode, // 获取模式
+                setMode, // 设置模式
+                setModel, // 设置模型
             }); // 执行命令的action
         } else {
             textarea.insertText(command.value + ' ') // 插入命令的value
         }
-    }, [renderer, toast, dialog])
+    }, [renderer, toast, dialog, navigate, mode, setMode, setModel])
 
     const handleCommandExecute = useCallback((index: number) => {
         // 当用户执行一个命令时，执行该命令的回调
         const command = resolveCommand(index);
         handleCommand(command);
     }, [resolveCommand, handleCommand])
+
+    // 当用户按下Tab键时，切换模式Plan和Build
+    useKeyboard((key) => {
+        if (disabled) return ;
+        if (!isTopLayer("base")) return ;
+        if (key.name === "tab") {
+            // 如果按下Tab键，则显示命令菜单
+            key.preventDefault();
+            toggleMode(); // 切换模式
+        }
+    })
+
     useEffect(() => {
         // 添加提交事件
         const textarea = textareaRef.current;
@@ -161,7 +182,7 @@ export default function InputBar({ onSubmit, disabled = false }: Props) {
             width="100%"
             alignItems="center">
             {/* 添加左侧边框显色 */}
-            <box width="80%" border={["left"]} borderColor={colors.primary}
+            <box width="80%" border={["left"]} borderColor={mode === "PLAN" ? colors.planMode : colors.primary}
             >
                 {/* 添加输入框 */}
                 <box
