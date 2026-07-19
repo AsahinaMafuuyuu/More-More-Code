@@ -1,3 +1,10 @@
+// 主题对话框内容组件
+/**
+ * 该组件用于在对话框中显示主题列表，并允许用户选择和预览主题。
+ * 当用户选择一个主题时，组件会调用 setTheme 来应用该主题，并关闭对话框。
+ * 如果用户在关闭对话框前没有确认选择，组件会恢复原始主题。
+ */
+
 import { useCallback, useEffect, useRef } from "react";
 import { useDialog } from "../../providers/dialog";
 import { useTheme } from "../../providers/theme";

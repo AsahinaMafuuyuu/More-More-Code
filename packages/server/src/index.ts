@@ -47,6 +47,7 @@ app.get("/debug-sentry", () => {
   throw new Error("My first Sentry error!");
 });
 
+// 将session中的路由逻辑挂载到/sessions下， 聊天逻辑挂载到/chat下
 const routes = app.route("/sessions", sessions).route("/chat", chatRoute)
 
 export type AppType = typeof routes

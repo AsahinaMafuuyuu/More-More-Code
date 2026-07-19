@@ -118,6 +118,7 @@ const app = new Hono()
 
         return c.json(session);
     })
+    // post主要就是创建一个session
     .post("/", createSessionValidator, async (c) => {
         // // 模拟耗时
         // await new Promise(resolve => setTimeout(resolve, 5000));

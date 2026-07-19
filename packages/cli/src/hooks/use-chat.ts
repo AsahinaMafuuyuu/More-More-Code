@@ -1,3 +1,5 @@
+// 它把“发送消息、接收 SSE 流、
+// 实时展示回答、停止生成、恢复未完成对话、处理错误”集中封装起来
 import { useState, useRef, useCallback, useEffect, act } from "react";
 import { EventSourceParserStream } from "eventsource-parser/stream";
 import prettyMs from "pretty-ms";
@@ -14,6 +16,8 @@ import { is } from "zod/locales";
 
 export type ClientMessagePart = { type: "text"; text: string };
 
+// messages：已经确定的历史消息
+// 它是已经完成展示的会话记录：
 export type Message = {
     id: string;
     role: "user";
@@ -35,6 +39,18 @@ export type Message = {
     content: string;
 };
 
+// streaming：当前正在生成、但还没完成的回答
+// 模型正在输出时，内容不会立即写入 messages，而是先放进 streaming.parts：
+/**
+ * {
+    status: "streaming",
+    parts: [
+        { type: "text", text: "正在分析" }
+    ],
+    mode: "BUILD",
+    model: "deepseek-v4-flash",
+    }
+ */
 type StreamingState =
     | { status: "idle" }
     | {
@@ -43,6 +59,7 @@ type StreamingState =
         mode: Mode;
         model: SupportedChatModelId;
     };
+
 
 type ActiveStream = {
     requestId: string;
@@ -136,7 +153,7 @@ export function useChat(
                 interrupted: true,
             },
         ]);
-    }, [])
+    }, [updateMessages])
 
     const clearStream = useCallback((requestId: string) => {
         if (!isActiveRequest(requestId)) return;
@@ -344,6 +361,20 @@ export function useChat(
         });
     }, [initialMessages, resume])
 
+    // 用户提交输入
+    /**
+     *  用户输入
+        ↓
+        本地立即添加一条 USER 消息
+        ↓
+        POST /chat/:sessionId
+        ↓
+        服务端存储用户消息
+        ↓
+        服务端调用模型
+        ↓
+        通过 SSE 返回流式回答
+     */
     const submit = useCallback(async (
         { userText, mode, model }: SubmitParams
     ) => {
