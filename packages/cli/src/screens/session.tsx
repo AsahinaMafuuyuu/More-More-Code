@@ -1,3 +1,4 @@
+// 主要用于已经创建的会话，显示会话的消息列表，并提供输入框用于发送新消息
 import { useState, useEffect, useMemo } from "react";
 import { useParams, useLocation, useNavigate } from "react-router";
 import { z } from "zod";
@@ -13,8 +14,9 @@ import { useToast } from "../providers/toast";
 import { apiClient } from "../lib/api-client";
 import { getErrorMessage } from "../lib/http-errors";
 import prettyMs from "pretty-ms";
-import { DEFAULT_CHAT_MODEL_ID, type SupportedChatModelId } from "@more-more-code/shared";
+import { messagePartsSchema, type SupportedChatModelId } from "@more-more-code/shared";
 import { useChat } from "../hooks/use-chat";
+import { usePromptConfig } from "../providers/prompt-config";
 import type { Message, ClientMessagePart } from "../hooks/use-chat";
 import { MessageStatus } from "@more-more-code/database";
 import { useKeyboardLayer } from "../providers/keyboard-layer";
@@ -48,13 +50,23 @@ function mapDbMessages(dbMessages: SessionData["messages"]): Message[] {
       }
     }
 
+    // 如果是助手消息，则需要处理消息的parts
+    const parsedParts = msg.parts ? messagePartsSchema.safeParse(msg.parts) : null;
+    // 如果解析成功，则将每个part的状态设置为done，否则返回空数组
+    const parts: ClientMessagePart[] = parsedParts?.success ?
+      parsedParts.data.map((p) => p.type === 'tool-call' ? {
+        ...p,
+        status: 'done' as const
+      } : p)
+      : [];
+
     return {
       id: msg.id,
       role: "assistant",
       content: msg.content,
       model: msg.model as SupportedChatModelId,
       mode: msg.mode,
-      parts: [{ type: "text", text: msg.content }],
+      parts,
       ...(msg.duration !== null ? { duration: prettyMs(msg.duration) } : {}),
       interrupted: msg.status === MessageStatus.INTERRUPTED, // 如果消息状态为INTERRUPTED，则设置interrupted为true
     }
@@ -63,7 +75,7 @@ function mapDbMessages(dbMessages: SessionData["messages"]): Message[] {
 
 function ChatMessage({ msg }: { msg: Message }) {
   if (msg.role === "user") { // 如果是用户消息
-    return <UserMessage message={msg.content} />;
+    return <UserMessage message={msg.content} mode={msg.mode} />;
   }
   if (msg.role === "error") { // 如果是错误消息
     return <ErrorMessage message={msg.content} />;
@@ -81,6 +93,7 @@ function ChatMessage({ msg }: { msg: Message }) {
 }
 
 function SessionChat({ session }: { session: SessionData }) {
+  const { mode, model } = usePromptConfig(); // 获取当前的模式和模型
   const [initialMessages] = useState(() => mapDbMessages(session.messages)); // 将数据库消息映射为客户端消息
   const { isTopLayer } = useKeyboardLayer(); // 获取键盘层状态
   const { messages, streaming, submit, abort, interrupt } = useChat(session.id, initialMessages); // 使用自定义hook管理消息状态
@@ -103,8 +116,8 @@ function SessionChat({ session }: { session: SessionData }) {
       onSubmit={(text) => {
         submit({
           userText: text,
-          mode: "BUILD",
-          model: DEFAULT_CHAT_MODEL_ID
+          mode,
+          model,
         })
       }}
       loading={streaming.status === "streaming"}

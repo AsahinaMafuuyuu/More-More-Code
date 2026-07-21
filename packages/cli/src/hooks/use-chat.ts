@@ -11,10 +11,23 @@ import {
     chatStreamEventSchema,
     type SupportedChatModelId,
 } from "@more-more-code/shared";
-import { set } from "zod";
-import { is } from "zod/locales";
+import { id } from "zod/locales";
 
-export type ClientMessagePart = { type: "text"; text: string };
+export type ClientToolCallPart = {
+    type: "tool-call",
+    id: string;
+    name: string;
+    args: Record<string, unknown>;
+    result?: string;
+    status: "calling" | "done"
+}
+
+// 客户端消息可以是文本、工具调用、推理、错误
+export type ClientMessagePart =
+    | { type: "text"; text: string }
+    | ClientToolCallPart
+    | { type: "reasoning"; text: string }
+    ;
 
 // messages：已经确定的历史消息
 // 它是已经完成展示的会话记录：
@@ -207,9 +220,24 @@ export function useChat(
             }
 
             switch (event.type) {
+                case "reasoning-delta": {
+                    const last = parts[parts.length - 1];
+                    // 如果前一条消息是reasoning，则追加
+                    if (last && last.type === "reasoning") {
+                        last.text += event.text;
+                    } else {  // 否则创建新的reasoning消息
+                        parts.push({
+                            type: "reasoning",
+                            text: event.text,
+                        });
+                    }
+
+                    emitParts(activeStream.requestId, parts); // 发送消息
+                    break;
+                }
                 case "text-delta": {
                     const last = parts[parts.length - 1];
-                    // 如果最后一条消息是text，则追加
+                    // 如果前一条消息是text，则追加
                     if (last && last.type === "text") {
                         last.text += event.text;
                     } else {  // 否则创建新的text消息
@@ -220,6 +248,31 @@ export function useChat(
                     }
 
                     emitParts(activeStream.requestId, parts); // 发送消息
+                    break;
+                }
+                case "tool-call": {
+                    // 由于工具调用这一部分是单独出现的，因此直接push到parts当中即可
+                    parts.push({
+                        type: "tool-call",
+                        id: event.toolCallId,
+                        name: event.toolName,
+                        args: event.args,
+                        status: "calling",
+                    });
+
+                    emitParts(activeStream.requestId, parts);
+                    break;
+                }
+                case "tool-result": {
+                    const tc = parts.find((p) : p is ClientToolCallPart => p.type === "tool-call"
+                        && p.id === event.toolCallId)
+                    if (!tc) { 
+                        return ;
+                    }
+                    tc.result = event.result;
+                    tc.status = "done";
+
+                    emitParts(activeStream.requestId, parts);
                     break;
                 }
                 case "done": {
@@ -411,7 +464,7 @@ export function useChat(
     }, [runStream, sessionId, updateMessages])
 
     const abort = useCallback(() => {
-        stopActiveStream(false); 
+        stopActiveStream(false);
     }, [stopActiveStream]);
 
     const interrupt = useCallback(() => {

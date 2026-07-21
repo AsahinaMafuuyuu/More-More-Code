@@ -2,10 +2,13 @@ import { Hono } from "hono";
 import { stream, streamSSE } from "hono/streaming";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { streamText as aiStreamText } from "ai";
+import { streamText as aiStreamText, stepCountIs } from "ai";
 import { db } from "@more-more-code/database/client";
 import { Mode, MessageStatus } from "@more-more-code/database/enums";
-import { type ChatStreamEvent } from "@more-more-code/shared";
+import { type ChatStreamEvent, type MessagePart, toolCallArgsSchema, messagePartsSchema } from "@more-more-code/shared";
+import type { Prisma } from "@more-more-code/database";
+import { createTools } from "../tools";
+import { buildSystemPrompt } from "../system-prompt";
 import { isSupportedChatModel, resolveChatModel } from "../lib/models";
 
 const submitSchema = z.object({
@@ -57,10 +60,11 @@ function getResumableUserMessage(
     return lastMessage;
 }
 
-
+// 流式响应的参数
 type StreamParams = {
     sessionId: string;
     model: string;
+    cwd: string | null; // 当前的工作目录
     history: {
         role: "user" | "assistant";
         content: string;
@@ -69,29 +73,44 @@ type StreamParams = {
     abortController: AbortController;
 }
 
+// 根据ai的response列表，来进行对应的渲染，比如渲染tool-call等等
 async function streamAIResponse(
     stream: Parameters<Parameters<typeof streamSSE>[1]>[0],
     params: StreamParams,
 ) {
-    const { sessionId, model, history, mode, abortController } = params;
+    const { sessionId, model, cwd, history, mode, abortController } = params;
     const startTime = Date.now();
-
+    const tools = cwd ? createTools(cwd, mode) : undefined; // 如果没有cwd，那么就不提供工具
+    const parts: MessagePart[] = []; // 包含reasoning、tool-call 以及text等
     const resolvedModel = resolveChatModel(model);
 
-    let fullText = "";
-
+    // 持久化中断消息
     const persistInterruptedMessage = async () => {
-        if (fullText.length === 0) return;
 
+        const fullText = parts
+            .filter((p) => p.type === "text")
+            .map((p) => p.text)
+            .join("");
+
+        if (fullText.length === 0 && parts.length === 0) {
+            return;
+        }
+        
         const elapsedMs = Date.now() - startTime;
+        const validatedParts: Prisma.InputJsonValue | undefined = parts
+            .length > 0 ?
+            messagePartsSchema.parse(parts) :
+            undefined;
+
 
         await db.message.create({
             data: {
                 sessionId,
-                role: "USER",
+                role: "ASSISTANT",
                 content: fullText,
                 status: MessageStatus.INTERRUPTED,
                 mode,
+                parts: validatedParts,
                 model,
                 duration: Math.round(elapsedMs / 1000),
             }
@@ -101,15 +120,53 @@ async function streamAIResponse(
     try {
         const result = aiStreamText({
             model: resolvedModel.model,
+            system: buildSystemPrompt({cwd, mode}), // 构建系统提示词
             messages: history,
+            tools,
+            stopWhen: tools? stepCountIs(50) : undefined, // 如果有工具，那么就限制50步 
             abortSignal: abortController.signal,
+            providerOptions: resolvedModel.providerOptions,
         })
 
+        // 根据ai中的响应进行渲染
         for await (const part of result.fullStream) {
             if (stream.aborted) break;
 
+            // 需要渲染reasoning
+            // 如果前一个也是reasoning，那么就合并
+            if (part.type === 'reasoning-delta') {
+                const last = parts[parts.length - 1];
+                if (last && last.type === 'reasoning') {
+                    last.text += part.text;
+                } else {
+                    parts.push({
+                        type: 'reasoning',
+                        text: part.text,
+                    })
+                }
+                const event: ChatStreamEvent = {
+                    type: 'reasoning-delta',
+                    text: part.text,
+                }
+                //    写入流式响应
+                // 发送事件
+                await stream.writeSSE({
+                    event: 'reasoning-delta',
+                    data: JSON.stringify(event),
+                })
+            }
+
             if (part.type === 'text-delta') {
-                fullText += part.text;
+                const last = parts[parts.length - 1];
+                if (last && last.type === 'text') {
+                    last.text += part.text;
+                }
+                else {
+                    parts.push({
+                        type: 'text',
+                        text: part.text,
+                    })
+                }
                 const event: ChatStreamEvent = {
                     type: 'text-delta',
                     text: part.text,
@@ -117,6 +174,61 @@ async function streamAIResponse(
                 // 发送事件
                 await stream.writeSSE({
                     event: 'text-delta',
+                    data: JSON.stringify(event),
+                })
+            }
+
+            // 工具调用
+            if (part.type === 'tool-call') {
+                const args = toolCallArgsSchema.parse(part.input); // 校验
+
+                // 由于是工具调用，直接进行工具的调用即可
+                parts.push({
+                    type: 'tool-call',
+                    id: part.toolCallId,
+                    name: part.toolName,
+                    args
+                })
+                const event: ChatStreamEvent = {
+                    type: 'tool-call',
+                    toolCallId: part.toolCallId,
+                    toolName: part.toolName,
+                    args,
+                }
+
+                await stream.writeSSE({
+                    event: 'tool-call',
+                    data: JSON.stringify(event),
+                })
+
+                // 发送事件
+                await stream.writeSSE({
+                    event: 'text-delta',
+                    data: JSON.stringify(event),
+                })
+            }
+
+            if (part.type === 'tool-result') {
+                const resultStr = typeof part.output === 'string' ?
+                    part.output : JSON.stringify(part.output);
+
+                // 找到对应的tool-call
+                const tcPart = parts.find((p): p is Extract<MessagePart, { type: 'tool-call' }> =>
+                    p.type === 'tool-call' && p.id === part.toolCallId)
+
+                // 找到以后添加上结果即可
+                if (tcPart) {
+                    tcPart.result = resultStr;
+                }
+
+                const event: ChatStreamEvent = {
+                    type: 'tool-result',
+                    toolCallId: part.toolCallId,
+                    result: resultStr,
+                }
+
+                await stream.writeSSE({
+                    event: 'tool-result',
                     data: JSON.stringify(event),
                 })
             }
@@ -134,12 +246,25 @@ async function streamAIResponse(
 
         const elapsedMs = Date.now() - startTime;
 
+        // 获取完整文本
+        const fullText = parts
+        .filter((p) => p.type === "text")  
+        .map((p) => p.text)
+        .join("");
+
+        // 创建parts
+        const validatedParts: Prisma.InputJsonValue | undefined = parts
+            .length > 0 ?
+            messagePartsSchema.parse(parts) :
+            undefined;
+
         // 将响应保存到数据库中
         const assistantMessage = await db.message.create({
             data: {
                 sessionId,
                 role: "ASSISTANT",
                 content: fullText,
+                parts: validatedParts,
                 status: MessageStatus.COMPLETE,
                 mode,
                 model,
@@ -252,6 +377,7 @@ const app = new Hono()
                             sessionId,
                             model: resumableMessage.model,
                             history,
+                            cwd: session.cwd, // 使用会话的工作目录
                             mode: resumableMessage.mode,
                             abortController,
                         });
@@ -339,6 +465,7 @@ const app = new Hono()
                 sessionId,
                 model: data.model,
                 history,
+                cwd: session.cwd, // 使用会话的工作目录
                 mode: data.mode,
                 abortController,
             });
