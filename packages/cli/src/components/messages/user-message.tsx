@@ -1,12 +1,15 @@
-// 智能体错误的消息
+// 用户消息
 import { TextAttributes } from "@opentui/core";
 import { useTheme } from "../../providers/theme";
+import { Mode } from "@more-more-code/database/enums";
 
 type Props = {
     message: string;
+    mode: Mode;
 }
 
-export function UserMessage({ message }: Props) {
+
+export function UserMessage({ message, mode }: Props) {
     const { colors } = useTheme();
 
     return (
@@ -16,7 +19,7 @@ export function UserMessage({ message }: Props) {
         >
             <box
                 border={["left"]}
-                borderColor={colors.primary}
+                borderColor={mode === Mode.BUILD ? colors.primary : colors.planMode}
                 width="100%"
             >
                 <box

@@ -1,6 +1,7 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { openai } from "@ai-sdk/openai";
-import { deepSeek } from '@ai-sdk/deepseek';
+import { deepSeek, type DeepSeekLanguageModelChatOptions } from '@ai-sdk/deepseek';
+import type { ProviderOptions } from "@ai-sdk/provider-utils"
 
 import {
     findSupportedChatModel,
@@ -18,6 +19,30 @@ export type ResolvedModel = {
     model: LanguageModel;
     provider: SupportedProvider;
     modelId: SupportedChatModelId;
+    providerOptions?: ProviderOptions
+}
+
+// DeepSeek 模型配置
+// 相关配置详见：https://ai-sdk.dev/providers/ai-sdk-providers/deepseek
+
+const DEEPSEEK_PROVIDER_OPTIONS: Partial<Record<DeepSeekModelId, ProviderOptions>> = {
+    "deepseek-v4-flash": {
+        deepSeek: {
+            thinking: {
+                type: "enabled",
+            },
+            reasoningEffort: 'medium',
+        } satisfies DeepSeekLanguageModelChatOptions
+    },
+    "deepseek-v4-pro": {
+        deepseek: {
+            thinking: {
+                type: "enabled",
+            },
+            reasoningEffort: 'medium',
+        } satisfies DeepSeekLanguageModelChatOptions
+    },
+
 }
 
 // 该函数抛出一个错误，提示不支持的提供者
@@ -49,6 +74,7 @@ function resolveDeepSeekModel(modelId: DeepSeekModelId): ResolvedModel {
         model: deepSeek(modelId),
         provider: "deepseek",
         modelId,
+        providerOptions: DEEPSEEK_PROVIDER_OPTIONS[modelId],
     };
 }
 

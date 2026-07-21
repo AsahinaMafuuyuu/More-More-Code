@@ -34,6 +34,7 @@ import { Role, Mode, MessageStatus } from "@more-more-code/database/enums";
 // const sessions: MockSession[] = []
 // let nextId = 1;
 
+// 首次创建对话时，传入的参数
 const createSessionSchema = z.object({
     title: z.string(),
     cwd: z.string().optional(),

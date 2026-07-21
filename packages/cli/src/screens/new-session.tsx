@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import { z } from "zod";
-import { DEFAULT_CHAT_MODEL_ID } from "@more-more-code/shared";
+import { Mode } from "@more-more-code/database/enums";
 import { useNavigate, useLocation } from "react-router";
 import { useTheme } from "../providers/theme";
 import { ErrorMessage, UserMessage, BotMessage } from "../components/messages";
@@ -10,9 +10,14 @@ import { useToast } from "../providers/toast";
 import { apiClient } from "../lib/api-client";
 import { getErrorMessage } from "../lib/http-errors";
 
+// 新对话可以传入mode和model
 const newSessionSchema = z.object({
     message: z.string(),
+    mode: z.enum(Mode),
+    model: z.string(),
 })
+
+// 创建默认的聊天对话
 export function NewSession() {
     const navigate = useNavigate();
     const location = useLocation();
@@ -45,8 +50,8 @@ export function NewSession() {
                         initialMessage: {
                             role: 'USER',
                             content: state.message,
-                            mode: "BUILD",
-                            model: DEFAULT_CHAT_MODEL_ID,
+                            mode: state.mode,
+                            model: state.model,
                         }
                     }
                 });
@@ -77,7 +82,8 @@ export function NewSession() {
 
     return (
         <SessionShell onSubmit={() => { }} inputDisabled loading={true}>
-            <UserMessage message={state.message} />
+            {/* 由于用户消息不需要用到模型，因此不需要传递model */}
+            <UserMessage message={state.message} mode={state.mode} />
         </SessionShell>
     )
 };
