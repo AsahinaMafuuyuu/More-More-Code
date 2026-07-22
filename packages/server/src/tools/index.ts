@@ -20,7 +20,10 @@ export function createTools(cwd: string, mode: Mode) {
     }
 
     return {
-        ...readOnlyTools,
+        readFile: createReadFileTool(cwd),
+        listDirectory: createListDirectoryTool(cwd),
+        glob: createGlobTool(cwd),
+        grep: createGrepTool(cwd),
         writeFile: createWriteFileTool(cwd),
         editFile: createEditFileTool(cwd),
         bash: createBashTool(cwd),
