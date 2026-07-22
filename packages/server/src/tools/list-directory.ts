@@ -67,3 +67,17 @@ export function createListDirectoryTool(cwd: string) {
         },
     });
 }
+
+/***
+ * 
+ * {
+    *  description: "List files and directories in a project directory. Returns names with type indicators.",
+    *  inputSchema: {
+    *    path: {
+        *    type: "string",
+        *    description: "Relative path to the directory to list (defaults to project root)",
+        *    default: "."
+    *   },
+    *  execute: async ({ path }) => {})
+ * }
+ */
