@@ -14,6 +14,7 @@
         "@ai-sdk/anthropic": "^4.0.12",
         "@ai-sdk/deepseek": "^3.0.7",
         "@ai-sdk/openai": "^4.0.11",
+        "@clerk/backend": "^3.12.0",
         "@hono/zod-validator": "^0.8.0",
         "@more-more-code/database": "workspace:*",
         "@more-more-code/shared": "workspace:*",
@@ -22,6 +23,7 @@
         "ai": "^7.0.22",
         "dotenv": "^17.4.2",
         "hono": "^4.12.28",
-        "zod": "^4.4.3"
+        "zod": "^4.4.3",
+        "open": "^8.0.0"
     }
 }

@@ -2,6 +2,8 @@ import { Children } from "react";
 import type { Command } from "./types";
 import { SUPPORTED_CHAT_MODELS } from "@more-more-code/shared";
 import { ThemeDialogContent, AgentsDialogContent, SessionsDialogContent, ModelsDialogContent } from "../dialogs";
+import { performLogin } from "../../lib/oauth";
+import { clearAuth } from "../../lib/auth";
 
 export const COMMANDS: Command[] = [
     {
@@ -67,10 +69,26 @@ export const COMMANDS: Command[] = [
         name: 'login',
         description: "Log in to your account",
         value: "/login",
-        action: (ctx) => {
+        action: async (ctx) => {
             ctx.toast.show({
                 message: "Opening browser to sign in...",
             })
+
+            try {
+                await performLogin();
+                ctx.toast.show({
+                    message: "Successfully signed in!",
+                    variant: "success",
+                })
+            } catch (error) {
+                const message = error instanceof Error 
+                ? error.message 
+                : String(error);
+                ctx.toast.show({
+                    message: `Login failed: ${message}`,
+                    variant: "error",
+                })
+            }
         }
     },
     {
@@ -78,6 +96,7 @@ export const COMMANDS: Command[] = [
         description: "Log out of your account",
         value: "/logout",
         action: (ctx) => {
+            clearAuth(); // 清除身份验证数据
             ctx.toast.show({
                 message: "Signed out...",
                 variant: "success", // 显示成功消息

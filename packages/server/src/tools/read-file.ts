@@ -52,11 +52,3 @@ export function createReadFileTool(cwd: string) {
     });
 }
 
-
-
-inputSchema: {
-    path: {
-        type: "string",
-        description: "Relative path to the file to read"
-    }
-}
