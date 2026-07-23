@@ -6,6 +6,7 @@ import { z } from "zod";
 import { findSupportedChatModel } from "@more-more-code/shared";
 import { db } from "@more-more-code/database/client"
 import { Role, Mode, MessageStatus } from "@more-more-code/database/enums";
+import { requireAuth, type AuthenticatedEnv } from "../../middleware/require-auth";
 
 
 // 用来模拟数据
@@ -66,9 +67,14 @@ const createSessionValidator = zValidator(
     },
 );
 
-const app = new Hono()
+const app = new Hono<AuthenticatedEnv>()
+    .use("*", requireAuth) // 需要身份验证
     .get('/', async (c) => {
+        const userId = c.get("userId");
         const sessions = await db.session.findMany({
+            where: {
+                userId,
+            },
             orderBy: { createdAt: "desc" },
             select: {
                 id: true,
@@ -91,9 +97,11 @@ const app = new Hono()
         // throw new HTTPException(500, { message: "Internal Server Error" });
 
         const id = c.req.param("id");
+        const userId = c.get("userId");
         const session = await db.session.findUnique({
             where: {
                 id,
+                userId,
             },
             include: {
                 messages: {
@@ -107,14 +115,14 @@ const app = new Hono()
         if (!session) {
             Sentry.logger.warn("Session not found", {
                 sessionId: id,
-                userId: "mock-user"
+                userId: userId
             })
             return c.json({ error: "Session not found" }, 404);
         }
 
         Sentry.logger.info("Retrieved session", {
             sessionId: id,
-            userId: "mock-user"
+            userId: userId
         })
 
         return c.json(session);
@@ -126,12 +134,12 @@ const app = new Hono()
 
         // // 模拟错误
         // throw new HTTPException(500, { message: "Internal Server Error" });
-
+        const userId = c.get("userId");
         const { initialMessage, ...data } = c.req.valid('json')
         const session = await db.session.create({
             data: {
                 ...data,
-                userId: "mock-user",
+                userId: userId,
                 ...(initialMessage && {
                     messages: {
                         create: {

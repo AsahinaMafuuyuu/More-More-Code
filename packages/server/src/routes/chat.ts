@@ -10,6 +10,7 @@ import type { Prisma } from "@more-more-code/database";
 import { createTools } from "../tools";
 import { buildSystemPrompt } from "../system-prompt";
 import { isSupportedChatModel, resolveChatModel } from "../lib/models";
+import { requireAuth, type AuthenticatedEnv } from "../../middleware/require-auth";
 
 const submitSchema = z.object({
     content: z.string(),
@@ -95,7 +96,7 @@ async function streamAIResponse(
         if (fullText.length === 0 && parts.length === 0) {
             return;
         }
-        
+
         const elapsedMs = Date.now() - startTime;
         const validatedParts: Prisma.InputJsonValue | undefined = parts
             .length > 0 ?
@@ -120,10 +121,10 @@ async function streamAIResponse(
     try {
         const result = aiStreamText({
             model: resolvedModel.model,
-            system: buildSystemPrompt({cwd, mode}), // 构建系统提示词
+            system: buildSystemPrompt({ cwd, mode }), // 构建系统提示词
             messages: history,
             tools,
-            stopWhen: tools? stepCountIs(50) : undefined, // 如果有工具，那么就限制50步 
+            stopWhen: tools ? stepCountIs(50) : undefined, // 如果有工具，那么就限制50步 
             abortSignal: abortController.signal,
             providerOptions: resolvedModel.providerOptions,
         })
@@ -248,9 +249,9 @@ async function streamAIResponse(
 
         // 获取完整文本
         const fullText = parts
-        .filter((p) => p.type === "text")  
-        .map((p) => p.text)
-        .join("");
+            .filter((p) => p.type === "text")
+            .map((p) => p.text)
+            .join("");
 
         // 创建parts
         const validatedParts: Prisma.InputJsonValue | undefined = parts
@@ -315,13 +316,16 @@ async function streamAIResponse(
     }
 }
 
-const app = new Hono()
+const app = new Hono<AuthenticatedEnv>()
+    .use("*", requireAuth) // 需要身份验证
     .post("/:sessionId/resume", async (c) => {
+        const userId = c.get("userId");
         const sessionId = c.req.param("sessionId")
 
         const session = await db.session.findUnique({
             where: {
                 id: sessionId,
+                userId,
             },
             include: {
                 messages: {
@@ -409,11 +413,13 @@ const app = new Hono()
 
     })
     .post("/:sessionId", submitValidator, async (c) => {
+        const userId = c.get("userId");
         const sessionId = c.req.param("sessionId");
 
         const session = await db.session.findUnique({
             where: {
                 id: sessionId,
+                userId
             },
             include: {
                 messages: {
