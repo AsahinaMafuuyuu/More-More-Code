@@ -3,10 +3,13 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator"
 import * as Sentry from "@sentry/hono/bun"
 import { z } from "zod";
-import { findSupportedChatModel } from "@more-more-code/shared";
 import { db } from "@more-more-code/database/client"
 import { Role, Mode, MessageStatus } from "@more-more-code/database/enums";
-import { requireAuth, type AuthenticatedEnv } from "../../middleware/require-auth";
+import { requireAuth, type AuthenticatedEnv } from "../middleware/require-auth";
+
+import { requireCreditsBalance } from "../middleware/require-credits-balance";
+import { isSupportedChatModel } from "../lib/models";
+
 
 
 // 用来模拟数据
@@ -43,9 +46,7 @@ const createSessionSchema = z.object({
         role: z.enum(Role),
         content: z.string(),
         mode: z.enum(Mode),
-        model: z.string().refine((id) => {
-            return !!findSupportedChatModel(id)
-        }, "Unsupported model")
+        model: z.string().refine(isSupportedChatModel, "Unsupported model")
     }).optional(),
 })
 
@@ -128,7 +129,7 @@ const app = new Hono<AuthenticatedEnv>()
         return c.json(session);
     })
     // post主要就是创建一个session
-    .post("/", createSessionValidator, async (c) => {
+    .post("/", requireCreditsBalance, createSessionValidator, async (c) => {
         // // 模拟耗时
         // await new Promise(resolve => setTimeout(resolve, 5000));
 

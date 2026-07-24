@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { stream, streamSSE } from "hono/streaming";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { streamText as aiStreamText, stepCountIs } from "ai";
+import { streamText as aiStreamText, stepCountIs, type LanguageModel, type LanguageModelUsage } from "ai";
 import { db } from "@more-more-code/database/client";
 import { Mode, MessageStatus } from "@more-more-code/database/enums";
 import { type ChatStreamEvent, type MessagePart, toolCallArgsSchema, messagePartsSchema } from "@more-more-code/shared";
@@ -10,7 +10,13 @@ import type { Prisma } from "@more-more-code/database";
 import { createTools } from "../tools";
 import { buildSystemPrompt } from "../system-prompt";
 import { isSupportedChatModel, resolveChatModel } from "../lib/models";
-import { requireAuth, type AuthenticatedEnv } from "../../middleware/require-auth";
+import { requireAuth, type AuthenticatedEnv } from "../middleware/require-auth";
+
+import { requireCreditsBalance, type CreditsReservationEnv } from "../middleware/require-credits-balance";
+import { calculateCreditsForUsage } from "../lib/credits";
+import { reconcileReservation, releaseReservation } from "../lib/credit-reservation";
+import { ingestUsageWithOutbox } from "../lib/usage-outbox";
+
 
 const submitSchema = z.object({
     content: z.string(),
@@ -64,6 +70,7 @@ function getResumableUserMessage(
 // 流式响应的参数
 type StreamParams = {
     sessionId: string;
+    userId: string;
     model: string;
     cwd: string | null; // 当前的工作目录
     history: {
@@ -72,6 +79,12 @@ type StreamParams = {
     }[];
     mode: Mode;
     abortController: AbortController;
+    reservationId: string;
+}
+
+type IngestUsageForMessageParams = {
+    messageId: string;
+    status: "complete" | "interrupted";
 }
 
 // 根据ai的response列表，来进行对应的渲染，比如渲染tool-call等等
@@ -79,12 +92,12 @@ async function streamAIResponse(
     stream: Parameters<Parameters<typeof streamSSE>[1]>[0],
     params: StreamParams,
 ) {
-    const { sessionId, model, cwd, history, mode, abortController } = params;
+    const { sessionId, userId, model, cwd, history, mode, abortController, reservationId } = params;
     const startTime = Date.now();
     const tools = cwd ? createTools(cwd, mode) : undefined; // 如果没有cwd，那么就不提供工具
     const parts: MessagePart[] = []; // 包含reasoning、tool-call 以及text等
     const resolvedModel = resolveChatModel(model);
-
+    let completedUsage: LanguageModelUsage | null = null; // 用于记录完整的usage
     // 持久化中断消息
     const persistInterruptedMessage = async () => {
 
@@ -104,7 +117,7 @@ async function streamAIResponse(
             undefined;
 
 
-        await db.message.create({
+        return db.message.create({
             data: {
                 sessionId,
                 role: "ASSISTANT",
@@ -118,6 +131,72 @@ async function streamAIResponse(
         })
     }
 
+    const ingestUsageForMessage = async ({
+        messageId,
+        status,
+    }: IngestUsageForMessageParams) => {
+        if (!completedUsage) {
+            // No usage to ingest, release the reservation
+            try {
+                await releaseReservation(reservationId);
+            } catch (error) {
+                console.error("Failed to release reservation", {
+                    reservationId,
+                    error,
+                });
+            }
+            return;
+        }
+
+        const billableUsage = calculateCreditsForUsage({
+            provider: resolvedModel.provider,
+            model: resolvedModel.modelId,
+            usage: completedUsage,
+        });
+
+        // Reconcile the reservation with actual usage
+        try {
+            await reconcileReservation({
+                reservationId,
+                actualCreditsUsed: billableUsage.credits,
+                messageId,
+            });
+        } catch (error) {
+            console.error("Failed to reconcile credit reservation", {
+                reservationId,
+                messageId,
+                error,
+            });
+        }
+
+        // Ingest usage with outbox fallback for reliability
+        try {
+            await ingestUsageWithOutbox({
+                messageId,
+                externalCustomerId: userId,
+                eventId: `chat-message:${messageId}`,
+                credits: billableUsage.credits,
+            });
+        } catch (error) {
+            console.error("Failed to ingest AI usage for message (saved to outbox)", {
+                error,
+                sessionId,
+                messageId,
+                userId,
+            });
+        }
+    };
+
+    const persistInterruptedMessageAndUsage = async () => {
+        const interruptedMessage = await persistInterruptedMessage();
+        if (!interruptedMessage) return;
+
+        await ingestUsageForMessage({
+            messageId: interruptedMessage.id,
+            status: "interrupted",
+        })
+     }
+
     try {
         const result = aiStreamText({
             model: resolvedModel.model,
@@ -127,6 +206,9 @@ async function streamAIResponse(
             stopWhen: tools ? stepCountIs(50) : undefined, // 如果有工具，那么就限制50步 
             abortSignal: abortController.signal,
             providerOptions: resolvedModel.providerOptions,
+            onFinish(event) {
+                completedUsage = event.usage;
+            }
         })
 
         // 根据ai中的响应进行渲染
@@ -241,7 +323,7 @@ async function streamAIResponse(
 
         // 
         if (stream.aborted || abortController.signal.aborted) {
-            await persistInterruptedMessage(); // 保存中断的响应
+            await persistInterruptedMessageAndUsage(); // 保存中断的响应
             return;
         }
 
@@ -273,6 +355,11 @@ async function streamAIResponse(
             }
         })
 
+        await ingestUsageForMessage({
+            messageId: assistantMessage.id,
+            status: "complete",
+        })
+
         const doneEvent: ChatStreamEvent = {
             type: 'done',
             messageId: assistantMessage.id,
@@ -285,7 +372,7 @@ async function streamAIResponse(
         })
     } catch (error) {
         if (abortController.signal.aborted) {
-            await persistInterruptedMessage(); // 持久化中断的响应
+            await persistInterruptedMessageAndUsage(); // 持久化中断的响应
             return;
         }
 
@@ -316,10 +403,11 @@ async function streamAIResponse(
     }
 }
 
-const app = new Hono<AuthenticatedEnv>()
+const app = new Hono<CreditsReservationEnv>()
     .use("*", requireAuth) // 需要身份验证
-    .post("/:sessionId/resume", async (c) => {
+    .post("/:sessionId/resume", requireCreditsBalance, async (c) => {
         const userId = c.get("userId");
+        const reservationId = c.get("reservationId");
         const sessionId = c.req.param("sessionId")
 
         const session = await db.session.findUnique({
@@ -379,11 +467,13 @@ const app = new Hono<AuthenticatedEnv>()
                     try {
                         await streamAIResponse(stream, {
                             sessionId,
+                            userId,
                             model: resumableMessage.model,
                             history,
                             cwd: session.cwd, // 使用会话的工作目录
                             mode: resumableMessage.mode,
                             abortController,
+                            reservationId,
                         });
 
                     } finally {
@@ -412,8 +502,9 @@ const app = new Hono<AuthenticatedEnv>()
 
 
     })
-    .post("/:sessionId", submitValidator, async (c) => {
+    .post("/:sessionId", requireCreditsBalance, submitValidator, async (c) => {
         const userId = c.get("userId");
+        const reservationId = c.get("reservationId");
         const sessionId = c.req.param("sessionId");
 
         const session = await db.session.findUnique({
@@ -469,11 +560,13 @@ const app = new Hono<AuthenticatedEnv>()
 
             await streamAIResponse(stream, {
                 sessionId,
+                userId,
                 model: data.model,
                 history,
                 cwd: session.cwd, // 使用会话的工作目录
                 mode: data.mode,
                 abortController,
+                reservationId,
             });
         }, async (err, stream) => {
             const message = err instanceof Error ? err.message : String(err);

@@ -1,5 +1,5 @@
 import { createMiddleware } from "hono/factory";
-import { authenticateOAuthRequest } from "../src/lib/auth";
+import { authenticateOAuthRequest } from "../lib/auth";
 
 export type AuthenticatedEnv = {
     Variables: {
