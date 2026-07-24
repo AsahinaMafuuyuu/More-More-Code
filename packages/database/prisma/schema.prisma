@@ -53,35 +53,6 @@ model Message {
   mode      Mode
   duration  Int?
   createdAt DateTime      @default(now())
-  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade) 
   @@index([sessionId])
-}
-
-model CreditReservation {
-  id                String   @id @default(cuid())
-  userId            String
-  reservedCredits   Int
-  actualCreditsUsed Int?
-  messageId         String?  @unique
-  status            String   // PENDING, RECONCILED, RELEASED
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-
-  @@index([userId, status])
-  @@index([status, createdAt])
-}
-
-model UsageOutbox {
-  id                 String   @id @default(cuid())
-  messageId          String   @unique
-  externalCustomerId String
-  eventId            String
-  credits            Int
-  retryCount         Int      @default(0)
-  status             String   // PENDING, COMPLETED, FAILED
-  error              String?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
-
-  @@index([status, createdAt])
 }

@@ -5,9 +5,6 @@ import sessions from './routes/sessions'
 import chatRoute from './routes/chat'
 import * as Sentry from "@sentry/hono/bun";
 import auth from './routes/auth'
-import billing from './routes/billing'
-import { requireAuth } from './middleware/require-auth'
-import { startUsageOutboxProcessor } from './jobs/usage-outbox-processor'
 
 const app = new Hono()
 app.onError((error, c) => {
@@ -56,13 +53,8 @@ const routes = app
     .route("/sessions", sessions)
     .route("/chat", chatRoute)
     .route("/auth", auth) // 添加/auth路由
-    .route("/billing", billing) // 添加/billing路由
 
 export type AppType = typeof routes
-
-// Start background jobs
-startUsageOutboxProcessor();
-
 export default {
     port: 3000,
     fetch: app.fetch,

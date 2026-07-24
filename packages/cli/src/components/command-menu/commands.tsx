@@ -4,7 +4,6 @@ import { SUPPORTED_CHAT_MODELS } from "@more-more-code/shared";
 import { ThemeDialogContent, AgentsDialogContent, SessionsDialogContent, ModelsDialogContent } from "../dialogs";
 import { performLogin } from "../../lib/oauth";
 import { clearAuth } from "../../lib/auth";
-import { openBillingPortal, openUpgradeCheckout } from "../../lib/upgrade";
 
 export const COMMANDS: Command[] = [
     {
@@ -108,52 +107,20 @@ export const COMMANDS: Command[] = [
         name: 'upgrade',
         description: "Buy more credits or upgrade your plan",
         value: "/upgrade",
-        action: async (ctx) => {
+        action: (ctx) => {
             ctx.toast.show({
                 message: "Opening credits checkout...",
             })
-
-            try {
-                await openUpgradeCheckout();
-                ctx.toast.show({
-                    message: "Opened checkout in browser.",
-                    variant: "success",
-                })
-            } catch (error) {
-                const message = error instanceof Error 
-                ? error.message 
-                : String(error);
-                ctx.toast.show({
-                    message: `Failed to open checkout: ${message}`,
-                    variant: "error",
-                })
-            }
         }
     },
     {
         name: 'usage',
         description: "Open billing portal in your browser",
         value: "/usage",
-        action: async (ctx) => {
+        action: (ctx) => {
             ctx.toast.show({
                 message: "Opening billing portal...",
             })
-
-            try {
-                await openBillingPortal();
-                ctx.toast.show({
-                    message: "Opened billing portal in browser.",
-                    variant: "success",
-                })
-            } catch (error) {
-                const message = error instanceof Error 
-                ? error.message 
-                : String(error);
-                ctx.toast.show({
-                    message: `Failed to open billing portal: ${message}`,
-                    variant: "error",
-                })
-            }
         }
     },
     {
