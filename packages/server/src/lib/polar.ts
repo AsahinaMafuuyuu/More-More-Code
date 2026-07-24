@@ -75,7 +75,7 @@ export async function createCustomerPortalUrl({
 }: CreateCheckoutUrlParams) {
     const result = await polar.customerSessions.create({
         externalCustomerId: customerExternalId,
-        returnUrl: new URL("/billing/portal", requestUrl).toString(),
+        returnUrl: new URL("/billing/portal/return", requestUrl).toString(),
     })
     return result.customerPortalUrl;
 }

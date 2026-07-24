@@ -30,6 +30,13 @@ enum MessageStatus {
   INTERRUPTED
 }
 
+enum OutboxEventStatus {
+  PENDING
+  PROCESSING
+  COMPLETE
+  FAILED
+}
+
 model Session {
   id        String    @id @default(cuid())
   userId    String
@@ -53,6 +60,21 @@ model Message {
   mode      Mode
   duration  Int?
   createdAt DateTime      @default(now())
-  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade) 
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   @@index([sessionId])
+}
+
+model OutboxEvent {
+  id             String             @id @default(cuid())
+  eventId        String             @unique
+  eventType      String
+  payload        Json
+  status         OutboxEventStatus  @default(PENDING)
+  retryCount     Int                @default(0)
+  lastError      String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  processedAt    DateTime?
+
+  @@index([status, createdAt])
 }

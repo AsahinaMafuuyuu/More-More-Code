@@ -4,7 +4,7 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { streamText as aiStreamText, stepCountIs, type LanguageModel, type LanguageModelUsage } from "ai";
 import { db } from "@more-more-code/database/client";
-import { Mode, MessageStatus } from "@more-more-code/database/enums";
+import { Mode, MessageStatus, OutboxEventStatus } from "@more-more-code/database/enums";
 import { type ChatStreamEvent, type MessagePart, toolCallArgsSchema, messagePartsSchema } from "@more-more-code/shared";
 import type { Prisma } from "@more-more-code/database";
 import { createTools } from "../tools";
@@ -15,6 +15,7 @@ import { requireAuth, type AuthenticatedEnv } from "../middleware/require-auth";
 import { requireCreditsBalance } from "../middleware/require-credits-balance";
 import { calculateCreditsForUsage } from "../lib/credits";
 import { ingestAiUsage } from "../lib/polar";
+import type { UsageEventPayload } from "../lib/outbox-processor";
 
 
 const submitSchema = z.object({
@@ -135,25 +136,60 @@ async function streamAIResponse(
     }: IngestUsageForMessageParams) => {
         if (!completedUsage) return;
 
-        try { 
-            const billableUsage = calculateCreditsForUsage({
-                provider: resolvedModel.provider,
-                model: resolvedModel.modelId,
-                usage: completedUsage,
-            })
+        const billableUsage = calculateCreditsForUsage({
+            provider: resolvedModel.provider,
+            model: resolvedModel.modelId,
+            usage: completedUsage,
+        });
 
+        const eventId = `chat-message:${messageId}`;
+
+        try {
             await ingestAiUsage({
                 externalCustomerId: userId,
-                eventId: `chat-message: ${messageId}`,
+                eventId,
                 credits: billableUsage.credits,
-            })
-        } catch (error) { 
+            });
+        } catch (error) {
             console.error("Failed to ingest AI usage for message", {
                 error,
                 sessionId,
                 messageId,
                 userId,
-            })
+            });
+
+            // Persist to outbox for retry
+            try {
+                const payload: UsageEventPayload = {
+                    messageId,
+                    userId,
+                    eventId,
+                    credits: billableUsage.credits,
+                };
+
+                await db.outboxEvent.upsert({
+                    where: { eventId },
+                    create: {
+                        eventId,
+                        eventType: "ai_usage_ingestion",
+                        payload: payload as any,
+                        status: OutboxEventStatus.PENDING,
+                    },
+                    update: {
+                        // If it already exists, reset to pending for retry
+                        status: OutboxEventStatus.PENDING,
+                        retryCount: 0,
+                    },
+                });
+
+                console.log(`Persisted failed usage ingestion to outbox for message ${messageId}`);
+            } catch (outboxError) {
+                console.error("CRITICAL: Failed to persist usage event to outbox", {
+                    outboxError,
+                    messageId,
+                    userId,
+                });
+            }
         }
     };
 
