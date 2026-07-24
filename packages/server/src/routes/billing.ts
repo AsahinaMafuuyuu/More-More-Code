@@ -28,5 +28,9 @@ const app = new Hono<AuthenticatedEnv>()
         return c.text("Thank you for your purchase!\
              You can now return to More More Code and continue using it.")
     })
+    .get("/portal", async (c) => {
+        return c.text("You have returned from the billing portal.\
+             You can now return to More More Code and continue using it.")
+    })
 
 export default app;

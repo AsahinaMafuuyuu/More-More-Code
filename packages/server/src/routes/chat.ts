@@ -12,9 +12,10 @@ import { buildSystemPrompt } from "../system-prompt";
 import { isSupportedChatModel, resolveChatModel } from "../lib/models";
 import { requireAuth, type AuthenticatedEnv } from "../middleware/require-auth";
 
-import { requireCreditsBalance } from "../middleware/require-credits-balance";
+import { requireCreditsBalance, type CreditsReservationEnv } from "../middleware/require-credits-balance";
 import { calculateCreditsForUsage } from "../lib/credits";
-import { ingestAiUsage } from "../lib/polar";
+import { reconcileReservation, releaseReservation } from "../lib/credit-reservation";
+import { ingestUsageWithOutbox } from "../lib/usage-outbox";
 
 
 const submitSchema = z.object({
@@ -78,6 +79,7 @@ type StreamParams = {
     }[];
     mode: Mode;
     abortController: AbortController;
+    reservationId: string;
 }
 
 type IngestUsageForMessageParams = {
@@ -90,7 +92,7 @@ async function streamAIResponse(
     stream: Parameters<Parameters<typeof streamSSE>[1]>[0],
     params: StreamParams,
 ) {
-    const { sessionId, userId, model, cwd, history, mode, abortController } = params;
+    const { sessionId, userId, model, cwd, history, mode, abortController, reservationId } = params;
     const startTime = Date.now();
     const tools = cwd ? createTools(cwd, mode) : undefined; // 如果没有cwd，那么就不提供工具
     const parts: MessagePart[] = []; // 包含reasoning、tool-call 以及text等
@@ -133,27 +135,55 @@ async function streamAIResponse(
         messageId,
         status,
     }: IngestUsageForMessageParams) => {
-        if (!completedUsage) return;
+        if (!completedUsage) {
+            // No usage to ingest, release the reservation
+            try {
+                await releaseReservation(reservationId);
+            } catch (error) {
+                console.error("Failed to release reservation", {
+                    reservationId,
+                    error,
+                });
+            }
+            return;
+        }
 
-        try { 
-            const billableUsage = calculateCreditsForUsage({
-                provider: resolvedModel.provider,
-                model: resolvedModel.modelId,
-                usage: completedUsage,
-            })
+        const billableUsage = calculateCreditsForUsage({
+            provider: resolvedModel.provider,
+            model: resolvedModel.modelId,
+            usage: completedUsage,
+        });
 
-            await ingestAiUsage({
+        // Reconcile the reservation with actual usage
+        try {
+            await reconcileReservation({
+                reservationId,
+                actualCreditsUsed: billableUsage.credits,
+                messageId,
+            });
+        } catch (error) {
+            console.error("Failed to reconcile credit reservation", {
+                reservationId,
+                messageId,
+                error,
+            });
+        }
+
+        // Ingest usage with outbox fallback for reliability
+        try {
+            await ingestUsageWithOutbox({
+                messageId,
                 externalCustomerId: userId,
-                eventId: `chat-message: ${messageId}`,
+                eventId: `chat-message:${messageId}`,
                 credits: billableUsage.credits,
-            })
-        } catch (error) { 
-            console.error("Failed to ingest AI usage for message", {
+            });
+        } catch (error) {
+            console.error("Failed to ingest AI usage for message (saved to outbox)", {
                 error,
                 sessionId,
                 messageId,
                 userId,
-            })
+            });
         }
     };
 
@@ -373,10 +403,11 @@ async function streamAIResponse(
     }
 }
 
-const app = new Hono<AuthenticatedEnv>()
+const app = new Hono<CreditsReservationEnv>()
     .use("*", requireAuth) // 需要身份验证
     .post("/:sessionId/resume", requireCreditsBalance, async (c) => {
         const userId = c.get("userId");
+        const reservationId = c.get("reservationId");
         const sessionId = c.req.param("sessionId")
 
         const session = await db.session.findUnique({
@@ -442,6 +473,7 @@ const app = new Hono<AuthenticatedEnv>()
                             cwd: session.cwd, // 使用会话的工作目录
                             mode: resumableMessage.mode,
                             abortController,
+                            reservationId,
                         });
 
                     } finally {
@@ -472,6 +504,7 @@ const app = new Hono<AuthenticatedEnv>()
     })
     .post("/:sessionId", requireCreditsBalance, submitValidator, async (c) => {
         const userId = c.get("userId");
+        const reservationId = c.get("reservationId");
         const sessionId = c.req.param("sessionId");
 
         const session = await db.session.findUnique({
@@ -533,6 +566,7 @@ const app = new Hono<AuthenticatedEnv>()
                 cwd: session.cwd, // 使用会话的工作目录
                 mode: data.mode,
                 abortController,
+                reservationId,
             });
         }, async (err, stream) => {
             const message = err instanceof Error ? err.message : String(err);
