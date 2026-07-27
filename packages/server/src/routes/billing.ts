@@ -2,6 +2,16 @@ import { Hono } from "hono";
 import { requireAuth, type AuthenticatedEnv } from "../middleware/require-auth";
 import { createCheckoutUrl, createCustomerPortalUrl } from "../lib/polar";
 
+function getPublicApiUrl(requestUrl: string) {
+    const configuredUrl = process.env.PUBLIC_API_URL;
+
+    if (!configuredUrl) {
+        return requestUrl;
+    }
+
+    return new URL(configuredUrl).toString();
+}
+
 const app = new Hono<AuthenticatedEnv>()
     .use("/checkout", requireAuth)
     .use("/portal", requireAuth)
@@ -10,7 +20,7 @@ const app = new Hono<AuthenticatedEnv>()
         return c.json({
             url: await createCheckoutUrl({
                 customerExternalId: userId,
-                requestUrl: c.req.url
+                requestUrl: getPublicApiUrl(c.req.url)
             })
         })
     })
@@ -20,7 +30,7 @@ const app = new Hono<AuthenticatedEnv>()
         return c.json({
             url: await createCustomerPortalUrl({
                 customerExternalId: userId,
-                requestUrl: c.req.url
+                requestUrl: getPublicApiUrl(c.req.url)
             })
         })
     })

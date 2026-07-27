@@ -26,6 +26,10 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 .eslintcache
 .cache
 *.tsbuildinfo
+*.cpuprofile
+
+# Cloudflare Workers local state
+workers/*/.wrangler
 
 # IntelliJ based IDEs
 .idea

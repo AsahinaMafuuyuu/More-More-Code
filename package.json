@@ -8,9 +8,15 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-   "scripts": {
+  "scripts": {
     "dev:cli": "bun run --watch packages/cli/src/index.tsx",
     "dev:server": "bun run --hot packages/server/src/index.ts",
-    "start": "bun run packages/server/src/index.ts"
+    "start": "bun run packages/server/src/index.ts",
+    "cf:dev": "bunx wrangler dev --config workers/api-proxy/wrangler.jsonc",
+    "cf:deploy": "bunx wrangler deploy --config workers/api-proxy/wrangler.jsonc",
+    "cf:typecheck": "bunx tsc --noEmit -p workers/api-proxy/tsconfig.json"
+  },
+  "devDependencies": {
+    "wrangler": "^4.114.0"
   }
 }
