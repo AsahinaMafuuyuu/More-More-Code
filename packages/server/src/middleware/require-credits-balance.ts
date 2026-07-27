@@ -16,6 +16,9 @@ export const requireCreditsBalance = createMiddleware<AuthenticatedEnv>(
 
             await next(); 
         } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.error("Failed to verify Polar credits balance", { message });
+
             return c.json({
                 error: "Unable to verify credits balance. \
                 Please try again later."

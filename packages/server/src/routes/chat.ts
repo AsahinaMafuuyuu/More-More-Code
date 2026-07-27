@@ -20,7 +20,7 @@ import {
     modeSchema,
 } from "@more-more-code/shared";
 import { buildSystemPrompt } from "../system-prompt";
-import type { AuthenticatedEnv } from "../middleware/require-auth";
+import { requireAuth, type AuthenticatedEnv } from "../middleware/require-auth";
 import { requireCreditsBalance } from "../middleware/require-credits-balance";
 import { calculateCreditsForUsage } from "../lib/credits";
 import { ingestAiUsage } from "../lib/polar";
@@ -78,6 +78,7 @@ function hasPendingToolCalls(message: MoreMoreCodeUIMessage) {
 }
 
 const app = new Hono<AuthenticatedEnv>()
+    .use("*", requireAuth)
     .post(
         "/",
         requireCreditsBalance,
