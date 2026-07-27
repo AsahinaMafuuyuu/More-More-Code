@@ -4,19 +4,18 @@
     "private": true,
     "exports": {
         ".": "./src/index.ts",
-        "./client": "./src/client.ts",
-        "./enums": "./src/enums.ts"
+        "./client": "./src/client.ts"
     },
     "scripts": {
         "db:generate": "bunx prisma generate"
     },
     "devDependencies": {
         "@types/node": "^26.1.1",
-        "prisma": "^7.8.0"
+        "prisma": "^7.9.0"
     },
     "dependencies": {
-        "@prisma/adapter-pg": "^7.8.0",
-        "@prisma/client": "^7.8.0",
+        "@prisma/adapter-pg": "^7.9.0",
+        "@prisma/client": "^7.9.0",
         "dotenv": "^17.4.2"
     }
 }

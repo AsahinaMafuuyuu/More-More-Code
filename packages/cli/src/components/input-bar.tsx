@@ -17,12 +17,6 @@ import { useKeyboardLayer } from "../providers/keyboard-layer";
 import { useDialog } from "../providers/dialog";
 import { useTheme } from "../providers/theme";
 import { usePromptConfig } from "../providers/prompt-config";
-import { Mode } from "@more-more-code/database";
-import { reallyExit } from "node:process";
-import { en } from "zod/locales";
-import { set } from "zod";
-import { handle } from "hono/cloudflare-pages";
-import { text } from "node:stream/consumers";
 
 // 这些变量主要用于@提及功能的实现
 const MAX_VISIBLE_MENTIONS = 8; // 最大可见的提及数量

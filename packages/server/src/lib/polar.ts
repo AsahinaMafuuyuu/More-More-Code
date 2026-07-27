@@ -91,7 +91,7 @@ export async function getAvailableCreditsBalance(customerExternalId: string) {
             );
 
         if (matchingMeters.length === 0) {
-            throw new Error(`No active meter found for customer ${customerExternalId} with meter ID ${getPolarCreditsMeterId()}`);
+            return 0;
         }
 
         if (matchingMeters.length > 1) {

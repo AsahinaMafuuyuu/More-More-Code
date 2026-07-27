@@ -1,11 +1,11 @@
 // 用户消息
 import { TextAttributes } from "@opentui/core";
 import { useTheme } from "../../providers/theme";
-import { Mode } from "@more-more-code/database/enums";
+import { Mode, type ModeType } from "@more-more-code/shared";
 
 type Props = {
     message: string;
-    mode: Mode;
+    mode: ModeType;
 }
 
 

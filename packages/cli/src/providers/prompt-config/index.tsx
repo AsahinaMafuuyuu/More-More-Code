@@ -2,13 +2,12 @@
 // 包括模式（Mode）和模型（SupportedChatModelId）。
 // 通过使用 React 的 Context API，组件可以方便地访问和修改这些配置，而无需通过 props 层层传递。
 import { createContext, useContext, useState, type ReactNode } from "react";
-import { DEFAULT_CHAT_MODEL_ID, type SupportedChatModelId } from "@more-more-code/shared";
-import { Mode } from "@more-more-code/database";
+import { DEFAULT_CHAT_MODEL_ID, type SupportedChatModelId, type ModeType, Mode } from "@more-more-code/shared";
 
 type PromptConfigContextValue = {
-    mode: Mode;
+    mode: ModeType;
     toggleMode: () => void;
-    setMode: (mode: Mode) => void;
+    setMode: (mode: ModeType) => void;
     model: SupportedChatModelId;
     setModel: (model: SupportedChatModelId) => void;
 }
@@ -30,7 +29,7 @@ type PromptConfigProviderProps = {
 }
 
 export function PromptConfigProvider({ children }: PromptConfigProviderProps) {
-    const [mode, setMode] = useState<Mode>(Mode.BUILD); // 默认模式为构建模式
+    const [mode, setMode] = useState<ModeType>(Mode.BUILD); // 默认模式为构建模式
     const [model, setModel] = useState<SupportedChatModelId>(DEFAULT_CHAT_MODEL_ID);
 
     // 切换模式

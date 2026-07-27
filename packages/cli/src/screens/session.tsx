@@ -1,5 +1,5 @@
 // 主要用于已经创建的会话，显示会话的消息列表，并提供输入框用于发送新消息
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useParams, useLocation, useNavigate } from "react-router";
 import { z } from "zod";
 import type { InferResponseType } from "hono/client";
@@ -13,12 +13,10 @@ import {
 import { useToast } from "../providers/toast";
 import { apiClient } from "../lib/api-client";
 import { getErrorMessage } from "../lib/http-errors";
-import prettyMs from "pretty-ms";
-import { messagePartsSchema, type SupportedChatModelId } from "@more-more-code/shared";
+import { type ModeType, type SupportedChatModelId } from "@more-more-code/shared";
 import { useChat } from "../hooks/use-chat";
 import { usePromptConfig } from "../providers/prompt-config";
-import type { Message, ClientMessagePart } from "../hooks/use-chat";
-import { MessageStatus } from "@more-more-code/database";
+import type { Message } from "../hooks/use-chat";;
 import { useKeyboardLayer } from "../providers/keyboard-layer";
 
 type SessionData = InferResponseType<(typeof apiClient.sessions)[":id"]["$get"], 200>; // 获取SessionData的类型
@@ -26,90 +24,81 @@ type SessionData = InferResponseType<(typeof apiClient.sessions)[":id"]["$get"],
 const sessionLocationSchema = z.object({
   session: z.custom<SessionData>((val) => {
     return val !== null && typeof val === "object" && "id" in val; //  验证session对象是否包含id属性
+  }),
+  initialPrompt: z.object({
+    message: z.string(),
+    mode: z.custom<ModeType>(),
+    model: z.custom<SupportedChatModelId>(),
   })
 })
 
-function mapDbMessages(dbMessages: SessionData["messages"]): Message[] {
-  return dbMessages.map((msg): Message => {
-    if (msg.role === "ERROR") {
-      return {
-        id: msg.id,
-        role: "error",
-        content: msg.content,
 
-      }
-    }
-
-    if (msg.role === "USER") {
-      return {
-        id: msg.id,
-        role: "user",
-        content: msg.content,
-        mode: msg.mode,
-        model: msg.model as SupportedChatModelId,
-      }
-    }
-
-    // 如果是助手消息，则需要处理消息的parts
-    const parsedParts = msg.parts ? messagePartsSchema.safeParse(msg.parts) : null;
-    // 如果解析成功，则将每个part的状态设置为done，否则返回空数组
-    const parts: ClientMessagePart[] = parsedParts?.success ?
-      parsedParts.data.map((p) => p.type === 'tool-call' ? {
-        ...p,
-        status: 'done' as const
-      } : p)
-      : [];
-
-    return {
-      id: msg.id,
-      role: "assistant",
-      content: msg.content,
-      model: msg.model as SupportedChatModelId,
-      mode: msg.mode,
-      parts,
-      ...(msg.duration !== null ? { duration: prettyMs(msg.duration) } : {}),
-      interrupted: msg.status === MessageStatus.INTERRUPTED, // 如果消息状态为INTERRUPTED，则设置interrupted为true
-    }
-  })
-}
 
 function ChatMessage({ msg }: { msg: Message }) {
   if (msg.role === "user") { // 如果是用户消息
-    return <UserMessage message={msg.content} mode={msg.mode} />;
+    const text = msg.parts
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("");
+    return <UserMessage message={text} mode={msg.metadata?.mode ?? "BUILD"} />;
   }
-  if (msg.role === "error") { // 如果是错误消息
-    return <ErrorMessage message={msg.content} />;
-  }
+
   return (
     <BotMessage
       parts={msg.parts}
-      model={msg.model}
-      mode={msg.mode}
-      duration={msg.duration}
+      model={msg.metadata?.model ?? "unknown"}
+      mode={msg.metadata?.mode ?? "BUILD"}
+      durationMs={msg.metadata?.durationMs}
       streaming={false}
-      interrupted={msg.interrupted}
     />
-  ); // 否则是机器人消息
+  );
 }
 
-function SessionChat({ session }: { session: SessionData }) {
+function SessionChat({
+  session,
+  initialPrompt
+}: {
+  session: SessionData,
+  initialPrompt?: {
+    message: string;
+    mode: ModeType;
+    model: SupportedChatModelId;
+  }
+}) {
   const { mode, model } = usePromptConfig(); // 获取当前的模式和模型
-  const [initialMessages] = useState(() => mapDbMessages(session.messages)); // 将数据库消息映射为客户端消息
+  const [initialMessages] = useState(() => session.messages as unknown as Message[]); // 将数据库消息映射为客户端消息
   const { isTopLayer } = useKeyboardLayer(); // 获取键盘层状态
-  const { messages, streaming, submit, abort, interrupt } = useChat(session.id, initialMessages); // 使用自定义hook管理消息状态
+  const { messages, status, submit, abort, interrupt, error } = useChat(
+    session.id, 
+    initialMessages
+  ); // 使用自定义hook管理消息状态
+
+  const hasSubmittedInitialPromptRef = useRef(false); // 用于标记是否已经提交了初始提示
 
   useEffect(() => {
     return () => { // 组件卸载时取消订阅
-      return abort();
+      void abort();
     }
   }, [abort]);
 
   useKeyboard((key) => {
-    if (key.name === "escape" && isTopLayer("base") && streaming.status === "streaming") {
+    if (key.name === "escape" && isTopLayer("base") && status === "streaming") {
       key.preventDefault();
       interrupt(); // 如果按下esc键且当前是顶层键盘层且正在流式传输，则中断流式传输 
     }
   })
+
+  useEffect(() => {
+    if (!initialPrompt || hasSubmittedInitialPromptRef.current) return;
+
+    hasSubmittedInitialPromptRef.current = true;
+
+    void submit({
+        userText: initialPrompt.message,
+        mode: initialPrompt.mode,
+        model: initialPrompt.model,
+    });
+}, [initialPrompt, submit]);
 
   return (
     <SessionShell
@@ -120,8 +109,8 @@ function SessionChat({ session }: { session: SessionData }) {
           model,
         })
       }}
-      loading={streaming.status === "streaming"}
-      interruptible={streaming.status === "streaming"} // 如果正在流式传输，则允许中断
+      loading={status === "submitted" || status === "streaming"} // 如果状态是已提交或正在流式传输，则显示加载状态
+      interruptible={status === "streaming" || status === "submitted"} // 如果正在流式传输，则允许中断
     >
       {/* 渲染消息 */}
       {messages.map((msg) => (
@@ -129,14 +118,7 @@ function SessionChat({ session }: { session: SessionData }) {
       ))}
 
       {/*  */}
-      {streaming.status === "streaming" && streaming.parts.length > 0 && (
-        <BotMessage
-          parts={streaming.parts}
-          model={streaming.model}
-          mode={streaming.mode}
-          streaming
-        />
-      )}
+      {error && <ErrorMessage message={error.message} />}
     </SessionShell>
   )
 }
@@ -149,12 +131,12 @@ export function Session() {
   // 预取session数据，如果location.state中有session数据，则使用它，否则为null
   const prefetched = useMemo(() => {
     const parsed = sessionLocationSchema.safeParse(location.state); // 验证location.state是否符合sessionLocationSchema的结构
-    return parsed.success ? parsed.data.session : null; // 如果验证成功，返回session数据，否则返回null
+    return parsed.success ? parsed.data : null; // 如果验证成功，返回session数据，否则返回null
   }, [location.state])
 
-  const [session, setSession] = useState(prefetched); // 创建session状态
+  const [session, setSession] = useState<SessionData | null>(prefetched?.session ?? null); // 创建session状态
   useEffect(() => {
-    if (prefetched) return;
+    if (prefetched?.session) return;
     setSession(null); // 如果没有预取数据，设置session为null
     if (!id) return; // 如果没有id，返回
     let ignore = false;
@@ -195,6 +177,7 @@ export function Session() {
     <SessionChat
       key={session.id}
       session={session}
+      initialPrompt={prefetched?.initialPrompt}
     />
   );
 }

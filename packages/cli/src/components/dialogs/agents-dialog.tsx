@@ -1,17 +1,17 @@
 import { useCallback } from "react";
 import { useDialog } from "../../providers/dialog";
 import { DialogSearchList } from "../dialog-search-list";
-import { Mode } from "@more-more-code/database";
+import { type ModeType,  Mode } from "@more-more-code/shared";
 
-const AVAILABLE_MODES: Mode[] = [Mode.PLAN, Mode.BUILD];
+const AVAILABLE_MODES: ModeType[] = [Mode.PLAN, Mode.BUILD];
 
 type AgentsDialogContentProps = {
     // 添加其他属性
-    currentMode: Mode,
-    onSelecteMode: (mode: Mode) => void, // 选择模式
+    currentMode: ModeType,
+    onSelecteMode: (mode: ModeType) => void, // 选择模式
 }
 
-function getModeLabel(mode: Mode) {
+function getModeLabel(mode: ModeType) {
     return mode === Mode.PLAN ? "Plan" : "Build";
 }
 
@@ -22,7 +22,7 @@ export const AgentsDialogContent = ({
     const dialog = useDialog();
 
     // 处理选择模式的回调函数
-    const handleSelect = useCallback((mode: Mode) => {
+    const handleSelect = useCallback((mode: ModeType) => {
         onSelecteMode(mode);
         dialog.close();
     }, [onSelecteMode, dialog]);
