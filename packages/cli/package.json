@@ -15,11 +15,11 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@more-more-code/database": "workspace:*",
+    "@ai-sdk/react": "^4.0.40",
     "@more-more-code/shared": "workspace:*",
     "@opentui/core": "^0.4.2",
     "@opentui/react": "^0.4.2",
-    "eventsource-parser": "^3.1.0",
+    "ai": "^7.0.37",
     "hono": "^4.12.28",
     "open": "^11.0.0",
     "opentui-spinner": "^0.0.7",

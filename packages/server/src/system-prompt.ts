@@ -1,14 +1,12 @@
-import type { Mode } from "@more-more-code/database";
+import type { ModeType } from "@more-more-code/shared";
 
 type SystemPromptParams = {
-    cwd: string | null;
-    mode: Mode;
+    mode: ModeType;
 };
 
 // 构建基础提示词
 // 传递当前目录和Mode
 export function buildSystemPrompt({
-    cwd,
     mode
 }: SystemPromptParams): string {
     const parts: string[] = []
@@ -19,10 +17,6 @@ export function buildSystemPrompt({
         - **PLAN** – Read-only analysis and planning. No file modifications.
         - **BUILD** – Full implementation with read and write tools.`
     );
-
-    if (cwd) {
-        parts.push(`\nThe user's project directory is: ${cwd}`);
-    }
 
     if (mode === "PLAN") {
         parts.push(`
@@ -45,7 +39,7 @@ export function buildSystemPrompt({
     }
 
     // 附带上额外的工具
-    if (cwd && mode === "PLAN") {
+    if (mode === "PLAN") {
         parts.push(`
             ## Tool Usage
             You have these tools available:
@@ -62,7 +56,7 @@ export function buildSystemPrompt({
         `);
     }
 
-    if (cwd && mode === "BUILD") {
+    if (mode === "BUILD") {
         parts.push(`
             ## Tool Usage
             You have these tools available:

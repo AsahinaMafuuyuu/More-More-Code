@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import { z } from "zod";
-import { Mode } from "@more-more-code/database/enums";
+import { Mode, modeSchema } from "@more-more-code/shared";
 import { useNavigate, useLocation } from "react-router";
 import { useTheme } from "../providers/theme";
 import { ErrorMessage, UserMessage, BotMessage } from "../components/messages";
@@ -13,7 +13,7 @@ import { getErrorMessage } from "../lib/http-errors";
 // 新对话可以传入mode和model
 const newSessionSchema = z.object({
     message: z.string(),
-    mode: z.enum(Mode),
+    mode: modeSchema,
     model: z.string(),
 })
 
@@ -46,13 +46,6 @@ export function NewSession() {
                 const res = await apiClient.sessions.$post({
                     json: {
                         title: state.message.slice(0, 100),
-                        cwd: process.cwd(),
-                        initialMessage: {
-                            role: 'USER',
-                            content: state.message,
-                            mode: state.mode,
-                            model: state.model,
-                        }
                     }
                 });
                 if (ignore) return;
@@ -62,7 +55,14 @@ export function NewSession() {
 
                 // 如果创建会话成功，导航到新会话页面
                 const session = await res.json(); // 解析响应为JSON
-                navigate(`/sessions/${session.id}`, { replace: true, state: { session } }); // 导航到新会话页面, 并传递session数据
+                navigate(
+                    `/sessions/${session.id}`, 
+                    { 
+                        replace: true, 
+                        state: { 
+                            session,
+                            initialPrompt: state
+                        } }); // 导航到新会话页面, 并传递session数据
             }
             catch (error) {
                 if (ignore) return; // 如果忽略，则返回

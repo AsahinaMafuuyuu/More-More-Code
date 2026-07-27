@@ -1,549 +1,218 @@
 import { Hono } from "hono";
-import { stream, streamSSE } from "hono/streaming";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { streamText as aiStreamText, stepCountIs, type LanguageModel, type LanguageModelUsage } from "ai";
-import { db } from "@more-more-code/database/client";
-import { Mode, MessageStatus } from "@more-more-code/database/enums";
-import { type ChatStreamEvent, type MessagePart, toolCallArgsSchema, messagePartsSchema } from "@more-more-code/shared";
-import type { Prisma } from "@more-more-code/database";
-import { createTools } from "../tools";
-import { buildSystemPrompt } from "../system-prompt";
-import { isSupportedChatModel, resolveChatModel } from "../lib/models";
-import { requireAuth, type AuthenticatedEnv } from "../middleware/require-auth";
 
+import {
+    convertToModelMessages,
+    streamText,
+    validateUIMessages,
+    type InferUITools,
+    type LanguageModelUsage,
+    type UIMessage,
+} from "ai";
+
+import { db } from "@more-more-code/database/client";
+import type { Prisma } from "@more-more-code/database";
+import {
+    getToolContracts,
+    type ModeType,
+    type ToolContracts,
+    modeSchema,
+} from "@more-more-code/shared";
+import { buildSystemPrompt } from "../system-prompt";
+import type { AuthenticatedEnv } from "../middleware/require-auth";
 import { requireCreditsBalance } from "../middleware/require-credits-balance";
 import { calculateCreditsForUsage } from "../lib/credits";
 import { ingestAiUsage } from "../lib/polar";
+import { isSupportedChatModel, resolveChatModel } from "../lib/models";
 
+type ChatMessageMetadata = {
+    mode?: ModeType;
+    model?: string;
+    durationMs?: number;
+    usage?: LanguageModelUsage;
+};
+
+type MoreMoreCodeUIMessage = UIMessage<
+    ChatMessageMetadata,
+    never,
+    InferUITools<ToolContracts>
+>;
 
 const submitSchema = z.object({
-    content: z.string(),
-    mode: z.enum(Mode),
+    id: z.string(),
+    messages: z
+        .array(
+            z.custom<MoreMoreCodeUIMessage>((value) => {
+                return (
+                    value != null &&
+                    typeof value === "object" &&
+                    "id" in value &&
+                    "parts" in value
+                );
+            }),
+        )
+        .min(1),
+    mode: modeSchema,
     model: z.string().refine(isSupportedChatModel, "Unsupported model"),
 });
 
+// 通过 zod 验证请求体
+// 本质上zValidator是一个中间件函数，它会在请求体不符合schema时返回400错误
 const submitValidator = zValidator("json", submitSchema, (result, c) => {
     if (!result.success) {
-        return c.json({
-            error: "Invalid request body"
-        }, 400)
+        return c.json({ error: "Invalid request body" }, 400);
     }
-})
+});
 
-const activeResumeSessionIds = new Set<string>();
-function buildConversationHistory(
-    messages: {
-        role: "USER" | "ASSISTANT" | "ERROR";
-        content: string;
-        status: MessageStatus;
-    }[]) {
-    return messages.flatMap((m) => {
-        if (m.role === "ERROR") return [];
-        if (m.role === "ASSISTANT" && m.content.length === 0) return [];
-        return [
-            {
-                role: m.role === "USER" ? ("user" as const) : ("assistant" as const),
-                content: m.content,
-            }
-        ]
+function hasPendingToolCalls(message: MoreMoreCodeUIMessage) {
+    return message.parts.some((part) => {
+        if (part.type === "dynamic-tool" || part.type.startsWith("tool-")) {
+            const state = (part as { state?: string }).state;
+
+            return state !== "output-available" && state !== "output-error";
+        }
+
+        return false;
     });
-}
-
-function getResumableUserMessage(
-    messages: {
-        role: "USER" | "ASSISTANT" | "ERROR";
-        model: string;
-        mode: Mode;
-    }[],
-) {
-    const lastMessage = messages[messages.length - 1];
-
-    if (!lastMessage || lastMessage.role !== "USER") {
-        return null;
-    }
-
-    return lastMessage;
-}
-
-// 流式响应的参数
-type StreamParams = {
-    sessionId: string;
-    userId: string;
-    model: string;
-    cwd: string | null; // 当前的工作目录
-    history: {
-        role: "user" | "assistant";
-        content: string;
-    }[];
-    mode: Mode;
-    abortController: AbortController;
-}
-
-type IngestUsageForMessageParams = {
-    messageId: string;
-    status: "complete" | "interrupted";
-}
-
-// 根据ai的response列表，来进行对应的渲染，比如渲染tool-call等等
-async function streamAIResponse(
-    stream: Parameters<Parameters<typeof streamSSE>[1]>[0],
-    params: StreamParams,
-) {
-    const { sessionId, userId, model, cwd, history, mode, abortController } = params;
-    const startTime = Date.now();
-    const tools = cwd ? createTools(cwd, mode) : undefined; // 如果没有cwd，那么就不提供工具
-    const parts: MessagePart[] = []; // 包含reasoning、tool-call 以及text等
-    const resolvedModel = resolveChatModel(model);
-    let completedUsage: LanguageModelUsage | null = null; // 用于记录完整的usage
-    // 持久化中断消息
-    const persistInterruptedMessage = async () => {
-
-        const fullText = parts
-            .filter((p) => p.type === "text")
-            .map((p) => p.text)
-            .join("");
-
-        if (fullText.length === 0 && parts.length === 0) {
-            return;
-        }
-
-        const elapsedMs = Date.now() - startTime;
-        const validatedParts: Prisma.InputJsonValue | undefined = parts
-            .length > 0 ?
-            messagePartsSchema.parse(parts) :
-            undefined;
-
-
-        return db.message.create({
-            data: {
-                sessionId,
-                role: "ASSISTANT",
-                content: fullText,
-                status: MessageStatus.INTERRUPTED,
-                mode,
-                parts: validatedParts,
-                model,
-                duration: Math.round(elapsedMs / 1000),
-            }
-        })
-    }
-
-    const ingestUsageForMessage = async ({
-        messageId,
-        status,
-    }: IngestUsageForMessageParams) => {
-        if (!completedUsage) return;
-
-        try { 
-            const billableUsage = calculateCreditsForUsage({
-                provider: resolvedModel.provider,
-                model: resolvedModel.modelId,
-                usage: completedUsage,
-            })
-
-            await ingestAiUsage({
-                externalCustomerId: userId,
-                eventId: `chat-message: ${messageId}`,
-                credits: billableUsage.credits,
-            })
-        } catch (error) { 
-            console.error("Failed to ingest AI usage for message", {
-                error,
-                sessionId,
-                messageId,
-                userId,
-            })
-        }
-    };
-
-    const persistInterruptedMessageAndUsage = async () => {
-        const interruptedMessage = await persistInterruptedMessage();
-        if (!interruptedMessage) return;
-
-        await ingestUsageForMessage({
-            messageId: interruptedMessage.id,
-            status: "interrupted",
-        })
-     }
-
-    try {
-        const result = aiStreamText({
-            model: resolvedModel.model,
-            system: buildSystemPrompt({ cwd, mode }), // 构建系统提示词
-            messages: history,
-            tools,
-            stopWhen: tools ? stepCountIs(50) : undefined, // 如果有工具，那么就限制50步 
-            abortSignal: abortController.signal,
-            providerOptions: resolvedModel.providerOptions,
-            onFinish(event) {
-                completedUsage = event.usage;
-            }
-        })
-
-        // 根据ai中的响应进行渲染
-        for await (const part of result.fullStream) {
-            if (stream.aborted) break;
-
-            // 需要渲染reasoning
-            // 如果前一个也是reasoning，那么就合并
-            if (part.type === 'reasoning-delta') {
-                const last = parts[parts.length - 1];
-                if (last && last.type === 'reasoning') {
-                    last.text += part.text;
-                } else {
-                    parts.push({
-                        type: 'reasoning',
-                        text: part.text,
-                    })
-                }
-                const event: ChatStreamEvent = {
-                    type: 'reasoning-delta',
-                    text: part.text,
-                }
-                //    写入流式响应
-                // 发送事件
-                await stream.writeSSE({
-                    event: 'reasoning-delta',
-                    data: JSON.stringify(event),
-                })
-            }
-
-            if (part.type === 'text-delta') {
-                const last = parts[parts.length - 1];
-                if (last && last.type === 'text') {
-                    last.text += part.text;
-                }
-                else {
-                    parts.push({
-                        type: 'text',
-                        text: part.text,
-                    })
-                }
-                const event: ChatStreamEvent = {
-                    type: 'text-delta',
-                    text: part.text,
-                }
-                // 发送事件
-                await stream.writeSSE({
-                    event: 'text-delta',
-                    data: JSON.stringify(event),
-                })
-            }
-
-            // 工具调用
-            if (part.type === 'tool-call') {
-                const args = toolCallArgsSchema.parse(part.input); // 校验
-
-                // 由于是工具调用，直接进行工具的调用即可
-                parts.push({
-                    type: 'tool-call',
-                    id: part.toolCallId,
-                    name: part.toolName,
-                    args
-                })
-                const event: ChatStreamEvent = {
-                    type: 'tool-call',
-                    toolCallId: part.toolCallId,
-                    toolName: part.toolName,
-                    args,
-                }
-
-                await stream.writeSSE({
-                    event: 'tool-call',
-                    data: JSON.stringify(event),
-                })
-
-                // 发送事件
-                await stream.writeSSE({
-                    event: 'text-delta',
-                    data: JSON.stringify(event),
-                })
-            }
-
-            if (part.type === 'tool-result') {
-                const resultStr = typeof part.output === 'string' ?
-                    part.output : JSON.stringify(part.output);
-
-                // 找到对应的tool-call
-                const tcPart = parts.find((p): p is Extract<MessagePart, { type: 'tool-call' }> =>
-                    p.type === 'tool-call' && p.id === part.toolCallId)
-
-                // 找到以后添加上结果即可
-                if (tcPart) {
-                    tcPart.result = resultStr;
-                }
-
-                const event: ChatStreamEvent = {
-                    type: 'tool-result',
-                    toolCallId: part.toolCallId,
-                    result: resultStr,
-                }
-
-                await stream.writeSSE({
-                    event: 'tool-result',
-                    data: JSON.stringify(event),
-                })
-            }
-
-            if (part.type === 'error') {
-                throw part.error;
-            }
-        }
-
-        // 
-        if (stream.aborted || abortController.signal.aborted) {
-            await persistInterruptedMessageAndUsage(); // 保存中断的响应
-            return;
-        }
-
-        const elapsedMs = Date.now() - startTime;
-
-        // 获取完整文本
-        const fullText = parts
-            .filter((p) => p.type === "text")
-            .map((p) => p.text)
-            .join("");
-
-        // 创建parts
-        const validatedParts: Prisma.InputJsonValue | undefined = parts
-            .length > 0 ?
-            messagePartsSchema.parse(parts) :
-            undefined;
-
-        // 将响应保存到数据库中
-        const assistantMessage = await db.message.create({
-            data: {
-                sessionId,
-                role: "ASSISTANT",
-                content: fullText,
-                parts: validatedParts,
-                status: MessageStatus.COMPLETE,
-                mode,
-                model,
-                duration: Math.round(elapsedMs / 1000),
-            }
-        })
-
-        await ingestUsageForMessage({
-            messageId: assistantMessage.id,
-            status: "complete",
-        })
-
-        const doneEvent: ChatStreamEvent = {
-            type: 'done',
-            messageId: assistantMessage.id,
-            duration: elapsedMs,
-        }
-
-        await stream.writeSSE({
-            event: 'done',
-            data: JSON.stringify(doneEvent),
-        })
-    } catch (error) {
-        if (abortController.signal.aborted) {
-            await persistInterruptedMessageAndUsage(); // 持久化中断的响应
-            return;
-        }
-
-        const message = error instanceof Error ? error.message : String(error);
-
-        // 将错误保存到数据库中
-        await db.message.create({
-            data: {
-                sessionId,
-                role: "ERROR",
-                content: message,
-                status: MessageStatus.COMPLETE,
-                mode,
-                model,
-            }
-        })
-
-        const errorEvent: ChatStreamEvent = {
-            type: 'error',
-            message,
-        }
-
-        // 发送错误事件
-        await stream.writeSSE({
-            event: 'error',
-            data: JSON.stringify(errorEvent),
-        })
-    }
 }
 
 const app = new Hono<AuthenticatedEnv>()
-    .use("*", requireAuth) // 需要身份验证
-    .post("/:sessionId/resume", requireCreditsBalance, async (c) => {
-        const userId = c.get("userId");
-        const sessionId = c.req.param("sessionId")
+    .post(
+        "/",
+        requireCreditsBalance,
+        submitValidator,
+        async (c) => {
+            const userId = c.get("userId");
+            const { id, messages, mode, model } = c.req.valid("json");
 
-        const session = await db.session.findUnique({
-            where: {
-                id: sessionId,
-                userId,
-            },
-            include: {
-                messages: {
-                    orderBy: {
-                        createdAt: "asc",
-                    }
+            const session = await db.session.findUnique({
+                where: { id, userId },
+            });
+
+            if (!session) {
+                return c.json({ error: "Session not found" }, 404);
+            }
+
+            const startTime = Date.now();
+            const tools = getToolContracts(mode);
+            const resolvedModel = resolveChatModel(model);
+
+            const previousMessages = Array.isArray(session.messages)
+                ? (session.messages as unknown as MoreMoreCodeUIMessage[])
+                : [];
+
+            const mergedMessages = [...previousMessages];
+
+            for (const message of messages) {
+                const incomingMessage = {
+                    ...message,
+                    metadata: { ...message.metadata, mode, model },
+                } satisfies MoreMoreCodeUIMessage;
+
+                const existingMessageIndex = mergedMessages.findIndex(
+                    (m) => m.id === incomingMessage.id,
+                );
+
+                if (existingMessageIndex === -1) {
+                    mergedMessages.push(incomingMessage);
+                } else {
+                    mergedMessages[existingMessageIndex] = incomingMessage;
                 }
             }
-        });
 
-        if (!session) {
-            return c.json({
-                error: "Session not found"
-            }, 404)
-        }
+            const nextMessages = await validateUIMessages<
+                MoreMoreCodeUIMessage
+            >({
+                messages: mergedMessages,
+                tools,
+            });
 
-        const resumableMessage = getResumableUserMessage(session.messages) // 最后一条消息
-
-        // 确保最后一条消息是 USER
-        if (!resumableMessage) {
-            return c.json({
-                error: "Session has no pending user message to resume"
-            }, 409)
-        }
-
-        if (!isSupportedChatModel(resumableMessage.model)) {
-            return c.json({
-                error: `Session uses Unsupported model: ${resumableMessage.model}`
-            }
-                , 409)
-        }
-
-        if (activeResumeSessionIds.has(sessionId)) {
-            return c.json({
-                error: "Session is already being resumed"
-            }, 409)
-        }
-
-        activeResumeSessionIds.add(sessionId); // 添加到正在处理的会话列表
-
-        const history = buildConversationHistory(session.messages); // 构建会话历史
-        const abortController = new AbortController(); // 创建一个 AbortController
-
-        try {
-            return streamSSE(c,
-                async (stream) => {
-                    stream.onAbort(() => {
-                        abortController.abort();
-                    });
-
-                    try {
-                        await streamAIResponse(stream, {
-                            sessionId,
-                            userId,
-                            model: resumableMessage.model,
-                            history,
-                            cwd: session.cwd, // 使用会话的工作目录
-                            mode: resumableMessage.mode,
-                            abortController,
-                        });
-
-                    } finally {
-                        activeResumeSessionIds.delete(sessionId); // 从正在处理的会话列表中删除
-                    }
-                },
-
-                async (err, stream) => {
-                    activeResumeSessionIds.delete(sessionId); // 从正在处理的会话列表中删除
-                    const message = err instanceof Error ? err.message : String(err);
-                    const errorEvent: ChatStreamEvent = {
-                        type: 'error',
-                        message,
-                    }
-                    await stream.writeSSE({
-                        event: 'error',
-                        data: JSON.stringify(errorEvent),
-                    })
-                },
+            const modelMessages = await convertToModelMessages(
+                nextMessages,
+                {
+                    tools,
+                }
             )
 
-        } catch (error) {
-            activeResumeSessionIds.delete(sessionId); // 从正在处理的会话列表中删除
-            throw error;
-        }
+            let completedUsage: LanguageModelUsage | null = null;
 
+            const result = streamText({
+                model: resolvedModel.model,
+                system: buildSystemPrompt({ mode }),
+                messages: modelMessages,
+                tools,
+                providerOptions: resolvedModel.providerOptions,
+                onFinish(event) {
+                    completedUsage = event.totalUsage;
+                },
+            });
 
-    })
-    .post("/:sessionId", requireCreditsBalance, submitValidator, async (c) => {
-        const userId = c.get("userId");
-        const sessionId = c.req.param("sessionId");
-
-        const session = await db.session.findUnique({
-            where: {
-                id: sessionId,
-                userId
-            },
-            include: {
-                messages: {
-                    orderBy: {
-                        createdAt: "asc",
+            return result.toUIMessageStreamResponse<
+                MoreMoreCodeUIMessage
+            >({
+                originalMessages: nextMessages,
+                messageMetadata({
+                    part
+                }) {
+                    if (part.type === "start") {
+                        return {
+                            mode,
+                            model,
+                        };
                     }
+
+                    if (part.type !== "finish") return undefined;
+
+                    return {
+                        mode,
+                        model,
+                        durationMs: Date.now() - startTime,
+                        ...(completedUsage ? { usage: completedUsage } : {}),
+                    };
+                },
+
+                async onFinish(event) {
+                    if (event.isAborted) return;
+
+                    if (hasPendingToolCalls(event.responseMessage)) return;
+
+                    await db.session.update({
+                        where: { id, userId },
+                        data: {
+                            messages: event.messages as unknown as Prisma.InputJsonValue,
+                        },
+                    });
+
+                    if (!completedUsage) return;
+
+                    try {
+                        const billableUsage = calculateCreditsForUsage({
+                            provider: resolvedModel.provider,
+                            model: resolvedModel.modelId,
+                            usage: completedUsage,
+                        });
+                        await ingestAiUsage({
+                            externalCustomerId: userId,
+                            eventId: `chat-message:${event.responseMessage.id}`,
+                            credits: billableUsage.credits,
+                        });
+                    } catch (error) {
+                        console.error("Failed to ingest Polar AI usage for chat message", {
+                            error,
+                            sessionId: id,
+                            messageId: event.responseMessage.id,
+                            userId,
+                        });
+                    }
+                },
+                onError(error) {
+                    return error instanceof Error
+                        ? error.message
+                        : String(error);
                 }
-            }
-        });
-
-        if (!session) {
-            return c.json({
-                error: "Session not found"
-            }, 404)
-        }
-
-        const data = c.req.valid("json");
-
-        // 创建用户消息
-        await db.message.create({
-            data: {
-                sessionId,
-                role: "USER",
-                content: data.content,
-                status: MessageStatus.COMPLETE,
-                mode: data.mode,
-                model: data.model,
-            }
-        });
-
-        const history = buildConversationHistory([
-            // 只选中最新的10条消息
-            ...session.messages.slice(-10),
-            {
-                role: "USER" as const,
-                content: data.content,
-                status: MessageStatus.COMPLETE,
-            }
-        ]);
-
-        const abortController = new AbortController();
-
-        return streamSSE(c, async (stream) => {
-            stream.onAbort(() => {
-                abortController.abort(); // 停止所有请求
-            });
-
-            await streamAIResponse(stream, {
-                sessionId,
-                userId,
-                model: data.model,
-                history,
-                cwd: session.cwd, // 使用会话的工作目录
-                mode: data.mode,
-                abortController,
-            });
-        }, async (err, stream) => {
-            const message = err instanceof Error ? err.message : String(err);
-            const errorEvent: ChatStreamEvent = {
-                type: 'error',
-                message,
-            }
-            await stream.writeSSE({
-                event: 'error',
-                data: JSON.stringify(errorEvent),
             })
-        });
-    });
+        },
+    );
+
 export default app;

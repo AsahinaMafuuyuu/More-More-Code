@@ -3,7 +3,7 @@ import { TextAttributes } from "@opentui/core";
 import { useTheme } from "../providers/theme";
 import { DEFAULT_CHAT_MODEL_ID } from "@more-more-code/shared";
 import { usePromptConfig } from "../providers/prompt-config";
-import { Mode } from "@more-more-code/database";
+import { Mode } from "@more-more-code/shared";
 
 export default function StatusBar() {
     const {mode, model} = usePromptConfig();
