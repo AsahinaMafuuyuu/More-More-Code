@@ -6,7 +6,6 @@ import chatRoute from './routes/chat'
 import * as Sentry from "@sentry/hono/bun";
 import auth from './routes/auth'
 import billing from './routes/billing'
-import { requireAuth } from './middleware/require-auth'
 
 const app = new Hono()
 app.onError((error, c) => {
@@ -59,7 +58,7 @@ const routes = app
 
 export type AppType = typeof routes
 export default {
-    port: process.env.PORT ?? 3000,
+    port: Number(process.env.PORT ?? 3000),
     fetch: app.fetch,
     idleTimeout: 255,
 }
