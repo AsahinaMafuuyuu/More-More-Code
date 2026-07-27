@@ -58,6 +58,7 @@ const routes = app
 
 export type AppType = typeof routes
 export default {
+    hostname: "0.0.0.0",
     port: Number(process.env.PORT ?? 3000),
     fetch: app.fetch,
     idleTimeout: 255,
