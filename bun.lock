@@ -4,6 +4,9 @@
   "workspaces": {
     "": {
       "name": "More More Code",
+      "dependencies": {
+        "dotenv": "^17.4.2",
+      },
       "devDependencies": {
         "wrangler": "^4.114.0",
       },

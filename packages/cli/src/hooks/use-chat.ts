@@ -15,7 +15,6 @@ import {
 import { apiClient } from "../lib/api-client";
 import { getAuth } from "../lib/auth";
 import { executeLocalTool } from "../lib/local-tools";
-import { abort } from "node:process";
 
 export type ChatMessageMetadata = {
     mode?: ModeType;
@@ -99,6 +98,9 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
                 }),
             );
         },
+        // 是否存在工具调用
+        // 并且所有工具调用是否已经完成
+        // 这时候才会自动发送下一条消息
         sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
     });
 
