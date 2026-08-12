@@ -2,7 +2,6 @@ import { Hono } from 'hono'
 import { sentry } from '@sentry/hono/bun'
 import { HTTPException } from 'hono/http-exception'
 import sessions from './routes/sessions'
-import chatRoute from './routes/chat'
 import * as Sentry from "@sentry/hono/bun";
 import auth from './routes/auth'
 import billing from './routes/billing'
@@ -49,10 +48,10 @@ app.get("/debug-sentry", () => {
     throw new Error("My first Sentry error!");
 });
 
-// 将session中的路由逻辑挂载到/sessions下， 聊天逻辑挂载到/chat下
+// Server is the cloud service boundary: session persistence, auth, and billing.
+// Agent/model/tool execution lives entirely in the CLI process.
 const routes = app
     .route("/sessions", sessions)
-    .route("/chat", chatRoute)
     .route("/auth", auth) // 添加/auth路由
     .route("/billing", billing) // 添加/billing路由
 

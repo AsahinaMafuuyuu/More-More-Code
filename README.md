@@ -22,26 +22,27 @@
 ## 🏗️ 项目架构
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                   MORE MORE CODE                         │
-│                                                          │
-│  ┌──────────────┐     ┌──────────────┐                   │
-│  │   packages/   │     │   packages/   │                 │
-│  │     cli       │◄────│    server     │                 │
-│  │  (OpenTUI)    │ HTTP│   (Hono)     │                 │
-│  │               │  SSE│              │                 │
-│  └──────────────┘     └──────┬───────┘                   │
-│                              │                           │
-│                     ┌────────▼────────┐                  │
-│                     │  packages/      │                  │
-│                     │  database       │                  │
-│                     │  (Prisma+PG)    │                  │
-│                     └─────────────────┘                  │
-│                                                          │
-│  ┌─────────────────────────────────────────────┐         │
-│  │         packages/shared (Zod 类型)           │         │
-│  └─────────────────────────────────────────────┘         │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                        MORE MORE CODE                         │
+│                                                              │
+│  packages/cli                                                │
+│  OpenTUI + LocalModelTransport + local tools                 │
+│        │                                                     │
+│        ▼                                                     │
+│  packages/harness ───────────────► LLM Provider              │
+│  AgentLoop: Run → Turn → Step(model/tool)                    │
+│        │                                                     │
+│        │ best-effort session sync                            │
+│        ▼                                                     │
+│  packages/server                                             │
+│  Cloud Session Store / Auth                                  │
+│        │                                                     │
+│        ▼                                                     │
+│  packages/database                                           │
+│  Prisma + PostgreSQL                                         │
+│                                                              │
+│  packages/shared: model/tool contracts and Zod schemas       │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ### 数据流
@@ -49,17 +50,21 @@
 ```
 用户键盘输入
     ↓
-[packages/cli] OpenTUI React 渲染 → HTTP 请求（Hono Client）
+[packages/cli]
     ↓
-[packages/server] Hono API 路由 (session CRUD / chat SSE)
+[packages/harness] 创建 Run / Turn
     ↓
-[Vercel AI SDK] → GPT / Claude / DeepSeek 等模型
+Model Step → CLI LocalModelTransport → LLM Provider（本地进程发起）
     ↓
-[AI 工具调用] → 读/写/编辑文件、执行 bash 命令
-    ↓
-结果通过 SSE 流式返回 CLI
-    ↓
-[packages/database] PostgreSQL (Prisma) 持久化会话与消息
+模型是否请求工具？
+    ├─ 否 → 完成 Turn / Run
+    └─ 是 → Tool Step → CLI 本地执行 read/write/edit/bash 等工具
+                     ↓
+                  写回 tool output
+                     ↓
+                  下一次 Model Step
+
+消息快照由 CLI 通过 Session Store 接口同步到 Server；Server 不参与 Agent Loop、模型调用或工具执行。
 ```
 
 ---
@@ -79,12 +84,18 @@ MORE-MORE-CODE/
 │   │       ├── index.tsx       # 入口文件
 │   │       └── theme.ts        # 9 种配色主题定义
 │   │
-│   ├── server/                 # AI 聊天后端
+│   ├── harness/                # Agent Harness Runtime
+│   │   ├── src/
+│   │   │   ├── agent-loop.ts   # 显式 Agent Loop / 生命周期状态机
+│   │   │   ├── types.ts        # Run / Turn / Step 类型
+│   │   │   └── index.ts
+│   │   └── tests/              # Harness 确定性测试
+│   │
+│   ├── server/                 # 云端会话持久化服务
 │   │   └── src/
-│   │       ├── routes/         # API 路由（sessions、chat）
-│   │       ├── tools/          # AI 工具实现（readFile、writeFile、bash 等）
-│   │       ├── lib/            # 工具函数
-│   │       └── index.ts        # Hono 服务入口
+│   │       ├── routes/         # sessions / auth / account APIs
+│   │       ├── lib/            # 云服务相关基础设施
+│   │       └── index.ts        # Hono 服务入口；不执行 Agent/Model
 │   │
 │   ├── database/               # 数据持久层
 │   │   ├── prisma/

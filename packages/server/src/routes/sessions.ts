@@ -4,10 +4,9 @@ import { zValidator } from "@hono/zod-validator"
 import * as Sentry from "@sentry/hono/bun"
 import { z } from "zod";
 import { db } from "@more-more-code/database/client"
+import type { Prisma } from "@more-more-code/database";
 
 import { requireAuth, type AuthenticatedEnv } from "../middleware/require-auth";
-
-import { requireCreditsBalance } from "../middleware/require-credits-balance";
 
 
 
@@ -56,6 +55,20 @@ const createSessionValidator = zValidator(
                 error: "Validation error",
                 issues: result.error.issues,
             }, 400)
+        }
+    },
+);
+
+const persistMessagesSchema = z.object({
+    messages: z.array(z.unknown()),
+});
+
+const persistMessagesValidator = zValidator(
+    "json",
+    persistMessagesSchema,
+    (result, c) => {
+        if (!result.success) {
+            return c.json({ error: "Invalid session messages" }, 400);
         }
     },
 );
@@ -113,8 +126,26 @@ const app = new Hono<AuthenticatedEnv>()
 
         return c.json(session);
     })
-    // post主要就是创建一个session
-    .post("/", requireCreditsBalance, createSessionValidator, async (c) => {
+    .post("/:id/messages", persistMessagesValidator, async (c) => {
+        const id = c.req.param("id");
+        const userId = c.get("userId");
+        const { messages } = c.req.valid("json");
+
+        const result = await db.session.updateMany({
+            where: { id, userId },
+            data: {
+                messages: messages as Prisma.InputJsonValue,
+            },
+        });
+
+        if (result.count === 0) {
+            return c.json({ error: "Session not found" }, 404);
+        }
+
+        return c.json({ success: true as const });
+    })
+    // Server only creates and persists session state; it does not execute agents.
+    .post("/", createSessionValidator, async (c) => {
         // // 模拟耗时
         // await new Promise(resolve => setTimeout(resolve, 5000));
 

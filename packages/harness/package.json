@@ -1,0 +1,12 @@
+{
+  "name": "@more-more-code/harness",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit -p tsconfig.json"
+  }
+}

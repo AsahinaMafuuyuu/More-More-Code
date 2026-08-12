@@ -68,10 +68,11 @@ function SessionChat({
   const { mode, model } = usePromptConfig(); // 获取当前的模式和模型
   const [initialMessages] = useState(() => session.messages as unknown as Message[]); // 将数据库消息映射为客户端消息
   const { isTopLayer } = useKeyboardLayer(); // 获取键盘层状态
-  const { messages, status, submit, abort, interrupt, error } = useChat(
+  const { messages, status, submit, abort, interrupt, error, run } = useChat(
     session.id, 
     initialMessages
   ); // 使用自定义hook管理消息状态
+  const runActive = run?.status === "running";
 
   const hasSubmittedInitialPromptRef = useRef(false); // 用于标记是否已经提交了初始提示
 
@@ -82,9 +83,13 @@ function SessionChat({
   }, [abort]);
 
   useKeyboard((key) => {
-    if (key.name === "escape" && isTopLayer("base") && status === "streaming") {
+    if (
+      key.name === "escape" &&
+      isTopLayer("base") &&
+      (runActive || status === "streaming" || status === "submitted")
+    ) {
       key.preventDefault();
-      interrupt(); // 如果按下esc键且当前是顶层键盘层且正在流式传输，则中断流式传输 
+      interrupt();
     }
   })
 
@@ -103,14 +108,15 @@ function SessionChat({
   return (
     <SessionShell
       onSubmit={(text) => {
-        submit({
+        void submit({
           userText: text,
           mode,
           model,
         })
       }}
-      loading={status === "submitted" || status === "streaming"} // 如果状态是已提交或正在流式传输，则显示加载状态
-      interruptible={status === "streaming" || status === "submitted"} // 如果正在流式传输，则允许中断
+      inputDisabled={runActive}
+      loading={runActive || status === "submitted" || status === "streaming"}
+      interruptible={runActive || status === "streaming" || status === "submitted"}
     >
       {/* 渲染消息 */}
       {messages.map((msg) => (
@@ -119,6 +125,9 @@ function SessionChat({
 
       {/*  */}
       {error && <ErrorMessage message={error.message} />}
+      {!error && run?.status === "failed" && run.error && (
+        <ErrorMessage message={run.error} />
+      )}
     </SessionShell>
   )
 }

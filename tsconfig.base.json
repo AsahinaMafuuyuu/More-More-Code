@@ -10,6 +10,9 @@
 
     // Bundler mode
     "moduleResolution": "bundler",
+    "paths": {
+      "@more-more-code/harness": ["./packages/harness/src/index.ts"]
+    },
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "noEmit": true,
