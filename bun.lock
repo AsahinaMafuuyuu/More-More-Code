@@ -14,7 +14,12 @@
     "packages/cli": {
       "name": "@more-more-code/cli",
       "dependencies": {
+        "@ai-sdk/anthropic": "^4.0.12",
+        "@ai-sdk/deepseek": "^3.0.7",
+        "@ai-sdk/openai": "^4.0.11",
+        "@ai-sdk/provider-utils": "^5.0.7",
         "@ai-sdk/react": "^4.0.40",
+        "@more-more-code/harness": "workspace:*",
         "@more-more-code/shared": "workspace:*",
         "@opentui/core": "^0.4.2",
         "@opentui/react": "^0.4.2",
@@ -48,12 +53,12 @@
         "prisma": "^7.9.0",
       },
     },
+    "packages/harness": {
+      "name": "@more-more-code/harness",
+    },
     "packages/server": {
       "name": "@more-more-code/server",
       "dependencies": {
-        "@ai-sdk/anthropic": "^4.0.12",
-        "@ai-sdk/deepseek": "^3.0.7",
-        "@ai-sdk/openai": "^4.0.11",
         "@clerk/backend": "^3.12.0",
         "@hono/zod-validator": "^0.8.0",
         "@more-more-code/database": "workspace:*",
@@ -61,7 +66,6 @@
         "@polar-sh/sdk": "^0.49.0",
         "@sentry/bun": "^10.65.0",
         "@sentry/hono": "^10.65.0",
-        "ai": "^7.0.22",
         "dotenv": "^17.4.2",
         "hono": "^4.12.28",
         "open": "^8.0.0",
@@ -246,6 +250,8 @@
     "@more-more-code/cli": ["@more-more-code/cli@workspace:packages/cli"],
 
     "@more-more-code/database": ["@more-more-code/database@workspace:packages/database"],
+
+    "@more-more-code/harness": ["@more-more-code/harness@workspace:packages/harness"],
 
     "@more-more-code/server": ["@more-more-code/server@workspace:packages/server"],
 

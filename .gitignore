@@ -1,41 +1,74 @@
 # dependencies (bun install)
-node_modules
+node_modules/
 
-# output
-out
-dist
+# build / generated output
+out/
+dist/
 *.tgz
 
-# code coverage
-coverage
+# test / coverage output
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
 *.lcov
 
-# logs
-logs
+# logs / runtime traces
+logs/
 *.log
+*.pid
+*.seed
+*.cpuprofile
+*.prof
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
-# dotenv environment variable files
+# environment / local secrets
 .env
-.env.development.local
-.env.test.local
-.env.production.local
-.env.local
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
 
 # caches
 .eslintcache
-.cache
+.cache/
+.vite/
+.turbo/
+.next/
+.parcel-cache/
 *.tsbuildinfo
-*.cpuprofile
+
+# local agent state and one-off execution plans
+.claude/
+.codex/
+.agents/
+tasks/*-plan.md
+tasks/*-todo.md
 
 # Cloudflare Workers local state
-workers/*/.wrangler
+.wrangler/
+workers/*/.wrangler/
 
-# IntelliJ based IDEs
-.idea
+# editor-local state / temporary files
+.idea/
+.history/
+.fleet/
+.zed/
+*.swp
+*.swo
+*~
+*.tmp
+*.temp
+*.bak
 
-# Finder (MacOS) folder config
+# OS-generated files
 .DS_Store
+Thumbs.db
+Desktop.ini
 
-# prisma
-packages/database/generated/prisma
+# Prisma generated client
+packages/database/generated/prisma/
+
+.vscode/
+docs
+

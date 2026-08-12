@@ -4,25 +4,26 @@
 
 ## 1. 项目定位
 
-More More Code 是一个运行在终端中的 AI 对话/编码助手原型。用户通过 TUI（Terminal UI）输入问题，CLI 调用本地 Hono 服务，服务端再请求不同厂商的大语言模型，并通过 SSE 将回答实时推送回终端；会话和消息使用 PostgreSQL 持久化。
+More More Code 是一个 local-first 的终端 Coding Agent 原型。CLI 是真正的应用与 Agent Runtime：负责 TUI、Harness、模型调用、Tool Loop、本地工作区操作和消息编排；Hono Server 不参与模型执行，只承担云端 Session 持久化、恢复数据和必要的账户服务。
 
-项目当前已经形成完整的最小闭环：
+项目当前的核心闭环为：
 
-1. 用户在终端输入首条消息；
-2. 服务端创建会话并保存消息；
-3. 服务端调用模型并流式返回回答；
-4. CLI 实时渲染文本；
-5. 回答完成或发生错误后保存到数据库；
-6. 再次进入会话时加载历史消息，必要时自动恢复尚未回答的请求。
+1. 用户在终端输入消息；
+2. CLI 创建 Harness Run / Turn，并执行本地 Model Step；
+3. 模型产生 Tool Call 时，CLI 在本地执行 Tool Step；
+4. Harness 持续驱动 Model ↔ Tool Loop，CLI 实时渲染模型流；
+5. UIMessage 会话快照通过 Session Store 同步到 Server / PostgreSQL；
+6. 再次进入会话时，从云端快照恢复消息历史后继续由本地 Runtime 执行。
 
 ## 2. 技术栈与仓库结构
 
-项目采用 Bun Workspaces 管理，根目录通过 `packages/*` 组织四个内部包。
+项目采用 Bun Workspaces 管理，根目录通过 `packages/*` 组织五个内部包。
 
 | 包 | 主要技术 | 职责 |
 | --- | --- | --- |
-| `packages/cli` | React 19、OpenTUI、React Router、Hono RPC Client | 终端界面、页面导航、输入、消息展示、SSE 消费 |
-| `packages/server` | Bun、Hono、AI SDK、Sentry | HTTP API、模型调用、流式响应、错误与日志观测 |
+| `packages/cli` | React 19、OpenTUI、AI SDK、Provider SDK、Hono RPC Client | 本地应用层：UI、模型调用、消息编排、本地工具执行、云会话同步 |
+| `packages/harness` | TypeScript | Agent Loop、Run / Turn / Step 生命周期、执行状态机 |
+| `packages/server` | Bun、Hono、Sentry | 云服务层：会话持久化、会话恢复数据、认证及外围账户 API |
 | `packages/database` | Prisma 7、PostgreSQL、`@prisma/adapter-pg` | 数据模型、Prisma Client、数据库连接 |
 | `packages/shared` | TypeScript、Zod | 模型清单、价格信息、消息结构及流式事件协议 |
 
@@ -42,22 +43,30 @@ bun run dev:cli
   │
   ▼
 OpenTUI + React CLI
-  │  Hono 类型安全客户端 / HTTP
-  ▼
-Hono Server
-  ├── /sessions：会话查询与创建
-  ├── /chat：模型请求与 SSE 流
-  ├── AI SDK：统一模型调用
-  └── Sentry：日志、异常、指标
   │
   ▼
+Agent Harness Runtime
+  │  Run → Turn → Step(model/tool)
+  │  Model Step: CLI LocalModelTransport → Provider API
+  │  Tool Step: CLI 本地执行
+  │
+  ├──────────────► LLM Provider
+  │
+  └─ best-effort session sync
+          ▼
+Hono Server
+  ├── /sessions：会话创建 / 查询 / 消息快照持久化
+  ├── /auth：云账户认证
+  └── Sentry：云服务日志与异常
+          │
+          ▼
 Prisma Client
   │
   ▼
 PostgreSQL
 ```
 
-共享包位于 CLI、Server 之间，统一模型 ID 和流式事件的类型/校验规则；数据库包则统一导出 Prisma Client 和枚举。
+Harness 包位于 CLI 的执行路径中，负责显式驱动 Model Step 与本地 Tool Step 的循环。模型 Provider、System Prompt 与 `streamText()` 同样位于 CLI；Server 不参与 Agent Run，只接收会话快照用于云端恢复。共享包统一模型 ID 与工具契约，数据库包统一导出 Prisma Client。
 
 ## 4. 核心数据结构
 
@@ -68,18 +77,17 @@ PostgreSQL
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
 | `id` | String / CUID | 会话主键 |
-| `userId` | String | 用户标识；当前固定为 `mock-user` |
-| `title` | String | 会话标题，目前取首条消息前 100 个字符 |
-| `cwd` | String? | 创建会话时 CLI 所在工作目录 |
+| `userId` | String | 云账户用户标识 |
+| `title` | String | 会话标题 |
 | `createdAt` | DateTime | 创建时间 |
 | `updatedAt` | DateTime | 自动更新时间 |
-| `messages` | Message[] | 一对多关联的消息列表 |
+| `messages` | Json | CLI UIMessage 会话快照，用于恢复 |
 
-`userId` 建有索引，但目前尚未实现真实登录、用户隔离或鉴权。
+`messages` 当前采用 JSON 快照，而不是独立 Message 表。它是云同步格式，不等价于 Harness 的 Run / Turn / Step 事件模型。
 
 ### 4.2 Message（消息）
 
-`Message` 保存用户输入、模型回答或模型调用错误。
+CLI 内部使用 AI SDK `UIMessage` 表示用户输入、模型输出和 Tool Call/Result；Server 仅将其作为 Session 的 JSON 快照保存。
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
@@ -161,32 +169,28 @@ CLI 使用 OpenTUI + React 渲染，包含：
 
 ### 5.3 会话管理 API
 
-服务端提供：
+服务端仅提供云会话状态能力：
 
 | 方法 | 路径 | 功能 |
 | --- | --- | --- |
 | GET | `/sessions/` | 按创建时间倒序返回会话摘要 |
-| GET | `/sessions/:id` | 返回会话及按时间正序排列的全部消息 |
-| POST | `/sessions/` | 创建会话，可同时创建首条用户消息 |
+| GET | `/sessions/:id` | 返回完整 Session 快照 |
+| POST | `/sessions/` | 创建云 Session |
+| POST | `/sessions/:id/messages` | 保存 CLI 当前 UIMessage 快照 |
 
-创建接口使用 Zod 校验标题、工作目录、消息角色、模式和模型 ID。
+Server 不提供 `/chat` 或 `/resume` 模型执行接口。
 
-### 5.4 AI 流式聊天
+### 5.4 本地 Agent / Model 执行
 
-聊天接口包含两种入口：
+模型调用由 CLI 的 `LocalModelTransport` 直接发起。每个 Model Step 将当前 UIMessage 转换为 ModelMessage，然后调用 AI SDK `streamText()`；Harness 根据返回的 Tool Call 决定是否进入本地 Tool Step 以及是否继续下一次 Model Step。
 
-| 方法 | 路径 | 功能 |
-| --- | --- | --- |
-| POST | `/chat/:sessionId` | 保存新用户消息并生成回答 |
-| POST | `/chat/:sessionId/resume` | 为末尾尚无回答的用户消息恢复生成 |
-
-普通聊天仅取此前最近 10 条消息，再附加当前用户消息组成模型上下文。数据库保留完整历史，但每次模型调用不会发送全部历史，可限制上下文长度和调用成本。
+Server 只通过 Session Store 接收消息快照，因此云同步失败和 Agent Run 失败属于两个不同的故障域。
 
 ### 5.5 流式中断与恢复
 
-CLI 使用 `AbortController` 管理当前请求，页面卸载时会中止流。服务端检测客户端断开，并尝试保存已生成的部分文本。
+CLI 直接中断本地 Model Step，并由 Harness 将当前 Run / Turn / Step 标记为 `interrupted`。云端恢复目前基于持久化的 UIMessage 快照重新进入会话，而不是重连 Server 上的模型流。
 
-如果会话加载后最后一条是用户消息，CLI 会自动请求 `/resume`。服务端通过内存中的 `activeResumeSessionIds` 防止同一进程内同一会话被重复恢复。
+更完整的 Run/Turn/Step 事件恢复、离线本地 Session Store 和 compaction 将在后续 Context/Session Runtime 阶段实现。
 
 ### 5.6 多模型抽象
 
@@ -198,7 +202,7 @@ CLI 使用 `AbortController` 管理当前请求，页面卸载时会中止流。
 - Google；
 - DeepSeek。
 
-服务端通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为 `deepseek-v4-flash`。
+CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为 `deepseek-v4-flash`。
 
 需要注意：当前解析器只真正实现了 OpenAI、Anthropic 和 DeepSeek。Mistral、Google 虽出现在共享模型清单中并能通过请求校验，但实际调用时会进入“不支持 Provider”的异常分支。
 
@@ -218,30 +222,25 @@ CLI 使用 `AbortController` 管理当前请求，页面卸载时会中止流。
 
 ```text
 首页输入消息
-  → 跳转 /sessions/new
-  → POST /sessions，保存 Session + 首条 USER Message
+  → POST /sessions 创建云 Session
   → 跳转 /sessions/:id
-  → 检测最后一条为 USER
-  → POST /chat/:id/resume
-  → AI SDK 生成回答
-  → SSE 实时推送文本
-  → 保存 ASSISTANT Message
-  → CLI 将流式内容转为正式消息
+  → CLI 创建 Run / Turn
+  → LocalModelTransport 直接调用模型 Provider
+  → Tool Call 时由 CLI 本地执行 Tool Step
+  → Harness 持续 Model ↔ Tool Loop
+  → UIMessage 快照同步到 Server
 ```
-
-这里采用“先持久化首条消息，再恢复生成”的方式。即使创建会话后 CLI 退出，重新进入仍有机会继续生成回答。
 
 ### 6.2 会话内继续提问
 
 ```text
 用户提交文本
-  → CLI 立即乐观添加用户消息
-  → POST /chat/:id
-  → 服务端持久化 USER Message
-  → 读取最近 10 条历史并调用模型
-  → SSE 推送 text-delta
-  → CLI 聚合并实时渲染
-  → done 后保存并展示完整 ASSISTANT Message
+  → CLI 创建新的 Run / Turn
+  → 本地 Model Step 流式更新 UI
+  → 本地 Tool Step 执行工作区操作
+  → Harness 决定是否继续下一 Model Step
+  → Run 完成 / 中断 / 失败
+  → Session Store 将消息快照同步到云端
 ```
 
 ### 6.3 错误处理
@@ -267,52 +266,49 @@ CLI 使用 `AbortController` 管理当前请求，页面卸载时会中止流。
 
 ## 8. 当前实现边界与值得关注的问题
 
-以下内容是基于当前代码确认的限制或不一致：
+以下内容是基于当前代码确认的主要边界：
 
-1. **真实用户系统尚未实现**  
-   所有会话都写入固定的 `mock-user`，登录、登出、计费和使用量命令只是界面占位。
+1. **Provider 依赖刚从 Server 迁到 CLI**
+   `packages/cli/package.json` 已声明 Provider SDK，但当前工作区需要重新执行一次 `bun install` 才会重建 workspace node_modules 链接。
 
-2. **模型清单与实际 Provider 支持不一致**  
-   Mistral、Google 模型能通过共享层校验，但服务端无法解析，调用时会失败。
+2. **模型清单与实际 Provider 支持仍不完全一致**
+   当前本地 resolver 实现 OpenAI、Anthropic 和 DeepSeek；其他模型应在清单或 resolver 层统一处理。
 
-3. **Plan 模式和模型选择尚未接入交互**  
-   数据库及 UI 已定义 Build/Plan，模型清单也已存在，但当前提交固定使用 `BUILD` 和默认 DeepSeek 模型。
+3. **云 Session 目前是快照同步**
+   `POST /sessions/:id/messages` 采用最后写入覆盖，没有 revision / optimistic concurrency / conflict resolution。
 
-4. **工具调用与推理流仅完成协议设计**  
-   Schema 已定义 reasoning、tool-call、tool-result，但服务端只处理文本流，CLI 也只渲染文本。
+4. **Run / Turn / Step 仍是内存 Runtime 状态**
+   云端目前只恢复 UIMessage，不恢复精确执行到哪一个 Harness Step；完整事件恢复属于后续 Session Runtime。
 
-5. **中断消息持久化角色疑似错误**  
-   服务端保存被中断的模型输出时使用了 `USER` 角色，而这段文本实际是助手已生成的部分回答，应重点检查是否应为 `ASSISTANT`。
+5. **Tool Step 的主动取消尚未完善**
+   Model Step 可以被 abort，Harness 也会停止后续 Step，但已启动的本地 shell/tool 还需要 Tool Runtime 级 cancellation。
 
-6. **耗时单位存在不一致风险**  
-   正常消息入库存储的是四舍五入后的秒数，但加载历史时直接交给 `pretty-ms`，该库通常按毫秒解释；实时 `done` 事件则传递毫秒。历史展示与实时展示可能出现不同单位结果。
+6. **Context Manager 尚未加入**
+   当前仍使用完整 UIMessage 状态构造模型输入；token budget、compaction、retained tail 等将在下一阶段处理。
 
-7. **断线恢复锁只在单进程内有效**  
-   `activeResumeSessionIds` 是内存集合。多实例部署时无法阻止两个服务实例同时恢复同一会话。
+7. **云同步暂时是 best-effort**
+   同步失败不会让本地 Agent Run 失败，这是正确的故障域隔离；但目前只有日志，没有 retry queue、本地 WAL 或离线 Session Store。
 
-8. **会话列表接口尚无完整 UI**  
-   后端已经支持获取会话列表，但 `/sessions` 命令目前只显示提示，没有历史会话浏览页面。
+8. **Server 仍保留 auth / billing 外围路由**
+   它们不参与 Agent Runtime。如果最终要求 Server 严格只做 Session Storage，可进一步把 billing 拆为独立账户服务。
 
-9. **缺少项目级测试与正式说明**  
-   当前未发现业务测试；README 只有项目标题，环境变量、数据库迁移、Provider Key 和启动顺序尚未文档化。
+9. **测试覆盖仍需扩展**
+   已有 AgentLoop 和聊天提交回归测试，但还缺 LocalModelTransport、Session Sync、恢复和真实多轮 Tool Loop 的集成测试。
 
-10. **可观测性配置偏开发态**  
-    Sentry DSN 直接写在代码中，Trace 采样率为 100%，并保留公开的测试异常路由；上线前应改为环境配置并按环境调整。
-
-11. **当前工作区包含未提交改动**  
-    本文反映的是当前工作树代码，而不只是最近一次提交中的稳定状态。
+10. **可观测性配置偏开发态**
+    Sentry DSN 仍直接写在代码中，Trace 采样率较高，并保留测试异常路由，上线前应环境化。
 
 ## 9. 项目现阶段总结
 
-当前项目不是单纯的 TUI 演示，而是已经具备“终端交互—API—模型流—数据库持久化—错误观测”完整纵向链路的 AI 聊天原型。架构分包合理，共享契约、类型安全客户端、SSE 流和会话恢复为后续扩展打下了基础。
+项目现在的核心性质已经从“Client + 远程 AI Chat Server”转为“**Local Coding Agent Runtime + Cloud Session Store**”。CLI 是 authoritative execution runtime；Server 只是云数据边界，不参与 Run / Turn / Step 的推进。
 
 现阶段最核心的已完成能力是：
 
-- 终端中的多轮对话体验；
-- 会话与消息持久化；
-- AI 文本流式输出；
-- 中断和自动恢复机制；
-- 多 Provider 的初步抽象；
-- 主题、命令菜单和基础可观测性。
+- 显式 AgentLoop 与 Run / Turn / Step 生命周期；
+- CLI 本地 Model Step 与 Tool Step；
+- 终端流式交互和中断；
+- 云端 Session 创建、读取和消息快照同步；
+- 多 Provider 的本地抽象；
+- Harness 确定性测试基础。
 
-下一阶段若继续完善，优先级较高的方向应是：修正中断消息和耗时单位问题、统一模型清单与实际 Provider、实现模型/模式切换、补齐历史会话浏览，然后再扩展工具调用、真实认证和计费功能。
+下一阶段应优先进入 Context / Session Runtime：Context Manager、token budget、compaction，以及更可靠的本地状态与云同步恢复；而不是再把执行职责放回 Server。
