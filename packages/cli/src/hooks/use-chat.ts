@@ -10,13 +10,20 @@ import {
 } from "@more-more-code/shared";
 import {
     AgentLoop,
+    appendSessionTreeNode,
+    getActiveSessionTreeNode,
+    getParentSessionTreeNode,
+    getSessionTreeNode,
+    jumpToSessionTreeNode,
+    restoreSessionTree,
     type AgentRun,
     type AgentToolCall,
+    type SessionTreeState,
 } from "@more-more-code/harness";
 import { executeLocalTool } from "../lib/local-tools";
 import { createAgentUserMessage } from "../lib/agent-chat-message";
 import { LocalModelTransport } from "../lib/local-model-transport";
-import { persistSessionMessages } from "../lib/session-store";
+import { persistSessionState } from "../lib/session-store";
 import type { ChatTools, Message } from "../lib/chat-types";
 
 export type { Message } from "../lib/chat-types";
@@ -46,27 +53,33 @@ function getPendingToolCalls(message: Message): AgentToolCall[] {
     return toolCalls;
 }
 
-export function useChat(sessionId: string, initialMessages: Message[]) {
+function cloneMessages(messages: readonly Message[]) {
+    return structuredClone(messages) as Message[];
+}
+
+export function useChat(sessionId: string, persistedSessionState: unknown) {
     const agentLoop = useMemo(() => new AgentLoop(), []);
     const [run, setRun] = useState<AgentRun | null>(null);
+    const [sessionTree, setSessionTree] = useState<SessionTreeState<Message>>(() =>
+        restoreSessionTree<Message>(persistedSessionState),
+    );
+    const sessionTreeRef = useRef(sessionTree);
     const pendingModelStepRef = useRef<PendingModelStep | null>(null);
+    const latestMessagesRef = useRef<Message[]>(
+        cloneMessages(getActiveSessionTreeNode(sessionTree).messages),
+    );
 
     const transport = useMemo(() => {
         return new LocalModelTransport({
             onMessageSnapshot(messages) {
-                void persistSessionMessages(sessionId, messages).catch((error) => {
-                    console.error("Failed to sync session messages", {
-                        sessionId,
-                        error,
-                    });
-                });
+                latestMessagesRef.current = cloneMessages(messages);
             },
         });
-    }, [sessionId]);
+    }, []);
 
     const chat = useAiChat<Message>({
         id: sessionId,
-        messages: initialMessages,
+        messages: latestMessagesRef.current,
         transport,
         onFinish({ message, isAbort, isDisconnect, isError }) {
             const pending = pendingModelStepRef.current;
@@ -99,6 +112,21 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
             pending.reject(error);
         },
     });
+
+    const persistTreeBestEffort = useCallback((state: SessionTreeState<Message>) => {
+        void persistSessionState(sessionId, state).catch((error) => {
+            console.error("Failed to sync session tree", {
+                sessionId,
+                error,
+            });
+        });
+    }, [sessionId]);
+
+    const applyTreeState = useCallback((state: SessionTreeState<Message>, persist = true) => {
+        sessionTreeRef.current = state;
+        setSessionTree(state);
+        if (persist) persistTreeBestEffort(state);
+    }, [persistTreeBestEffort]);
 
     const chatStopRef = useRef(chat.stop);
     chatStopRef.current = chat.stop;
@@ -137,19 +165,49 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
         });
     }
 
+    const jumpToNode = useCallback((nodeId: string) => {
+        if (agentLoop.isRunning) {
+            throw new Error("Cannot jump session nodes while a run is active");
+        }
+
+        const nextTree = jumpToSessionTreeNode(sessionTreeRef.current, nodeId);
+        const node = getActiveSessionTreeNode(nextTree);
+        const messages = cloneMessages(node.messages);
+
+        latestMessagesRef.current = messages;
+        chat.setMessages(messages);
+        applyTreeState(nextTree);
+    }, [agentLoop, applyTreeState, chat]);
+
+    const jumpToParent = useCallback(() => {
+        const parent = getParentSessionTreeNode(sessionTreeRef.current);
+        if (!parent) return false;
+        jumpToNode(parent.id);
+        return true;
+    }, [jumpToNode]);
+
+    const jumpToRoot = useCallback(() => {
+        const rootId = sessionTreeRef.current.rootNodeId;
+        jumpToNode(rootId);
+    }, [jumpToNode]);
+
     return {
         messages: chat.messages,
         status: chat.status,
         error: chat.error,
         run,
-        submit: (params: {
+        sessionTree,
+        jumpToNode,
+        jumpToParent,
+        jumpToRoot,
+        submit: async (params: {
             userText: string;
             mode: ModeType;
             model: SupportedChatModelId;
         }) => {
             const inputMessageId = crypto.randomUUID();
 
-            return agentLoop.run({
+            const completedRun = await agentLoop.run({
                 sessionId,
                 inputMessageId,
                 onStateChange: setRun,
@@ -197,8 +255,24 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
                     abortModelStep: stopModelStep,
                 },
             });
+
+            if (completedRun.status === "completed") {
+                const parentTree = sessionTreeRef.current;
+                const nextTree = appendSessionTreeNode(
+                    parentTree,
+                    latestMessagesRef.current,
+                    {
+                        runId: completedRun.id,
+                        inputMessageId,
+                    },
+                );
+                applyTreeState(nextTree);
+            }
+
+            return completedRun;
         },
         abort: interruptRun,
         interrupt: interruptRun,
+        getNode: (nodeId: string) => getSessionTreeNode(sessionTreeRef.current, nodeId),
     };
 }

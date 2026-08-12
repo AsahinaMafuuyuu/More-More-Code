@@ -73,6 +73,32 @@ const persistMessagesValidator = zValidator(
     },
 );
 
+const persistStateSchema = z.object({
+    state: z.object({
+        version: z.literal(1),
+        rootNodeId: z.string(),
+        activeNodeId: z.string(),
+        nodes: z.array(z.object({
+            id: z.string(),
+            parentId: z.string().nullable(),
+            createdAt: z.number(),
+            messages: z.array(z.unknown()),
+            runId: z.string().optional(),
+            inputMessageId: z.string().optional(),
+        })),
+    }),
+});
+
+const persistStateValidator = zValidator(
+    "json",
+    persistStateSchema,
+    (result, c) => {
+        if (!result.success) {
+            return c.json({ error: "Invalid session state" }, 400);
+        }
+    },
+);
+
 const app = new Hono<AuthenticatedEnv>()
     .use("*", requireAuth) // 需要身份验证
     .get('/', async (c) => {
@@ -125,6 +151,24 @@ const app = new Hono<AuthenticatedEnv>()
         })
 
         return c.json(session);
+    })
+    .post("/:id/state", persistStateValidator, async (c) => {
+        const id = c.req.param("id");
+        const userId = c.get("userId");
+        const { state } = c.req.valid("json");
+
+        const result = await db.session.updateMany({
+            where: { id, userId },
+            data: {
+                messages: state as Prisma.InputJsonValue,
+            },
+        });
+
+        if (result.count === 0) {
+            return c.json({ error: "Session not found" }, 404);
+        }
+
+        return c.json({ success: true as const });
     })
     .post("/:id/messages", persistMessagesValidator, async (c) => {
         const id = c.req.param("id");

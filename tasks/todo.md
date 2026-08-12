@@ -1,9 +1,14 @@
-# Cloudflare Edge Proxy Tasks
+# Context Runtime v1 and Session Tree
 
-- [x] Provide the Cloudflare hostname to use for the API: `api.asahinamafuyu.top`.
-- [x] Authenticate Wrangler to the Cloudflare account.
-- [x] Scaffold the Worker and Wrangler configuration.
-- [x] Implement the non-caching streaming proxy.
-- [x] Deploy the Worker with the Railway origin hostname.
-- [ ] Change CLI `API_URL` and Clerk OAuth callback allowlist.
-- [ ] Verify login, billing, and streaming chat through Cloudflare.
+- [x] Harness context records and budget projection
+- [x] ContextManager tests
+- [x] LocalModelTransport context projection integration
+- [x] Harness session-tree state/helpers
+- [x] Session-tree tests
+- [x] CLI session-tree persistence/legacy restore
+- [x] useChat active-node integration and branching
+- [x] `/tree` and `/jump` node browser
+- [x] `/parent` and `/root` navigation commands
+- [x] Confirm obsolete server chat/model runtime stubs are inert/unmounted
+- [x] ADR and `.docs` update
+- [x] Full tests/typecheck/build verification

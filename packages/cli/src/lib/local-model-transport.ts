@@ -10,7 +10,9 @@ import {
     getToolContracts,
     type ModeType,
     type SupportedChatModelId,
+    type ToolContracts,
 } from "@more-more-code/shared";
+import { ContextManager, type ContextRecord } from "@more-more-code/harness";
 import type { Message } from "./chat-types";
 import { resolveChatModel } from "./models";
 import { buildSystemPrompt } from "./system-prompt";
@@ -18,6 +20,33 @@ import { buildSystemPrompt } from "./system-prompt";
 type LocalModelTransportOptions = {
     onMessageSnapshot?: (messages: Message[]) => void;
 };
+
+const DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
+const RESERVED_OUTPUT_TOKENS = 8_192;
+const CONTEXT_SAFETY_MARGIN_TOKENS = 4_096;
+const REQUIRED_TAIL_MESSAGES = 2;
+
+function estimateTokens(value: unknown) {
+    const text = typeof value === "string" ? value : JSON.stringify(value);
+    return Math.max(1, Math.ceil(text.length / 4));
+}
+
+function projectMessages(messages: Message[], systemPrompt: string) {
+    const manager = new ContextManager<Message>();
+    const records: ContextRecord<Message>[] = messages.map((message, index) => ({
+        id: message.id,
+        kind: "history",
+        payload: message,
+        estimatedTokens: estimateTokens(message),
+        required: index >= Math.max(0, messages.length - REQUIRED_TAIL_MESSAGES),
+    }));
+
+    return manager.project(records, {
+        contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
+        reservedOutputTokens: RESERVED_OUTPUT_TOKENS,
+        safetyMarginTokens: CONTEXT_SAFETY_MARGIN_TOKENS + estimateTokens(systemPrompt),
+    });
+}
 
 function resolveExecutionConfig(messages: Message[]): {
     mode: ModeType;
@@ -51,7 +80,7 @@ export class LocalModelTransport implements ChatTransport<Message> {
         abortSignal,
     }: Parameters<ChatTransport<Message>["sendMessages"]>[0]) {
         const { mode, model } = resolveExecutionConfig(messages);
-        const tools = getToolContracts(mode);
+        const tools = getToolContracts(mode) as ToolContracts;
         const resolvedModel = resolveChatModel(model);
         const startedAt = Date.now();
 
@@ -59,7 +88,10 @@ export class LocalModelTransport implements ChatTransport<Message> {
             messages,
             tools,
         });
-        const modelMessages = await convertToModelMessages(validatedMessages, {
+        const systemPrompt = buildSystemPrompt({ mode });
+        const projection = projectMessages(validatedMessages, systemPrompt);
+        const projectedMessages = projection.records.map((record) => record.payload);
+        const modelMessages = await convertToModelMessages(projectedMessages, {
             tools,
         });
 
@@ -69,7 +101,7 @@ export class LocalModelTransport implements ChatTransport<Message> {
 
         const result = streamText({
             model: resolvedModel.model,
-            system: buildSystemPrompt({ mode }),
+            system: systemPrompt,
             messages: modelMessages,
             tools,
             providerOptions: resolvedModel.providerOptions,

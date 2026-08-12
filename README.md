@@ -64,7 +64,7 @@ Model Step → CLI LocalModelTransport → LLM Provider（本地进程发起）
                      ↓
                   下一次 Model Step
 
-消息快照由 CLI 通过 Session Store 接口同步到 Server；Server 不参与 Agent Loop、模型调用或工具执行。
+Context Manager 会在每个 Model Step 前按预算生成 Context Projection。会话由 CLI 维护为可跳转、可分叉的 Session Tree，并通过 Session Store 接口同步到 Server；Server 不参与 Agent Loop、模型调用或工具执行。
 ```
 
 ---
@@ -87,6 +87,8 @@ MORE-MORE-CODE/
 │   ├── harness/                # Agent Harness Runtime
 │   │   ├── src/
 │   │   │   ├── agent-loop.ts   # 显式 Agent Loop / 生命周期状态机
+│   │   │   ├── context.ts      # Context Manager / Token Budget Projection
+│   │   │   ├── session-tree.ts # 可跳转、可分叉的会话树 Runtime
 │   │   │   ├── types.ts        # Run / Turn / Step 类型
 │   │   │   └── index.ts
 │   │   └── tests/              # Harness 确定性测试
@@ -189,6 +191,10 @@ bun dev:cli
 | `/agents` | 切换工作模式（PLAN / BUILD） |
 | `/models` | 选择 AI 模型 |
 | `/sessions` | 浏览历史会话 |
+| `/tree` | 浏览当前 Session Tree，并跳转任意节点 |
+| `/jump` | 打开节点跳转器 |
+| `/parent` | 跳转到当前节点的父节点 |
+| `/root` | 跳转到当前会话根节点 |
 | `/theme` | 切换配色主题 |
 | `/exit` | 退出程序 |
 
@@ -264,12 +270,15 @@ AI 在 BUILD 模式下可以调用的工具（PLAN 模式仅前 4 个只读工�
 
 ### 数据库模型
 
-- **Session**（会话）：`id` / `userId` / `title` / `cwd`（工作目录）/ `createdAt`
-- **Message**（消息）：`id` / `sessionId` / `role`(USER|ASSISTANT|ERROR) / `status`(COMPLETE|INTERRUPTED) / `content` / `parts`(JSON) / `mode`(PLAN|BUILD) / `model` / `duration`
+当前云端只维护轻量 Session 记录：
 
-### 消息恢复
+- **Session**：`id` / `userId` / `title` / `createdAt` / `updatedAt` / `messages: Json`。
 
-如果会话的最后一条是用户消息且没有 AI 回复（如意外中断），重新进入会话会自动恢复（`resume`），AI 会收到之前的上下文继续处理。
+`messages` 字段当前作为兼容性的 JSON 状态容器。新 CLI 写入的是 versioned Session Tree state，而不是独立 Message 表；后续 Event Store 阶段再考虑结构化事件持久化。
+
+### 会话恢复与分支
+
+Session Tree 中每个节点都是一个可恢复点。CLI 可以从任意节点跳转；如果从旧节点重新提交消息，会在该节点下面创建新的 child branch，并保留原来的 sibling branch。旧版线性 message array 会在加载时自动恢复为单节点树。
 
 ---
 

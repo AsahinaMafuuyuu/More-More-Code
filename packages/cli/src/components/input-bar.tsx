@@ -8,7 +8,7 @@ import { useRef, useState, useCallback, useEffect, type RefObject } from "react"
 import type { TextareaRenderable, ScrollBoxRenderable } from "@opentui/core";
 import { useNavigate } from "react-router";
 import { useKeyboard, useRenderer } from "@opentui/react";
-import type { Command } from "./command-menu/types";
+import type { Command, SessionTreeCommandApi } from "./command-menu/types";
 import { CommandMenu } from "./command-menu";
 import StatusBar from "./status-bar";
 import { useCommandsMenu } from "./command-menu/use-commands-menu";
@@ -335,7 +335,8 @@ function FileMentionMenu({
 
 interface Props {
     onSubmit: Function,
-    disabled?: Boolean
+    disabled?: Boolean,
+    sessionTree?: SessionTreeCommandApi,
 }
 
 export const TEXTAREA_KEY_BINDING: KeyBinding[] = [
@@ -358,7 +359,7 @@ export const TEXTAREA_KEY_BINDING: KeyBinding[] = [
         action: 'newline'
     }
 ]
-export default function InputBar({ onSubmit, disabled = false }: Props) {
+export default function InputBar({ onSubmit, disabled = false, sessionTree }: Props) {
     const { mode, model, toggleMode, setMode, setModel } = usePromptConfig();
     const textareaRef = useRef<TextareaRenderable>(null);
     const onSubmitRef = useRef<() => void>(() => { });
@@ -506,11 +507,12 @@ export default function InputBar({ onSubmit, disabled = false }: Props) {
                 mode, // 获取模式
                 setMode, // 设置模式
                 setModel, // 设置模型
+                sessionTree,
             }); // 执行命令的action
         } else {
             textarea.insertText(command.value + ' ') // 插入命令的value
         }
-    }, [renderer, toast, dialog, navigate, mode, setMode, setModel])
+    }, [renderer, toast, dialog, navigate, mode, setMode, setModel, sessionTree])
 
     const handleCommandExecute = useCallback((index: number) => {
         // 当用户执行一个命令时，执行该命令的回调

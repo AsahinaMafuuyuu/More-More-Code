@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import InputBar from "./input-bar";
 import { Spinner } from "./spinner";
 import { usePromptConfig } from "../providers/prompt-config";
+import type { SessionTreeCommandApi } from "./command-menu/types";
 
 type Props = {
     children?: ReactNode;
@@ -10,6 +11,7 @@ type Props = {
     inputDisabled?: boolean;
     loading?: boolean;
     interruptible?: boolean;
+    sessionTree?: SessionTreeCommandApi;
 };
 
 export function SessionShell({ children,
@@ -17,6 +19,7 @@ export function SessionShell({ children,
     inputDisabled = false,
     loading = false,
     interruptible = false, // 允许中断
+    sessionTree,
 }
     : Props) {
     const { mode } = usePromptConfig()
@@ -40,7 +43,7 @@ export function SessionShell({ children,
             </scrollbox>
 
             <box flexShrink={0}>
-                <InputBar onSubmit={onSubmit} disabled={inputDisabled} />
+                <InputBar onSubmit={onSubmit} disabled={inputDisabled} sessionTree={sessionTree} />
             </box>
 
             <box

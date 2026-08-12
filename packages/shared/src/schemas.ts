@@ -66,21 +66,25 @@ export const readOnlyToolContracts = {
     readFile: tool({
         description: "Read a file from the current project directory.",
         inputSchema: toolInputSchemas.readFile,
+        outputSchema: z.unknown(),
     }),
 
     listDirectory: tool({
         description: "List entries in a directory under the current project directory.",
         inputSchema: toolInputSchemas.listDirectory,
+        outputSchema: z.unknown(),
     }),
     glob: tool({
         description: "Find files matching a glob pattern under the current project directory.",
         inputSchema: toolInputSchemas.glob,
+        outputSchema: z.unknown(),
     }),
 
     grep: tool({
         description:
             "Search file contents with a regular expression under the current project directory.",
         inputSchema: toolInputSchemas.grep,
+        outputSchema: z.unknown(),
     }),
 } as const;
 
@@ -89,15 +93,18 @@ export const buildToolContracts = {
     writeFile: tool({
         description: "Create or overwrite a file under the current project directory.",
         inputSchema: toolInputSchemas.writeFile,
+        outputSchema: z.unknown(),
     }),
 
     editFile: tool({
         description: "Replace exact text in a file under the current project directory.",
         inputSchema: toolInputSchemas.editFile,
+        outputSchema: z.unknown(),
     }),
     bash: tool({
         description: "Execute a bash command in the current project directory.",
         inputSchema: toolInputSchemas.bash,
+        outputSchema: z.unknown(),
     })
 } as const;
 
