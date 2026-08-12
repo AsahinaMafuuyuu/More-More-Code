@@ -16,7 +16,8 @@ import { getErrorMessage } from "../lib/http-errors";
 import { type ModeType, type SupportedChatModelId } from "@more-more-code/shared";
 import { useChat } from "../hooks/use-chat";
 import { usePromptConfig } from "../providers/prompt-config";
-import type { Message } from "../hooks/use-chat";;
+import type { Message } from "../hooks/use-chat";
+import type { SessionTreeCommandApi } from "../components/command-menu/types";
 import { useKeyboardLayer } from "../providers/keyboard-layer";
 
 type SessionData = InferResponseType<(typeof apiClient.sessions)[":id"]["$get"], 200>; // 获取SessionData的类型
@@ -34,13 +35,16 @@ const sessionLocationSchema = z.object({
 
 
 
+function getMessageText(msg: Message) {
+  return msg.parts
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("");
+}
+
 function ChatMessage({ msg }: { msg: Message }) {
   if (msg.role === "user") { // 如果是用户消息
-    const text = msg.parts
-      .filter((part) => part.type === "text")
-      .map((part) => part.text)
-      .join("");
-    return <UserMessage message={text} mode={msg.metadata?.mode ?? "BUILD"} />;
+    return <UserMessage message={getMessageText(msg)} mode={msg.metadata?.mode ?? "BUILD"} />;
   }
 
   return (
@@ -66,13 +70,62 @@ function SessionChat({
   }
 }) {
   const { mode, model } = usePromptConfig(); // 获取当前的模式和模型
-  const [initialMessages] = useState(() => session.messages as unknown as Message[]); // 将数据库消息映射为客户端消息
   const { isTopLayer } = useKeyboardLayer(); // 获取键盘层状态
-  const { messages, status, submit, abort, interrupt, error, run } = useChat(
-    session.id, 
-    initialMessages
-  ); // 使用自定义hook管理消息状态
+  const {
+    messages,
+    status,
+    submit,
+    abort,
+    interrupt,
+    error,
+    run,
+    sessionTree,
+    jumpToNode,
+    jumpToParent,
+    jumpToRoot,
+  } = useChat(session.id, session.messages); // 使用自定义hook管理消息状态与会话树
   const runActive = run?.status === "running";
+
+  const sessionTreeCommands = useMemo<SessionTreeCommandApi>(() => {
+    const childrenByParent = new Map<string | null, typeof sessionTree.nodes>();
+    for (const node of sessionTree.nodes) {
+      const children = childrenByParent.get(node.parentId) ?? [];
+      children.push(node);
+      childrenByParent.set(node.parentId, children);
+    }
+
+    const ordered: Array<{ node: (typeof sessionTree.nodes)[number]; depth: number }> = [];
+    const visit = (nodeId: string, depth: number) => {
+      const node = sessionTree.nodes.find((candidate) => candidate.id === nodeId);
+      if (!node) return;
+      ordered.push({ node, depth });
+      for (const child of childrenByParent.get(node.id) ?? []) {
+        visit(child.id, depth + 1);
+      }
+    };
+    visit(sessionTree.rootNodeId, 0);
+
+    return {
+      rootNodeId: sessionTree.rootNodeId,
+      activeNodeId: sessionTree.activeNodeId,
+      nodes: ordered.map(({ node, depth }) => {
+        const lastUserMessage = node.messages.findLast((message) => message.role === "user");
+        const preview = lastUserMessage ? getMessageText(lastUserMessage).trim() : "Session root";
+        return {
+          id: node.id,
+          parentId: node.parentId,
+          depth,
+          createdAt: node.createdAt,
+          messageCount: node.messages.length,
+          preview: preview || "Untitled turn",
+          active: node.id === sessionTree.activeNodeId,
+        };
+      }),
+      jump: jumpToNode,
+      jumpParent: jumpToParent,
+      jumpRoot: jumpToRoot,
+    };
+  }, [sessionTree, jumpToNode, jumpToParent, jumpToRoot]);
 
   const hasSubmittedInitialPromptRef = useRef(false); // 用于标记是否已经提交了初始提示
 
@@ -117,6 +170,7 @@ function SessionChat({
       inputDisabled={runActive}
       loading={runActive || status === "submitted" || status === "streaming"}
       interruptible={runActive || status === "streaming" || status === "submitted"}
+      sessionTree={sessionTreeCommands}
     >
       {/* 渲染消息 */}
       {messages.map((msg) => (

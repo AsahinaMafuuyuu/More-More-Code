@@ -1,7 +1,7 @@
 import { Children } from "react";
 import type { Command } from "./types";
 import { SUPPORTED_CHAT_MODELS } from "@more-more-code/shared";
-import { ThemeDialogContent, AgentsDialogContent, SessionsDialogContent, ModelsDialogContent } from "../dialogs";
+import { ThemeDialogContent, AgentsDialogContent, SessionsDialogContent, ModelsDialogContent, SessionTreeDialogContent } from "../dialogs";
 import { performLogin } from "../../lib/oauth";
 import { clearAuth } from "../../lib/auth";
 import { openBillingPortal, openUpgradeCheckout } from "../../lib/upgrade";
@@ -53,6 +53,58 @@ export const COMMANDS: Command[] = [
                 children: <SessionsDialogContent />
             })
         }
+    },
+    {
+        name: 'tree',
+        description: "Browse the current session tree and jump to any node",
+        value: "/tree",
+        action: (ctx) => {
+            if (!ctx.sessionTree) {
+                ctx.toast.show({ variant: "error", message: "Session tree is not available here" });
+                return;
+            }
+            ctx.dialog.open({
+                title: "Session Tree",
+                children: <SessionTreeDialogContent tree={ctx.sessionTree} />,
+            });
+        },
+    },
+    {
+        name: 'jump',
+        description: "Jump to any node in the current session tree",
+        value: "/jump",
+        action: (ctx) => {
+            if (!ctx.sessionTree) {
+                ctx.toast.show({ variant: "error", message: "Session tree is not available here" });
+                return;
+            }
+            ctx.dialog.open({
+                title: "Jump to Session Node",
+                children: <SessionTreeDialogContent tree={ctx.sessionTree} />,
+            });
+        },
+    },
+    {
+        name: 'parent',
+        description: "Jump to the parent of the active session node",
+        value: "/parent",
+        action: (ctx) => {
+            if (!ctx.sessionTree?.jumpParent()) {
+                ctx.toast.show({ message: "Already at the root session node" });
+            }
+        },
+    },
+    {
+        name: 'root',
+        description: "Jump to the root of the current session tree",
+        value: "/root",
+        action: (ctx) => {
+            if (!ctx.sessionTree) {
+                ctx.toast.show({ variant: "error", message: "Session tree is not available here" });
+                return;
+            }
+            ctx.sessionTree.jumpRoot();
+        },
     },
     {
         name: 'theme',

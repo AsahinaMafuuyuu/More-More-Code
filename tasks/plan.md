@@ -1,73 +1,58 @@
-# Implementation Plan: Cloudflare Edge Proxy for the API
+# Implementation Plan: Context Runtime v1 and Session Tree
 
 ## Overview
 
-Expose the Railway-hosted Hono API through a user-owned Cloudflare hostname. A
-Cloudflare Worker will proxy every dynamic API request to the existing Railway
-origin without caching responses. The CLI will use the Cloudflare hostname via
-`API_URL`; Railway remains the application origin.
+Move model-context selection out of the React/AI SDK message list and into a reusable Harness context layer, then evolve cloud-restored sessions from a linear message snapshot into a versioned session tree. A tree node represents a resumable conversation point; jumping to any node changes the active projection, and submitting from an older node naturally creates a new branch.
 
 ## Architecture Decisions
 
-- Use a Cloudflare Worker rather than a proxied CNAME directly to Railway. The
-  Worker controls the origin host, preserves streaming responses, and does not
-  require Railway to accept the public hostname as its origin `Host` header.
-- Disable caching for every request. Sessions, billing, OAuth callbacks, and
-  chat SSE responses are all user-specific or streaming.
-- Keep the Railway public hostname private to configuration. The Worker reads
-  it from a non-secret `ORIGIN_HOST` environment variable.
+- Keep `AgentLoop` focused on Run / Turn / Step orchestration. Context selection is a sibling Harness concern, not loop logic.
+- Add a generic Harness `ContextManager` that operates on context records and produces a budgeted projection without depending on React or AI SDK types.
+- Treat the UI message list as one projection of session state, not as the authoritative history model.
+- Represent session history as a versioned tree whose nodes contain resumable message snapshots. This first version favors correctness and simple recovery over snapshot deduplication; later event storage can replace the duplicated snapshots without changing tree semantics.
+- The active node is the continuation point. Jumping to an ancestor and submitting a new turn creates another child branch automatically.
+- Persist the versioned tree through the existing Session JSON storage so this phase does not require a database migration. Keep legacy array snapshots readable.
+- Add `/tree`, `/jump`, `/parent`, and `/root` commands. `/tree` and `/jump` open the same node browser; selecting a node makes it active.
+- Remove obsolete server-side chat/model runtime files after verifying they are no longer referenced.
+- Compaction/automatic summarization remains out of scope. Token budget projection should fail soft by retaining the newest required context rather than mutating historical data.
 
 ## Task List
 
-### Phase 1: Prerequisites
+### Phase 1: Harness Context Foundation
+- [x] Add generic context record, model budget, projection, and `ContextManager` types.
+- [x] Add deterministic tests for tail-preserving budget projection and required-record behavior.
+- [x] Integrate the manager into `LocalModelTransport` before conversion to provider messages.
 
-- [x] Task 1: Confirm the Cloudflare zone and hostname to expose:
-  `api.asahinamafuyu.top`.
-- [x] Task 2: Authenticate Wrangler to the Cloudflare account and verify it
-  can deploy Workers to `api.asahinamafuyu.top`.
+### Phase 2: Session Tree Runtime
+- [x] Add generic session-tree state/types/helpers in the Harness package.
+- [x] Add tests for root creation, append, jump, branching from an ancestor, parent lookup, and legacy restoration.
+- [x] Add CLI session-state persistence and restore helpers using the existing cloud Session JSON field.
 
-### Phase 2: Edge Proxy
+### Phase 3: CLI Navigation
+- [x] Make `useChat` own the active session-tree state and update it after completed turns.
+- [x] Support replacing the displayed/provider message projection when jumping to a node.
+- [x] Add a session-tree browser dialog plus `/tree`, `/jump`, `/parent`, and `/root` commands.
 
-- [x] Task 3: Add the Worker project and Wrangler configuration.
-- [x] Task 4: Implement transparent method, query, header, and response-stream
-  proxying to the Railway origin with caching disabled.
-- [x] Task 4a: Add an explicit public API URL for Polar redirect URLs so they
-  use the edge hostname rather than the Railway origin.
-- [x] Task 5: Deploy the Worker with `ORIGIN_HOST` set to
-  `more-more-codeserver-production.up.railway.app`.
-
-### Checkpoint: Edge Proxy
-
-- [x] `GET /` through the Cloudflare hostname returns the origin's `404`.
-- [x] Authenticated `GET /sessions` returns the same result through both
-  public hostnames.
-- [ ] Chat SSE responses are streamed rather than buffered.
-
-### Phase 3: Client and OAuth Cutover
-
-- [ ] Task 6: Set local CLI `API_URL` to the Cloudflare hostname.
-- [ ] Task 7: Add `https://<hostname>/auth/callback` to Clerk's permitted OAuth
-  redirect URLs.
-- [ ] Task 8: Validate `/login`, `/usage`, `/upgrade`, and a credited chat
-  request end to end.
-
-### Checkpoint: Complete
-
-- [ ] The CLI operates through Cloudflare without a Railway-specific URL.
-- [ ] No dynamic endpoint is cached.
-- [ ] Railway remains reachable directly for operational recovery.
+### Phase 4: Cleanup and Documentation
+- [x] Confirm obsolete server chat/model runtime stubs are inert and unmounted from the Server runtime.
+- [x] Add ADR for context projection and tree-shaped sessions.
+- [x] Update `.docs` current implementation snapshot.
+- [x] Run tests, Harness/CLI/Server typechecks, CLI build, and Server build.
 
 ## Risks and Mitigations
 
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
-| Region cannot reach Cloudflare | High | Test from target networks before cutover; keep the Railway origin as a fallback. |
-| Caching an authenticated or SSE response | High | Set `Cache-Control: no-store` and do not use Cloudflare cache options. |
-| OAuth callback mismatch | High | Change the Clerk allowlist and CLI `API_URL` together. |
-| Worker cannot reach the origin | Medium | Keep `ORIGIN_HOST` configurable and validate with a non-authenticated route first. |
+| AI SDK chat state cannot be replaced safely | High | Use its `setMessages` state API and keep tree snapshots in the same UI message shape at the CLI adapter boundary. |
+| Branch persistence overwrites a newer local node | Medium | Serialize the full tree snapshot from one CLI runtime; revision/conflict resolution remains a later offline-sync concern. |
+| Token estimation is not provider tokenizer-exact | Medium | Use an explicitly approximate estimator for budgeting and maintain a conservative safety margin. Exact provider tokenizers can replace it behind the same interface. |
+| Tree snapshots duplicate messages | Medium | Accept for v1 to preserve simple arbitrary-node recovery; later event/delta storage can optimize without changing node IDs/parent semantics. |
+| Legacy sessions contain only an array | High | Normalize legacy arrays into a root/active tree on load. |
 
-## Open Questions
+## Out of Scope
 
-- Is the aim only better connectivity from restricted networks, or an official
-  deployment for a regulated region? The latter may require regional hosting
-  and compliance work beyond an edge proxy.
+- Automatic compaction or model-generated summaries
+- Persistent Run / Turn / Step event store
+- Cross-device optimistic concurrency/revision merging
+- Permission engine and sandbox
+- Subagent/session-tree child runtimes

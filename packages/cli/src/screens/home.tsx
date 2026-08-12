@@ -2,7 +2,6 @@ import { useCallback } from "react";
 import { useNavigate } from "react-router";
 import Header from "../components/header";
 import InputBar from "../components/input-bar";
-import { Mode } from "@more-more-code/database/enums";
 import { usePromptConfig } from "../providers/prompt-config";
 import { TextAttributes } from "@opentui/core";
 

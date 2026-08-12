@@ -55,7 +55,7 @@ Agent Harness Runtime
   └─ best-effort session sync
           ▼
 Hono Server
-  ├── /sessions：会话创建 / 查询 / 消息快照持久化
+  ├── /sessions：会话创建 / 查询 / Session Tree 状态持久化
   ├── /auth：云账户认证
   └── Sentry：云服务日志与异常
           │
@@ -176,21 +176,22 @@ CLI 使用 OpenTUI + React 渲染，包含：
 | GET | `/sessions/` | 按创建时间倒序返回会话摘要 |
 | GET | `/sessions/:id` | 返回完整 Session 快照 |
 | POST | `/sessions/` | 创建云 Session |
-| POST | `/sessions/:id/messages` | 保存 CLI 当前 UIMessage 快照 |
+| POST | `/sessions/:id/state` | 保存 CLI 当前 versioned Session Tree state |
+| POST | `/sessions/:id/messages` | 旧版线性消息快照兼容接口 |
 
 Server 不提供 `/chat` 或 `/resume` 模型执行接口。
 
 ### 5.4 本地 Agent / Model 执行
 
-模型调用由 CLI 的 `LocalModelTransport` 直接发起。每个 Model Step 将当前 UIMessage 转换为 ModelMessage，然后调用 AI SDK `streamText()`；Harness 根据返回的 Tool Call 决定是否进入本地 Tool Step 以及是否继续下一次 Model Step。
+模型调用由 CLI 的 `LocalModelTransport` 直接发起。每个 Model Step 先把当前消息映射成 Harness `ContextRecord`，由 `ContextManager` 按输入预算生成 `ContextProjection`，再将投影结果转换为 ModelMessage 并调用 AI SDK `streamText()`；Harness 根据返回的 Tool Call 决定是否进入本地 Tool Step 以及是否继续下一次 Model Step。
 
-Server 只通过 Session Store 接收消息快照，因此云同步失败和 Agent Run 失败属于两个不同的故障域。
+Server 只通过 Session Store 接收会话树状态快照，因此云同步失败和 Agent Run 失败属于两个不同的故障域。
 
 ### 5.5 流式中断与恢复
 
-CLI 直接中断本地 Model Step，并由 Harness 将当前 Run / Turn / Step 标记为 `interrupted`。云端恢复目前基于持久化的 UIMessage 快照重新进入会话，而不是重连 Server 上的模型流。
+CLI 直接中断本地 Model Step，并由 Harness 将当前 Run / Turn / Step 标记为 `interrupted`。云端恢复目前基于 versioned Session Tree snapshot，而不是重连 Server 上的模型流。每个树节点都是可恢复点，`activeNodeId` 决定当前 continuation cursor。
 
-更完整的 Run/Turn/Step 事件恢复、离线本地 Session Store 和 compaction 将在后续 Context/Session Runtime 阶段实现。
+更完整的 Run/Turn/Step Event Store、离线本地 WAL、精确 tokenizer 和 compaction 仍属于后续 Context/Session Runtime 阶段。
 
 ### 5.6 多模型抽象
 
@@ -228,7 +229,8 @@ CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为
   → LocalModelTransport 直接调用模型 Provider
   → Tool Call 时由 CLI 本地执行 Tool Step
   → Harness 持续 Model ↔ Tool Loop
-  → UIMessage 快照同步到 Server
+  → Run 完成后追加 Session Tree child node
+  → versioned Session Tree state 同步到 Server
 ```
 
 ### 6.2 会话内继续提问
@@ -240,7 +242,8 @@ CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为
   → 本地 Tool Step 执行工作区操作
   → Harness 决定是否继续下一 Model Step
   → Run 完成 / 中断 / 失败
-  → Session Store 将消息快照同步到云端
+  → completed Run 追加当前 active node 的 child
+  → Session Store 将完整 Session Tree snapshot 同步到云端
 ```
 
 ### 6.3 错误处理
@@ -274,17 +277,17 @@ CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为
 2. **模型清单与实际 Provider 支持仍不完全一致**
    当前本地 resolver 实现 OpenAI、Anthropic 和 DeepSeek；其他模型应在清单或 resolver 层统一处理。
 
-3. **云 Session 目前是快照同步**
-   `POST /sessions/:id/messages` 采用最后写入覆盖，没有 revision / optimistic concurrency / conflict resolution。
+3. **云 Session 目前仍是快照同步**
+   当前 CLI 使用 `POST /sessions/:id/state` 最后写入完整 Session Tree snapshot，没有 revision / optimistic concurrency / conflict resolution；旧 `/messages` 仅保留兼容。
 
 4. **Run / Turn / Step 仍是内存 Runtime 状态**
-   云端目前只恢复 UIMessage，不恢复精确执行到哪一个 Harness Step；完整事件恢复属于后续 Session Runtime。
+   云端已经可以恢复会话树节点与 active cursor，但仍不恢复精确执行到哪一个 Harness Step；完整事件恢复属于后续 Event Store。
 
 5. **Tool Step 的主动取消尚未完善**
    Model Step 可以被 abort，Harness 也会停止后续 Step，但已启动的本地 shell/tool 还需要 Tool Runtime 级 cancellation。
 
-6. **Context Manager 尚未加入**
-   当前仍使用完整 UIMessage 状态构造模型输入；token budget、compaction、retained tail 等将在下一阶段处理。
+6. **Context Manager 已加入 v1，但仍是近似预算**
+   当前已经在模型调用前执行 Harness Context Projection，并保留 required tail；token 估算仍是字符数近似，模型特定 tokenizer/profile 与 compaction 尚未加入。
 
 7. **云同步暂时是 best-effort**
    同步失败不会让本地 Agent Run 失败，这是正确的故障域隔离；但目前只有日志，没有 retry queue、本地 WAL 或离线 Session Store。
@@ -293,7 +296,7 @@ CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为
    它们不参与 Agent Runtime。如果最终要求 Server 严格只做 Session Storage，可进一步把 billing 拆为独立账户服务。
 
 9. **测试覆盖仍需扩展**
-   已有 AgentLoop 和聊天提交回归测试，但还缺 LocalModelTransport、Session Sync、恢复和真实多轮 Tool Loop 的集成测试。
+   已有 AgentLoop、ContextManager、Session Tree 和聊天提交回归测试，但还缺 LocalModelTransport、真实 Cloud Session Sync、节点跳转 UI 与真实多轮 Tool Loop 的集成测试。
 
 10. **可观测性配置偏开发态**
     Sentry DSN 仍直接写在代码中，Trace 采样率较高，并保留测试异常路由，上线前应环境化。
@@ -307,8 +310,10 @@ CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为
 - 显式 AgentLoop 与 Run / Turn / Step 生命周期；
 - CLI 本地 Model Step 与 Tool Step；
 - 终端流式交互和中断；
-- 云端 Session 创建、读取和消息快照同步；
+- 云端 Session 创建、读取和 versioned Session Tree snapshot 同步；
+- 任意 Session Tree 节点跳转与从历史节点自然分叉；
+- Harness ContextManager 与基础 token budget projection；
 - 多 Provider 的本地抽象；
-- Harness 确定性测试基础。
+- AgentLoop / ContextManager / Session Tree 确定性测试基础。
 
-下一阶段应优先进入 Context / Session Runtime：Context Manager、token budget、compaction，以及更可靠的本地状态与云同步恢复；而不是再把执行职责放回 Server。
+下一阶段应优先建立 Canonical Event History / Event Store、精确 model profile/tokenizer 与 compaction，然后再进入 Tool Registry、Permission、Sandbox 和基于 Session Tree 的 Subagent。

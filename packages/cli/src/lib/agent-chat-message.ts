@@ -8,11 +8,11 @@ export function createAgentUserMessage(params: {
 }) {
     return {
         id: params.id,
-        role: "user",
-        parts: [{ type: "text", text: params.text }],
+        role: "user" as const,
+        parts: [{ type: "text" as const, text: params.text }],
         metadata: {
             mode: params.mode,
             model: params.model,
         },
-    } as const;
+    };
 }
