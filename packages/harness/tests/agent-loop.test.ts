@@ -85,16 +85,37 @@ describe("AgentLoop", () => {
     expect(run.status).toBe("completed");
     expect(modelContinuations).toEqual([false, true]);
     expect(executedTools).toEqual(["readFile", "grep"]);
+    expect(run.turns).toHaveLength(2);
+    expect(run.turns.map((turn) => turn.cause)).toEqual([
+      "initial",
+      "tool-continuation",
+    ]);
     expect(run.turns[0]?.steps.map((step) => step.kind)).toEqual([
       "model",
       "tool",
       "tool",
-      "model",
     ]);
+    expect(run.turns[1]?.steps.map((step) => step.kind)).toEqual(["model"]);
 
     const toolSteps = run.turns[0]?.steps.filter((step) => step.kind === "tool") ?? [];
     expect(toolSteps.map((step) => step.toolCallId)).toEqual(["call-1", "call-2"]);
     expect(toolSteps.every((step) => step.status === "completed")).toBe(true);
+    expect(loop.getExecutionEvents(run.id).map((event) => event.type)).toEqual([
+      "run.started",
+      "turn.started",
+      "step.started",
+      "step.completed",
+      "step.started",
+      "step.completed",
+      "step.started",
+      "step.completed",
+      "turn.completed",
+      "turn.started",
+      "step.started",
+      "step.completed",
+      "turn.completed",
+      "run.completed",
+    ]);
   });
 
   test("marks the active model step, turn, and run as interrupted", async () => {
@@ -119,6 +140,14 @@ describe("AgentLoop", () => {
     expect(run.status).toBe("interrupted");
     expect(run.turns[0]?.status).toBe("interrupted");
     expect(run.turns[0]?.steps[0]?.status).toBe("interrupted");
+    expect(loop.getExecutionEvents(run.id).map((event) => event.type)).toEqual([
+      "run.started",
+      "turn.started",
+      "step.started",
+      "step.interrupted",
+      "turn.interrupted",
+      "run.interrupted",
+    ]);
   });
 
   test("marks a run as failed when a tool-step integration fails", async () => {
@@ -145,6 +174,16 @@ describe("AgentLoop", () => {
     expect(run.error).toBe("tool adapter failed");
     expect(run.turns[0]?.status).toBe("failed");
     expect(run.turns[0]?.steps.at(-1)?.status).toBe("failed");
+    expect(loop.getExecutionEvents(run.id).map((event) => event.type)).toEqual([
+      "run.started",
+      "turn.started",
+      "step.started",
+      "step.completed",
+      "step.started",
+      "step.failed",
+      "turn.failed",
+      "run.failed",
+    ]);
   });
 
   test("fails a runaway loop when the step budget is exhausted", async () => {

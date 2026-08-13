@@ -1,14 +1,21 @@
-# Context Runtime v1 and Session Tree
+# Session Entry Tree v3
 
-- [x] Harness context records and budget projection
-- [x] ContextManager tests
-- [x] LocalModelTransport context projection integration
-- [x] Harness session-tree state/helpers
-- [x] Session-tree tests
-- [x] CLI session-tree persistence/legacy restore
-- [x] useChat active-node integration and branching
-- [x] `/tree` and `/jump` node browser
-- [x] `/parent` and `/root` navigation commands
-- [x] Confirm obsolete server chat/model runtime stubs are inert/unmounted
-- [x] ADR and `.docs` update
-- [x] Full tests/typecheck/build verification
+- [x] Define Pi-inspired SessionEntry union and v3 state
+- [x] Add active-branch path replay and validation
+- [x] Add message projection + immutable message updates
+- [x] Add runtime model/mode/config projection
+- [x] Add append/jump/parent/root APIs
+- [x] Upgrade legacy arrays to v3
+- [x] Upgrade v1 snapshot trees to v3
+- [x] Upgrade v2 event-backed trees to v3 without losing branches
+- [x] Persist conversation message boundaries incrementally from CLI
+- [x] Persist tool_call/tool_result/error entries
+- [x] Persist model/mode state changes
+- [x] Restore runtime prompt state on tree navigation
+- [x] Update tree UI to display Session Entries
+- [x] Server accepts v3 while retaining v1/v2 compatibility
+- [x] Harness migration/branch/projection tests
+- [x] Harness + CLI tests
+- [x] Harness + CLI + Server typechecks
+- [x] CLI + Server builds + git diff check
+- [x] ADR-0008 + README/CHANGELOG/.docs/CONTEXT.md

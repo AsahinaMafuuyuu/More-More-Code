@@ -8,12 +8,13 @@ More More Code 是一个 local-first 的终端 Coding Agent 原型。CLI 是真�
 
 项目当前的核心闭环为：
 
-1. 用户在终端输入消息；
-2. CLI 创建 Harness Run / Turn，并执行本地 Model Step；
-3. 模型产生 Tool Call 时，CLI 在本地执行 Tool Step；
-4. Harness 持续驱动 Model ↔ Tool Loop，CLI 实时渲染模型流；
-5. UIMessage 会话快照通过 Session Store 同步到 Server / PostgreSQL；
-6. 再次进入会话时，从云端快照恢复消息历史后继续由本地 Runtime 执行。
+1. 用户在终端输入消息，CLI 创建 Harness Run；
+2. Harness 创建 `initial` Turn 并执行一个本地 Model Step；
+3. 模型产生 Tool Call 时，CLI 在同一 Turn 内执行对应 Tool Steps；
+4. Tool 结果需要继续推理时，Harness 创建新的 `tool-continuation` Turn；
+5. Run 活跃期间，Enter 可排队 steering、Alt+Enter 可排队 follow-up，均只在 Turn-safe boundary 消费；
+6. Run 完成后，UIMessage/Session Tree state 通过 Session Store 同步到 Server / PostgreSQL；
+7. 再次进入会话时，从云端快照恢复消息历史后继续由本地 Runtime 执行。
 
 ## 2. 技术栈与仓库结构
 
@@ -22,7 +23,7 @@ More More Code 是一个 local-first 的终端 Coding Agent 原型。CLI 是真�
 | 包 | 主要技术 | 职责 |
 | --- | --- | --- |
 | `packages/cli` | React 19、OpenTUI、AI SDK、Provider SDK、Hono RPC Client | 本地应用层：UI、模型调用、消息编排、本地工具执行、云会话同步 |
-| `packages/harness` | TypeScript | Agent Loop、Run / Turn / Step 生命周期、执行状态机 |
+| `packages/harness` | TypeScript | Agent Loop、Execution Events/Event Store、Run / Turn / Step Lifecycle/Projection、steering/follow-up、Context/Session Runtime |
 | `packages/server` | Bun、Hono、Sentry | 云服务层：会话持久化、会话恢复数据、认证及外围账户 API |
 | `packages/database` | Prisma 7、PostgreSQL、`@prisma/adapter-pg` | 数据模型、Prisma Client、数据库连接 |
 | `packages/shared` | TypeScript、Zod | 模型清单、价格信息、消息结构及流式事件协议 |
@@ -46,7 +47,8 @@ OpenTUI + React CLI
   │
   ▼
 Agent Harness Runtime
-  │  Run → Turn → Step(model/tool)
+  │  AgentLoop → Lifecycle + Execution Events → Run/Turn/Step Projection
+  │  Turn = one Model response + requested Tool Steps
   │  Model Step: CLI LocalModelTransport → Provider API
   │  Tool Step: CLI 本地执行
   │
@@ -66,7 +68,7 @@ Prisma Client
 PostgreSQL
 ```
 
-Harness 包位于 CLI 的执行路径中，负责显式驱动 Model Step 与本地 Tool Step 的循环。模型 Provider、System Prompt 与 `streamText()` 同样位于 CLI；Server 不参与 Agent Run，只接收会话快照用于云端恢复。共享包统一模型 ID 与工具契约，数据库包统一导出 Prisma Client。
+Harness 包位于 CLI 的执行路径中，负责显式驱动 Run → Turn → Step。Turn 定义为一次 Model response 加该 response 请求的全部 Tool Steps；后续 tool-result 推理会创建新的 Turn。AgentLoop 将 coarse-grained Run / Turn / Step 事实写成 append-only Execution Events，`AgentRun` 等状态通过 replay projection 得到，同时通过 awaited lifecycle stream 对外发送 `run_start/end`、`turn_start/end`、`step_start/update/end`。模型 Provider、System Prompt 与 `streamText()` 同样位于 CLI。Server 不参与 Agent Run，只接收会话快照用于云端恢复。
 
 ## 4. 核心数据结构
 
@@ -183,15 +185,15 @@ Server 不提供 `/chat` 或 `/resume` 模型执行接口。
 
 ### 5.4 本地 Agent / Model 执行
 
-模型调用由 CLI 的 `LocalModelTransport` 直接发起。每个 Model Step 先把当前消息映射成 Harness `ContextRecord`，由 `ContextManager` 按输入预算生成 `ContextProjection`，再将投影结果转换为 ModelMessage 并调用 AI SDK `streamText()`；Harness 根据返回的 Tool Call 决定是否进入本地 Tool Step 以及是否继续下一次 Model Step。
+模型调用由 CLI 的 `LocalModelTransport` 直接发起。每个 Model Step 先把当前消息映射成 Harness `ContextRecord`，由 `ContextManager` 按输入预算生成 `ContextProjection`，再将投影结果转换为 ModelMessage 并调用 AI SDK `streamText()`；Harness 根据返回的 Tool Call 在当前 Turn 内执行 Tool Steps，并在工具链结束后决定启动 `steering`、`tool-continuation`、`follow-up` Turn，或结束 Run。
 
 Server 只通过 Session Store 接收会话树状态快照，因此云同步失败和 Agent Run 失败属于两个不同的故障域。
 
 ### 5.5 流式中断与恢复
 
-CLI 直接中断本地 Model Step，并由 Harness 将当前 Run / Turn / Step 标记为 `interrupted`。云端恢复目前基于 versioned Session Tree snapshot，而不是重连 Server 上的模型流。每个树节点都是可恢复点，`activeNodeId` 决定当前 continuation cursor。
+CLI 通过 Escape 请求中断当前 Run；Model Step 可立即 abort，已启动但尚不支持 AbortSignal 的本地 Tool Step 会在返回后的最近安全点停止。Harness 依次追加对应 step/turn/run terminal execution events，并由事件 replay 得到中断状态。`run_end` lifecycle listeners 属于 settlement barrier，因此 Run projection 可能已 terminal，但 `isBusy` 会一直保持到 listeners 完成，`waitForIdle()` 才返回。
 
-更完整的 Run/Turn/Step Event Store、离线本地 WAL、精确 tokenizer 和 compaction 仍属于后续 Context/Session Runtime 阶段。
+Run 活跃期间，普通 Enter 将输入排入 steering queue；Alt+Enter 排入 follow-up queue。steering 在当前 Turn 完成后优先于自动 tool continuation，follow-up 只在 Run 原本将进入 idle 时消费。云端恢复仍基于 versioned Session Tree snapshot；进程内 `ExecutionEventStore` 与 deterministic execution projection 已完成，仍缺 Local WAL、crash recovery 与 cloud revision/conflict sync。
 
 ### 5.6 多模型抽象
 
@@ -225,22 +227,26 @@ CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为
 首页输入消息
   → POST /sessions 创建云 Session
   → 跳转 /sessions/:id
-  → CLI 创建 Run / Turn
+  → CLI 创建 Run / initial Turn execution events
+  → ExecutionEventStore / Projection 建立当前 Run 状态
   → LocalModelTransport 直接调用模型 Provider
-  → Tool Call 时由 CLI 本地执行 Tool Step
-  → Harness 持续 Model ↔ Tool Loop
-  → Run 完成后追加 Session Tree child node
+  → Tool Call 时由 CLI 在当前 Turn 内执行 Tool Steps
+  → Turn End 后按 steering → tool-continuation → follow-up 的规则决定下一 Turn
+  → 无待处理工作时 Run End
+  → completed Run 追加 Session Tree child node
   → versioned Session Tree state 同步到 Server
 ```
 
 ### 6.2 会话内继续提问
 
 ```text
-用户提交文本
-  → CLI 创建新的 Run / Turn
+用户在 idle 时提交文本
+  → CLI 创建新的 Run / initial Turn
+  → Run / Turn / Step 状态由 event replay 投影
   → 本地 Model Step 流式更新 UI
   → 本地 Tool Step 执行工作区操作
-  → Harness 决定是否继续下一 Model Step
+  → 运行中 Enter 可 queue steering，Alt+Enter 可 queue follow-up
+  → Harness 仅在 Turn-safe boundary 消费队列并决定下一 Turn
   → Run 完成 / 中断 / 失败
   → completed Run 追加当前 active node 的 child
   → Session Store 将完整 Session Tree snapshot 同步到云端
@@ -277,17 +283,17 @@ CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为
 2. **模型清单与实际 Provider 支持仍不完全一致**
    当前本地 resolver 实现 OpenAI、Anthropic 和 DeepSeek；其他模型应在清单或 resolver 层统一处理。
 
-3. **云 Session 目前仍是快照同步**
-   当前 CLI 使用 `POST /sessions/:id/state` 最后写入完整 Session Tree snapshot，没有 revision / optimistic concurrency / conflict resolution；旧 `/messages` 仅保留兼容。
+3. **云 Session 已升级为 event-backed tree snapshot，但同步仍是 last-write-wins**
+   Session Tree v2 的节点只保存 `eventIds`，canonical message events 独立存放在 `events[]`，避免每个分支节点复制完整历史；`POST /sessions/:id/state` 仍没有 revision / optimistic concurrency / conflict resolution。
 
-4. **Run / Turn / Step 仍是内存 Runtime 状态**
-   云端已经可以恢复会话树节点与 active cursor，但仍不恢复精确执行到哪一个 Harness Step；完整事件恢复属于后续 Event Store。
+4. **Execution Events + 生命周期交互已建立，但仍只在进程内**
+   Run / Turn / Step 已经是 `ExecutionEvent[]` 的 projection，并拥有明确的 lifecycle/interaction boundary；默认由 `InMemoryExecutionEventStore` 保存。CLI 重启后仍不会恢复精确执行轨迹或尚未消费的 steering/follow-up queue。下一步需要 Local WAL / crash recovery，再考虑 cloud revision/conflict sync。
 
 5. **Tool Step 的主动取消尚未完善**
    Model Step 可以被 abort，Harness 也会停止后续 Step，但已启动的本地 shell/tool 还需要 Tool Runtime 级 cancellation。
 
-6. **Context Manager 已加入 v1，但仍是近似预算**
-   当前已经在模型调用前执行 Harness Context Projection，并保留 required tail；token 估算仍是字符数近似，模型特定 tokenizer/profile 与 compaction 尚未加入。
+6. **Context Manager 已具备 turn-aware budget 与 compaction，但当前 tokenizer 仍是显式估算器**
+   当前使用 model-specific `ModelContextProfile`、provider-calibrated `TokenCounter`、retained tail、完整 Turn 原子裁剪与 bounded deterministic summary。Harness 同时提供 exact tokenizer adapter 接口，但当前配置的模型家族尚未安装对应精确 tokenizer 实现，因此运行时会明确标记为 `estimated`。
 
 7. **云同步暂时是 best-effort**
    同步失败不会让本地 Agent Run 失败，这是正确的故障域隔离；但目前只有日志，没有 retry queue、本地 WAL 或离线 Session Store。
@@ -296,7 +302,7 @@ CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为
    它们不参与 Agent Runtime。如果最终要求 Server 严格只做 Session Storage，可进一步把 billing 拆为独立账户服务。
 
 9. **测试覆盖仍需扩展**
-   已有 AgentLoop、ContextManager、Session Tree 和聊天提交回归测试，但还缺 LocalModelTransport、真实 Cloud Session Sync、节点跳转 UI 与真实多轮 Tool Loop 的集成测试。
+   已有 AgentLoop、ExecutionEventStore/Projection、Run/Turn/Step lifecycle、steering/follow-up safe-point、ContextManager、Session Tree 和聊天提交回归测试，但还缺 LocalModelTransport、真实 Cloud Session Sync、CLI 键盘交互、节点跳转 UI 与真实多轮 Tool Loop 的端到端集成测试。
 
 10. **可观测性配置偏开发态**
     Sentry DSN 仍直接写在代码中，Trace 采样率较高，并保留测试异常路由，上线前应环境化。
@@ -307,13 +313,16 @@ CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为
 
 现阶段最核心的已完成能力是：
 
-- 显式 AgentLoop 与 Run / Turn / Step 生命周期；
+- 显式 AgentLoop、append-only Execution Events 与 Run / Turn / Step projection；
+- pi-style Run/Turn/Step lifecycle，Turn = Model response + requested Tools；
+- awaited lifecycle stream、`waitForIdle()` 与 settlement-aware `isBusy`；
+- Turn-safe steering / follow-up queue；
 - CLI 本地 Model Step 与 Tool Step；
 - 终端流式交互和中断；
-- 云端 Session 创建、读取和 versioned Session Tree snapshot 同步；
-- 任意 Session Tree 节点跳转与从历史节点自然分叉；
-- Harness ContextManager 与基础 token budget projection；
+- 云端 Session 创建、读取和 event-backed Session Tree v2 snapshot 同步；
+- Canonical message event history、任意节点投影、跳转与从历史节点自然分叉；
+- Harness ContextManager、ModelContextProfile、Turn-aware token budget、retained tail 与 bounded compaction；
 - 多 Provider 的本地抽象；
-- AgentLoop / ContextManager / Session Tree 确定性测试基础。
+- AgentLoop / lifecycle interaction / ExecutionEventStore / Execution Projection / ContextManager / Session Tree 确定性测试基础。
 
-下一阶段应优先建立 Canonical Event History / Event Store、精确 model profile/tokenizer 与 compaction，然后再进入 Tool Registry、Permission、Sandbox 和基于 Session Tree 的 Subagent。
+下一阶段应优先补齐 **Local WAL + crash recovery**，随后再做 execution history 的 cloud revision/conflict sync、Tool Registry + cancellation、Permission/Sandbox；精确 tokenizer 可以作为 provider adapter 的增强项独立接入，之后再进入基于 Session Tree 的 Subagent。

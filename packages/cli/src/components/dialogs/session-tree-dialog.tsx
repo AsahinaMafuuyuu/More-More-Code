@@ -4,30 +4,31 @@ import { useDialog } from "../../providers/dialog";
 import { DialogSearchList } from "../dialog-search-list";
 import type {
     SessionTreeCommandApi,
-    SessionTreeCommandNode,
+    SessionTreeCommandEntry,
 } from "../command-menu/types";
 
 export function SessionTreeDialogContent({ tree }: { tree: SessionTreeCommandApi }) {
     const { close } = useDialog();
 
-    const handleSelect = useCallback((node: SessionTreeCommandNode) => {
-        tree.jump(node.id);
+    const handleSelect = useCallback((entry: SessionTreeCommandEntry) => {
+        tree.jump(entry.id);
         close();
     }, [close, tree]);
 
     return (
         <DialogSearchList
-            items={tree.nodes}
+            items={tree.entries}
             onSelect={handleSelect}
-            filterFn={(node, query) => {
+            filterFn={(entry, query) => {
                 const needle = query.toLowerCase();
-                return node.id.toLowerCase().includes(needle)
-                    || node.preview.toLowerCase().includes(needle);
+                return entry.id.toLowerCase().includes(needle)
+                    || entry.type.toLowerCase().includes(needle)
+                    || entry.preview.toLowerCase().includes(needle);
             }}
-            renderItem={(node, isSelected) => (
+            renderItem={(entry, isSelected) => (
                 <>
                     <text selectable={false} fg={isSelected ? "black" : "white"}>
-                        {`${"  ".repeat(node.depth)}${node.active ? "●" : "○"} ${node.preview}`}
+                        {`${"  ".repeat(entry.depth)}${entry.active ? "●" : "○"} [${entry.type}] ${entry.preview}`}
                     </text>
                     <box flexGrow={1} />
                     <text
@@ -35,13 +36,13 @@ export function SessionTreeDialogContent({ tree }: { tree: SessionTreeCommandApi
                         fg={isSelected ? "black" : undefined}
                         attributes={TextAttributes.DIM}
                     >
-                        {`${node.messageCount} msgs · ${node.id.slice(0, 8)}`}
+                        {`${entry.messageCount} msgs · ${entry.id.slice(0, 8)}`}
                     </text>
                 </>
             )}
-            getKey={(node) => node.id}
-            placeholder="Search tree nodes..."
-            emptyText="No session tree nodes"
+            getKey={(entry) => entry.id}
+            placeholder="Search session entries..."
+            emptyText="No session entries"
         />
     );
 }

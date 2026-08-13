@@ -2,9 +2,10 @@ import type { DialogContextValue } from "../../providers/dialog";
 import type { ToastContextValue } from "../../providers/toast";
 import type { ModeType, SupportedChatModelId } from "@more-more-code/shared";
 
-export type SessionTreeCommandNode = {
+export type SessionTreeCommandEntry = {
     id: string;
     parentId: string | null;
+    type: string;
     depth: number;
     createdAt: number;
     messageCount: number;
@@ -12,11 +13,14 @@ export type SessionTreeCommandNode = {
     active: boolean;
 };
 
+/** @deprecated Session Tree v3 nodes are Session Entries. */
+export type SessionTreeCommandNode = SessionTreeCommandEntry;
+
 export type SessionTreeCommandApi = {
-    rootNodeId: string;
-    activeNodeId: string;
-    nodes: SessionTreeCommandNode[];
-    jump: (nodeId: string) => void;
+    rootEntryId: string;
+    activeEntryId: string;
+    entries: SessionTreeCommandEntry[];
+    jump: (entryId: string) => void;
     jumpParent: () => boolean;
     jumpRoot: () => void;
 };

@@ -1,6 +1,7 @@
 # MORE-MORE-CODE 当前实现与近期代码抉择
 
 > 日期：2026-08-12  
+> 产品版本：v1.1.0
 > 用途：记录当前工程已经实现的核心能力、最近一次 Harness/会话架构整改、关键边界和后续开发约束，供后续开发者与 Agent 快速恢复上下文。
 
 ---
@@ -25,7 +26,9 @@ User
   ↓
 OpenTUI / React CLI
   ↓
-AgentLoop
+AgentLoop / Run Start
+  ↓
+Turn Start
   ↓
 ┌────────────────────────────────────────────┐
 │ Model Step                                 │
@@ -33,16 +36,18 @@ AgentLoop
 └────────────────────────────────────────────┘
   ↓
 模型是否请求 Tool？
-  ├─ No  → Turn / Run 完成
+  ├─ No  → Turn End → steering/follow-up queue → Run End 或下一 Turn
   └─ Yes
        ↓
-     Tool Step
+     Tool Step(s)
        ↓
      CLI Local Tools
        ↓
      Tool Output
        ↓
-     下一次 Model Step
+     Turn End
+       ↓
+     steering 优先，否则 tool-continuation → 下一 Turn
 
 与此同时：
 CLI Message Snapshot
@@ -92,31 +97,41 @@ packages/harness/
 
 #### Turn
 
-Run 内的一次用户交互单元。
+Turn 已按照 pi-style runtime 语义调整为：**一次 Model response + 该 response 请求的全部 Tool executions**。
 
-当前一个顶层 Run 通常只有一个 Turn，但结构上保留了：
+因此一次 Run 可以自然包含多个 Turn：
 
 ```text
 Run
-└── Turn[]
+├── Turn 0 (initial)
+│   ├── Model Step
+│   ├── Tool Step
+│   └── Tool Step
+└── Turn 1 (tool-continuation)
+    └── Model Step
 ```
-
-以便未来支持：
-
-- 多 Turn runtime；
-- Subagent；
-- Approval；
-- Session Tree；
-- 更复杂的交互状态。
 
 Turn 当前包含：
 
 - `id`
 - `runId`
 - `index`
-- `inputMessageId`
+- `cause`
+- 可选 `inputMessageId`
+- 可选 `interactionId`
 - `status`
 - `steps[]`
+
+`cause` 明确记录该 Turn 为什么开始：
+
+```text
+initial
+tool-continuation
+steering
+follow-up
+```
+
+steering / follow-up 不会修改正在执行中的 provider request，而是在当前 Turn 完成后的安全边界成为下一个 Turn 的输入。
 
 #### Step
 
@@ -147,6 +162,8 @@ Tool Step 还记录：
 - `toolCallId`
 - `toolName`
 
+Model / Tool Step context 现在都提供当前 Run 的 `AbortSignal` 与 `reportProgress()`。`reportProgress()` 只产生 ephemeral `step_update` lifecycle event，不写入 canonical Execution Event Store。
+
 ### 2.2 生命周期状态
 
 Run / Turn / Step 当前统一支持：
@@ -169,47 +186,50 @@ Agent Loop 不再依赖 AI SDK 的自动 Tool Resubmit 行为。
 当前逻辑为：
 
 ```text
-Run
-└── Turn
-    ├── Model Step
-    │    ↓
-    │  tool calls?
-    │
-    ├── Tool Step
-    ├── Tool Step
-    │
-    ├── Model Step
-    │
-    └── ...直到模型不再产生 tool call
+Run Start
+   ↓
+Turn Start
+   ↓
+Model Step
+   ↓
+tool calls?
+   ├─ Yes → Tool Step(s) → Turn End
+   │                         ↓
+   │                  steering queued?
+   │                    ├─ Yes → next Turn(cause=steering)
+   │                    └─ No  → next Turn(cause=tool-continuation)
+   │
+   └─ No → Turn End
+             ↓
+      steering queued?
+         ├─ Yes → next Turn(cause=steering)
+         └─ No
+             ↓
+      follow-up queued?
+         ├─ Yes → next Turn(cause=follow-up)
+         └─ No  → Run End
 ```
 
-核心循环：
-
-```text
-model
-  ↓
-tool calls
-  ↓
-tool execution
-  ↓
-tool output
-  ↓
-model
-  ↓
-...
-```
+因此 `Turn` 现在是真正的 runtime safe-point，而不是整个用户 submit 的外壳。
 
 当前 AgentLoop 已实现：
 
 - Model Step / Tool Step 显式编排；
+- pi-style multi-Turn loop；
 - 单次 Run 防并发执行；
 - `AgentLoopBusyError`；
-- 最大 Step 数保护；
-- 默认 `maxSteps = 64`；
-- Run/Turn/Step 状态变化通知；
-- Model Step 中断；
-- Step 错误 → Run failed；
-- Run 快照复制，避免外部直接修改内部状态。
+- Run-global `maxSteps` 与 `maxTurns` 保护；
+- append-only Execution Events；
+- `AgentRun` / `AgentTurn` / `AgentStep` 由事件 replay 得到，不再作为 canonical mutable state；
+- `subscribe()` awaited lifecycle stream；
+- `run_start/end`、`turn_start/end`、`step_start/update/end`；
+- `currentRun` / `currentTurn` / `currentStep`；
+- `isRunning` 与 settlement-aware `isBusy`；
+- `waitForIdle()`，且 `run_end` listeners 属于 settlement barrier；
+- Turn-safe `steer()` / `followUp()` queues；
+- `clearSteeringQueue()` / `clearFollowUpQueue()` / `clearAllQueues()`；
+- Run interrupt；
+- Step 错误 → Turn / Run failed。
 
 ---
 
@@ -237,7 +257,15 @@ Run interrupted
 
 CLI UI 当前已经以 **Run lifecycle** 为主要执行状态，而不是只依赖 AI SDK 的 `streaming/submitted` 状态。
 
-因此在 Tool Step 和 Model Step 之间，UI 不会错误地认为 Agent 已经空闲并允许再次提交。
+运行中输入框不再被禁用，而是提供 pi-style 交互：
+
+```text
+Enter       → steering
+Alt+Enter   → follow-up
+Escape      → interrupt Run
+```
+
+steering 在当前 Turn 的 Model + Tools 全部结束后消费，并优先于自动 tool continuation；follow-up 只在 Run 原本将结束时消费。
 
 ### 当前限制
 
@@ -465,7 +493,7 @@ chat.sendMessage()
 
 表示：
 
-> 不创建新的 User Message，以当前 Message State 继续下一次 Model Step。
+> 不创建新的 User Message，以当前 Message State 开启下一个 `tool-continuation` Turn 的 Model Step。
 
 ---
 
@@ -611,9 +639,9 @@ Session
 └── messages: Json
 ```
 
-目前 Server 保存的是 versioned Session Tree Snapshot，而不是 Run/Turn/Step Event Store。树节点内部第一版仍保存可恢复的 UI Message payload snapshot。
+目前 Server 保存的是 **Session Entry Tree v3 Snapshot**，而不是 Run/Turn/Step Event Store。`messages: Json` 作为兼容性状态容器保存 `{ version: 3, rootEntryId, activeEntryId, entries[] }`；每一个 durable semantic event 自身就是带 `id / parentId / type` 的 Session Entry，不再使用 v2 的 checkpoint `nodes[] + eventIds[] + events[]` 双层结构。
 
-这一点需要和未来 Canonical Event History / Event Store 区分。
+Session Entry 可以是 user/assistant/custom message、`message_update`、tool call/result、error、model/mode/config change、compaction、branch summary 或 custom event。它和 Harness Execution Event Store 必须区分：前者记录可恢复、可分叉的 Session 语义历史，后者记录 Run/Turn/Step 执行生命周期。
 
 ---
 
@@ -621,23 +649,24 @@ Session
 
 Session UI 已开始以 Agent Run 作为主要状态边界。
 
-Run 处于：
+Run 处于 `running` 时：
 
-```text
-running
-```
-
-时：
-
-- 输入框禁用；
+- 输入框保持可编辑；
+- 普通 Enter 将新输入加入 steering queue；
+- Alt+Enter 将新输入加入 follow-up queue；
 - loading 显示；
 - ESC 可以触发 interrupt；
-- 不允许因为 Model Stream 短暂结束而误提交新的 Turn。
+- 新输入不会直接改变正在执行中的 Model/Tool Step，而是在 Turn-safe boundary 被消费。
+
+steering 在当前 Turn 完成后优先于自动 tool continuation；follow-up 只在 Run 原本将进入 idle 时消费。follow-up 保持在同一个 Run / Execution Event history 中，但会开启新的 loop-budget epoch，因此 `maxSteps` / `maxTurns` 从该 follow-up 边界重新计数；steering 与 tool-continuation 不重置预算。
+
+全局 Ctrl+C 行为已调整：Dialog / command / mention 等顶层 responder 仍可优先消费 Ctrl+C；正常会话状态下第一次未消费的 Ctrl+C 用于复制 OpenTUI 当前选区并启动 1 秒退出窗口，窗口内第二次 Ctrl+C 才销毁 renderer。InputBar 不再使用 Ctrl+C 清空输入。
 
 同时：
 
 - AI SDK transport error 会显示；
-- Harness Run failure 也会显示。
+- Harness Run failure 也会显示；
+- `run_end` listeners 完成前 `isBusy` 仍保持 true，即使 Run projection 已经 terminal。
 
 ---
 
@@ -645,51 +674,67 @@ running
 
 ### Harness tests
 
-当前覆盖：
+当前覆盖包括：
 
 1. 普通 Run 正常完成；
-2. `model → tool → tool → model`；
+2. `model → tools → next Turn model` 的 multi-Turn 语义；
 3. Model Step interrupt；
 4. Tool Step 集成失败；
-5. `maxSteps` 防无限 Loop；
-6. Context budget 优先保留最新历史；
-7. required context 超预算行为；
-8. Session Tree root / append；
-9. 从祖先节点跳转后形成 sibling branch；
-10. legacy messages array 恢复为树。
+5. interaction-epoch `maxSteps` / `maxTurns` protection，follow-up 边界重置预算；
+6. normal / failed / interrupted execution event sequence；
+7. InMemoryExecutionEventStore append-only / duplicate / sequence / terminal validation；
+8. Execution Events → Run / Turn / Step deterministic replay；
+9. 多 Run execution projection；
+10. `run_start/end` / `turn_start/end` / `step_start/update/end` lifecycle ordering；
+11. `run_end` settlement barrier + `waitForIdle()`；
+12. lifecycle listener 在 `step_start` interrupt；
+13. lifecycle listener 在 `turn_end` queue steering；
+14. steering safe-point consumption / tool-continuation priority；
+15. follow-up idle-boundary consumption；
+16. Step progress 不进入 canonical execution history；
+17. Turn-aware Context budget / compaction；
+18. Session Entry Tree v3 entry replay / branching / message & runtime-state projection / v1-v2 migration；
+19. TokenCounter adapter；
+20. follow-up 后 Step budget 独立重新计数；
+21. follow-up 后 Turn budget 独立重新计数。
 
 当前验证结果：
 
 ```text
-10 pass
+36 pass
 0 fail
 ```
 
-### CLI chat regression tests
+### CLI regression tests
 
 当前覆盖：
 
 1. 新 user message 可以由 Harness 指定 ID；
-2. Tool 后可以 continuation，不创建第二条 User Message。
+2. Tool 后可以 continuation，不创建第二条 User Message；
+3. Ctrl+C 第一次不退出、第二次在 1 秒窗口内退出；
+4. Ctrl+C 双击窗口超时后重新从第一次计数。
 
 当前验证结果：
 
 ```text
-2 pass
+4 pass
 0 fail
 ```
 
 ### 构建
 
-2026-08-12 当前验证：
+2026-08-13 当前验证：
 
 ```text
-All tests      12 PASS / 0 FAIL
-Harness type   PASS
-CLI typecheck  PASS
+Harness tests    36 PASS / 0 FAIL
+CLI tests         4 PASS / 0 FAIL
+Total tests      40 PASS / 0 FAIL
+Harness type     PASS
+CLI typecheck    PASS
 Server typecheck PASS
-CLI build      PASS
-Server build   PASS
+CLI build        PASS
+Server build     PASS
+git diff --check PASS
 ```
 
 ---
@@ -724,12 +769,15 @@ packages/
 
 纯 Agent Runtime Core：
 
-- Run；
-- Turn；
-- Step；
+- Run / Turn / Step projection；
 - Agent Loop；
+- Execution Event schema；
+- In-memory ExecutionEventStore；
+- Execution projection / replay；
 - interruption；
-- max step protection。
+- max step protection；
+- Context projection / compaction；
+- Session Tree runtime。
 
 Harness 不依赖 React/Server/Provider 具体实现。
 
@@ -863,69 +911,126 @@ POST
 
 ---
 
-## 16. 当前 Harness 第二阶段状态与未实现能力
+## 16. 当前 Harness 第三阶段状态与未实现能力
 
-当前已经从单纯 Agent Loop 第一阶段进入 Context / Session Runtime 第二阶段。
+当前已经完成 Agent Loop 第一阶段、Context / Session Runtime 第二阶段，并进入 **Execution Event Runtime 第三阶段**。
 
-### 16.1 Context Manager：已完成 v1
+### 16.1 Context Manager：已完成 Turn-aware projection
 
-`packages/harness/src/context.ts` 已新增与 React / AI SDK 解耦的通用 `ContextManager`：
+`packages/harness/src/context.ts` 已形成与 React / AI SDK 解耦的 Context Runtime：
 
-- 输入为 `ContextRecord<TPayload>[]`；
-- 输出为不可变 `ContextProjection`；
-- 支持 required records；
-- 超出预算时优先保留较新的可选历史；
-- 不修改、不压缩原始 History；
-- 显式返回 `truncated` / `overBudget`。
+- 输入 `ContextRecord<TPayload>[]`，输出不可变 `ContextProjection`；
+- `groupId` 将同一 Turn 的 user/assistant records 作为原子组；
+- required groups / retained tail 不会被预算裁掉；
+- 可选历史只保留连续的最近 suffix，不跨越一个被裁掉的大 Turn 去捡更旧的小消息；
+- projection 显式返回 selected / omitted records、`truncated` / `overBudget`；
+- 原始 canonical history 永远不因 context projection 或 compaction 被改写。
 
-CLI `LocalModelTransport` 当前先把经过校验的 UI Messages 映射为 Context Records，再完成 Context Projection，最后才转换为 Provider `ModelMessage`。
+CLI `LocalModelTransport` 先将经过校验的 UI Messages 映射为 Context Records，再执行 projection/compaction，最后才转换为 Provider `ModelMessage`。
 
-当前仍未完成：
+仍可继续扩展：
 
 - System / project instructions 统一纳入 canonical context record；
 - selected files / project memory；
-- provider tokenizer 精确计数；
-- 真正独立于 UIMessage payload 的 Event/History Store。
+- provider 官方精确 tokenizer implementation。
 
-### 16.2 Token Budget：已完成基础预算层
+### 16.2 Token Budget：已完成 ModelProfile + TokenCounter adapter
 
-当前已经存在：
-
-```text
-context window
-- reserved output
-- safety margin
-- system prompt estimate
-= safe input budget
-```
-
-第一版使用保守的字符数近似 token estimator，并保留最近 2 条消息作为 required tail。
-
-当前尚未完成真正的 model-specific profile / tokenizer，因此这仍是 Harness 预算机制的基础版本，而不是最终模型精确预算实现。
-
-### 16.3 Compaction
-
-尚未实现：
-
-- history compression；
-- split-turn compaction；
-- retained tail；
-- tool/file history summary。
-
-### 16.4 Persistent Run / Turn / Step Event Store
-
-当前 Run/Turn/Step 只存在内存。
-
-数据库保存的是 versioned Session Tree Snapshot；Run / Turn / Step event 仍未持久化。
-
-未来建议明确拆分：
+新增 `packages/harness/src/token-budget.ts`：
 
 ```text
-Event History      = 实际发生了什么
-Context Projection = 发给模型什么
-UI Projection      = 给用户显示什么
-Cloud Snapshot     = 用于会话恢复的数据
+ModelContextProfile
+├── contextWindowTokens
+├── reservedOutputTokens
+├── safetyMarginTokens
+├── retainedTailTurns
+├── maxSummaryTokens
+└── tokenCounter
 ```
+
+CLI 在 `model-context-profile.ts` 为每个模型显式解析 profile，并按 provider 选择 token counter。当前内置 counter 是 provider-calibrated heuristic estimator，并明确标记 `accuracy = estimated`；Harness 同时提供 `createExactTokenCounter()`，未来接入官方/第三方精确 tokenizer 时无需修改 ContextManager API。
+
+### 16.3 Compaction：已完成 bounded deterministic v1
+
+当完整历史超出安全输入预算时：
+
+```text
+Canonical History
+    ↓
+按完整 Turn 分组
+    ↓
+保留 retained tail
+    ↓
+裁掉完整旧 Turn
+    ↓
+ContextCompactor
+    ↓
+bounded summary + retained tail
+    ↓
+Model Context
+```
+
+当前 compactor 为确定性文本 chronology：保留旧 user/assistant 文本与非文本 part 类型，并严格服从 `maxSummaryTokens`。它不是 LLM semantic summarizer，但已经实现 split-turn-safe compaction、retained tail 和“不改写原历史”的关键边界。实际发生 compaction 时，CLI 还会在当前 Session branch 追加 `compaction` Entry，记录 summary、被压缩的 message IDs、retained tail IDs 与 Run/Turn/Step 关联；源 Session Entries 不会被删除。
+
+### 16.4 Execution Event + Lifecycle Runtime：已完成进程内 v2
+
+Run / Turn / Step 已经从 mutable canonical state 改为 **event-backed projection**，同时补齐 pi-style lifecycle 与 Turn-safe interaction runtime。
+
+新增：
+
+```text
+packages/harness/src/
+├── execution-events.ts
+├── execution-store.ts
+├── execution-projection.ts
+└── lifecycle.ts
+```
+
+当前生命周期事件包括：
+
+```text
+run.started / completed / failed / interrupted
+turn.started / completed / failed / interrupted
+step.started / completed / failed / interrupted
+```
+
+每个事件包含 stable event id、`sessionId` / `runId`、per-run monotonic `sequence`、timestamp，以及对应 Turn/Step/tool/error metadata。
+
+`InMemoryExecutionEventStore` 当前负责 append-only 记录，并验证：
+
+- duplicate event id；
+- sequence gap / out-of-order；
+- session mismatch；
+- terminal Run 后继续追加事件。
+
+`AgentLoop` 不再直接把 Run/Turn/Step mutable object 当作事实来源。`currentRun`、adapter context、`onStateChange` 以及 `run()` 返回值都由 `projectAgentRun(events)` replay 得到。
+
+Turn 现在定义为“一次 Model response + 该 response 的 Tool executions”；工具结果触发后续模型调用时会开启新的 `tool-continuation` Turn。`turn.started` 额外保存 `cause`，可取 `initial / tool-continuation / steering / follow-up`。
+
+另外新增 ephemeral lifecycle stream：
+
+```text
+run_start / run_end
+turn_start / turn_end
+step_start / step_update / step_end
+```
+
+`subscribe()` listeners 按注册顺序 awaited；`run_end` 属于 settlement barrier，`waitForIdle()` 只会在这些 listeners 完成后返回。`step_update` 不写入 ExecutionEventStore。
+
+交互层新增 `steer()` / `followUp()` queues：steering 在 Turn safe-point 优先于 tool continuation，follow-up 只在 Run 原本将结束时消费。生命周期 listener 可以在安全 phase 调用这些控制 API；如果在 `turn_start` / `step_start` 触发 interrupt，Harness 会在启动 provider/tool 前停止。
+
+当前明确拆分为：
+
+```text
+Session Entries          = Session 中可恢复、可分叉的 durable semantic history
+Execution Events         = Agent 的 Run / Turn / Step 实际执行了什么
+Context Projection       = 当前 Model Step 发给模型什么
+Message / UI Projection  = 当前 branch 中哪些内容作为消息/界面显示
+Runtime State Projection = 当前 branch 恢复出的 model / mode / config
+Cloud Snapshot           = 跨进程/设备恢复什么
+```
+
+**仍未完成的是 Execution Events 的 durable persistence**：当前默认 Store 只存在 CLI 进程内，尚无 Local WAL、crash recovery 或 cloud execution-event sync。
 
 ### 16.5 Permission Engine
 
@@ -967,45 +1072,78 @@ Tool Registry
 └── telemetry
 ```
 
-### 16.8 Session Tree：已完成 v1；Subagent 尚未实现
+### 16.8 Session Entry Tree：已升级 v3 semantic history；Subagent 尚未实现
 
-当前已实现版本化 Session Tree：
+当前 Session 不再把“一个 Turn/Run 完成后的 checkpoint”当作树节点，而采用 Pi-inspired **Session Entry Tree**：
 
 ```text
-root
-  └─ turn A
-      ├─ turn B
-      │   └─ turn C
-      └─ turn B'
+session_start
+  └─ model_change
+      └─ mode_change
+          └─ user_message
+              └─ assistant_message
+                  ├─ tool_call → tool_result → message_update → ...
+                  └─ user_message' → assistant_message' → ...
 ```
 
-每个节点包含：
+核心规则是：
 
-- stable node id；
-- `parentId`；
-- `createdAt`；
-- 可恢复 messages snapshot；
-- 可选 `runId` / `inputMessageId`。
+> 一个 durable semantic event = 一个 Session Entry = 一个可分叉树节点。
 
-`activeNodeId` 作为当前 continuation cursor。CLI 可以跳转到任意历史节点；从旧节点重新 submit 时会自动创建新的 child branch，不会覆盖原 sibling branch。
+当前 Entry 类型包括：
+
+```text
+Conversation
+- user_message
+- assistant_message
+- custom_message
+- message_update
+
+Tool / semantic execution
+- tool_call
+- tool_result
+- error
+
+Runtime state
+- model_change
+- mode_change
+- config_change
+
+Context / extension
+- compaction
+- branch_summary
+- custom
+```
+
+每个 Entry 都有 stable `id`、`parentId`、`createdAt`、`type`，并可选择关联 `runId / turnId / stepId / inputMessageId`。Entry identity 与 message/tool/run identity 分离。
+
+`activeEntryId` 是当前 continuation cursor。CLI 跳转任意 Entry 后，会沿 `session_start → activeEntry` 分别重放：
+
+- Message Projection：只生成聊天消息；
+- Runtime State Projection：恢复 model / mode / config；
+- `/tree` UI Projection：展示包括 tool/state/error/compaction 在内的完整 Session Entries。
+
+历史 assistant message 因 tool result 等原因发生内容变化时，不修改旧节点，而追加 branch-local `message_update` Entry，因此 sibling branch 不会互相污染。Tool call/result 也作为独立 Session Entry 持久化，即使 provider message format 同时把 tool call 编码在 assistant content 中。
+
+实际发生 Context compaction 时会追加 `compaction` Entry，但旧 Session history 永远保留。Run/Turn/Step 的 start/end/progress 仍属于独立 Execution Event / lifecycle 层，不会因为 v3 而全部塞进 Session Tree。
 
 当前命令：
 
 ```text
-/tree    浏览树并跳转任意节点
-/jump    打开节点跳转器
-/parent  跳转当前节点父节点
-/root    跳转根节点
+/tree    浏览完整 Session Entry Tree 并跳转任意 Entry
+/jump    打开 Entry 跳转器
+/parent  跳转当前 Entry 的父 Entry
+/root    跳转 session_start 根 Entry
 ```
 
-Session Tree 通过 `POST /sessions/:id/state` 保存到现有 Session JSON 字段，因此本阶段不要求数据库 migration；旧线性 messages array 会在 CLI 恢复时自动升级成单节点树。
+Session Entry Tree 继续通过 `POST /sessions/:id/state` 保存到现有 Session JSON 字段，因此仍不要求 Prisma migration。CLI 可把旧线性 messages array、v1 per-node snapshots、v2 checkpoint + message-upsert event tree 升级为 v3；Server 在兼容期接受 v1/v2/v3 state。增量 Session snapshot POST 在 CLI 端串行化，避免旧请求后完成而覆盖新状态。
 
 仍未实现：
 
-- Subagent child runtime；
-- subagent context projection；
-- subagent result projection；
-- Event/Delta 形式的树节点去重；
+- 已持久化 compaction checkpoint 的跨后续请求复用策略；
+- Subagent child runtime 与 parent/child Session linkage；
+- subagent context/result projection；
+- Session / Execution Events 的 Local WAL + crash recovery；
 - 多设备 revision / conflict resolution。
 
 ---
@@ -1060,36 +1198,36 @@ Cloud persistence 应保持外围能力。
 
 ## 18. 下一阶段推荐顺序
 
-Context Runtime v1、基础 Token Budget 与 Session Tree v1 已经建立。下一阶段不建议继续扩张 `AgentLoop` 本身，而应按以下顺序完善外围 Runtime：
+Session Entry Tree v3 semantic history、Message/Runtime State Projection、Turn-aware Context Projection、ModelProfile/TokenCounter、bounded compaction，以及 **pi-style Run/Turn/Step lifecycle + 进程内 Execution Event Runtime** 都已经建立。下一阶段不应继续扩张 `AgentLoop`，而应把 durable runtime 与 Tool/Security Runtime 补齐：
 
 ```text
-1. Canonical History / Event Store
+1. Local WAL + crash recovery
       ↓
-2. 精确 Model Profile + Tokenizer
+2. Cloud revision / conflict sync for execution history
       ↓
-3. Compaction
+3. Tool Registry + Tool cancellation
       ↓
-4. Local WAL / Cloud revision sync
+4. Permission Engine
       ↓
-5. Tool Registry + Tool cancellation
+5. Sandbox
       ↓
-6. Permission Engine
+6. Provider exact tokenizer adapters（可独立并行）
       ↓
-7. Sandbox
-      ↓
-8. Subagent on Session Tree
+7. Subagent on Session Tree
 ```
 
-其中最近的核心目标应该是：
+当前关键边界已经分离：
 
 ```text
-Event History      = 实际发生了什么
-Context Projection = 发给模型什么
-UI Projection      = 给用户显示什么
-Cloud Snapshot     = 用于恢复什么
+Session Entries          = Session 的 durable semantic history 与 branch topology
+Execution Events         = Run / Turn / Step 实际发生了什么
+Context Projection       = 当前 Model Step 发给模型什么
+Message / UI Projection  = 当前 branch 显示哪些聊天/树信息
+Runtime State Projection = 当前 branch 恢复哪些 model / mode / config
+Cloud Snapshot / WAL     = 用于跨进程/设备恢复什么（WAL 待完善）
 ```
 
-彻底把四者分离，然后再实现自动 Compaction。
+下一项最有价值的 Harness 基础设施是 **Local WAL + crash recovery**，把已经稳定的 execution events 变成可恢复的本地执行日志，而不是把数据库或 Tool/Sandbox 职责塞回 `AgentLoop`。
 
 ---
 
@@ -1102,13 +1240,21 @@ docs/decisions/
 ├── 0001-cloudflare-worker-api-edge-proxy.md
 ├── 0002-client-owned-agent-loop-runtime.md
 ├── 0003-local-first-agent-runtime-cloud-session-store.md
-└── 0004-context-projection-and-resumable-session-tree.md
+├── 0004-context-projection-and-resumable-session-tree.md
+├── 0005-event-backed-session-history-and-context-compaction.md
+├── 0006-event-backed-agent-execution-runtime.md
+├── 0007-pi-style-run-turn-step-lifecycle-and-interaction.md
+└── 0008-session-entry-tree-and-semantic-session-history.md
 ```
 
 其中：
 
 - ADR-0002 记录 Agent Loop 从隐式 AI SDK 行为迁移到 CLI/Harness 的过程；
 - ADR-0003 是当前有效的 Local-first Runtime 边界决策，并取代了“Server 仍执行 Model Step”的旧设计；
-- ADR-0004 记录 Context Projection 与可跳转/可分叉 Session Tree 的边界与持久化策略。
+- ADR-0004 记录 Context Projection 与可跳转/可分叉 Session Tree 的基础边界；其旧 checkpoint-node granularity 已由 ADR-0008 部分取代；
+- ADR-0005 记录旧 v2 canonical message-event history、Turn-aware compaction 与 TokenCounter adapter；其 Session history representation 已由 ADR-0008 部分取代；
+- ADR-0006 记录 append-only Execution Events、ExecutionEventStore 与 Run/Turn/Step projection 的设计，仍然有效；
+- ADR-0007 记录 pi-style Turn 语义、awaited lifecycle stream、steering/follow-up safe-point interaction 与 settlement 规则；
+- ADR-0008 记录 Session Entry Tree v3：durable semantic Entry、Message/Runtime State Projection、tool/state/compaction entries、v1/v2 migration 与持久化边界。
 
 本文件属于近期工程状态快照，不替代正式 ADR。

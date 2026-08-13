@@ -10,19 +10,28 @@ import {
 } from "@more-more-code/shared";
 import {
     AgentLoop,
-    appendSessionTreeNode,
-    getActiveSessionTreeNode,
-    getParentSessionTreeNode,
-    getSessionTreeNode,
-    jumpToSessionTreeNode,
+    appendSessionEntry,
+    appendSessionTreeMessages,
+    getParentSessionEntry,
+    getSessionEntry,
+    jumpToSessionEntry,
+    projectSessionRuntimeState,
+    projectSessionTreeMessages,
     restoreSessionTree,
+    type AgentInteraction,
     type AgentRun,
     type AgentToolCall,
+    type SessionEntryInput,
+    type SessionEntryMetadata,
+    type SessionRuntimeState,
     type SessionTreeState,
 } from "@more-more-code/harness";
 import { executeLocalTool } from "../lib/local-tools";
 import { createAgentUserMessage } from "../lib/agent-chat-message";
-import { LocalModelTransport } from "../lib/local-model-transport";
+import {
+    LocalModelTransport,
+    type ContextCompactionEvent,
+} from "../lib/local-model-transport";
 import { persistSessionState } from "../lib/session-store";
 import type { ChatTools, Message } from "../lib/chat-types";
 
@@ -31,6 +40,11 @@ export type { Message } from "../lib/chat-types";
 type PendingModelStep = {
     resolve: (message: Message) => void;
     reject: (error: Error) => void;
+};
+
+type PromptSelection = {
+    mode: ModeType;
+    model: SupportedChatModelId;
 };
 
 function toError(error: unknown) {
@@ -57,22 +71,55 @@ function cloneMessages(messages: readonly Message[]) {
     return structuredClone(messages) as Message[];
 }
 
+function getInteractionPrompt(
+    interaction: AgentInteraction,
+    fallback: PromptSelection,
+) {
+    return {
+        id: interaction.inputMessageId ?? interaction.id,
+        text: interaction.text,
+        mode: (interaction.metadata?.mode as ModeType | undefined) ?? fallback.mode,
+        model: (interaction.metadata?.model as SupportedChatModelId | undefined) ?? fallback.model,
+    };
+}
+
+function getStepMetadata(input: {
+    runId: string;
+    turnId: string;
+    stepId: string;
+    inputMessageId?: string;
+}): SessionEntryMetadata {
+    return {
+        runId: input.runId,
+        turnId: input.turnId,
+        stepId: input.stepId,
+        ...(input.inputMessageId ? { inputMessageId: input.inputMessageId } : {}),
+    };
+}
+
 export function useChat(sessionId: string, persistedSessionState: unknown) {
     const agentLoop = useMemo(() => new AgentLoop(), []);
     const [run, setRun] = useState<AgentRun | null>(null);
+    const [busy, setBusy] = useState(false);
     const [sessionTree, setSessionTree] = useState<SessionTreeState<Message>>(() =>
         restoreSessionTree<Message>(persistedSessionState),
     );
     const sessionTreeRef = useRef(sessionTree);
+    const persistQueueRef = useRef<Promise<void>>(Promise.resolve());
     const pendingModelStepRef = useRef<PendingModelStep | null>(null);
+    const activeModelStepMetadataRef = useRef<SessionEntryMetadata>({});
+    const contextCompactionHandlerRef = useRef<((event: ContextCompactionEvent) => void) | null>(null);
     const latestMessagesRef = useRef<Message[]>(
-        cloneMessages(getActiveSessionTreeNode(sessionTree).messages),
+        cloneMessages(projectSessionTreeMessages(sessionTree)),
     );
 
     const transport = useMemo(() => {
         return new LocalModelTransport({
             onMessageSnapshot(messages) {
                 latestMessagesRef.current = cloneMessages(messages);
+            },
+            onContextCompaction(event) {
+                contextCompactionHandlerRef.current?.(event);
             },
         });
     }, []);
@@ -114,12 +161,16 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
     });
 
     const persistTreeBestEffort = useCallback((state: SessionTreeState<Message>) => {
-        void persistSessionState(sessionId, state).catch((error) => {
-            console.error("Failed to sync session tree", {
-                sessionId,
-                error,
+        const snapshot = structuredClone(state) as SessionTreeState<Message>;
+        persistQueueRef.current = persistQueueRef.current
+            .catch(() => undefined)
+            .then(() => persistSessionState(sessionId, snapshot))
+            .catch((error) => {
+                console.error("Failed to sync session entry tree", {
+                    sessionId,
+                    error,
+                });
             });
-        });
     }, [sessionId]);
 
     const applyTreeState = useCallback((state: SessionTreeState<Message>, persist = true) => {
@@ -127,6 +178,63 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         setSessionTree(state);
         if (persist) persistTreeBestEffort(state);
     }, [persistTreeBestEffort]);
+
+    const appendEntry = useCallback((input: SessionEntryInput<Message>) => {
+        const nextTree = appendSessionEntry(sessionTreeRef.current, input);
+        applyTreeState(nextTree);
+        return nextTree;
+    }, [applyTreeState]);
+
+    const syncMessagesToTree = useCallback((metadata: SessionEntryMetadata = {}) => {
+        const currentTree = sessionTreeRef.current;
+        const nextTree = appendSessionTreeMessages(
+            currentTree,
+            latestMessagesRef.current,
+            metadata,
+        );
+        if (nextTree !== currentTree) applyTreeState(nextTree);
+        return nextTree;
+    }, [applyTreeState]);
+
+    contextCompactionHandlerRef.current = (event) => {
+        const metadata = activeModelStepMetadataRef.current;
+        syncMessagesToTree(metadata);
+        appendEntry({
+            type: "compaction",
+            summary: event.summary,
+            tokensBefore: event.tokensBefore,
+            compactedMessageIds: event.compactedMessageIds,
+            retainedTailMessageIds: event.retainedTailMessageIds,
+            ...metadata,
+        });
+    };
+
+    const recordPromptSelection = useCallback((
+        selection: PromptSelection,
+        metadata: SessionEntryMetadata = {},
+    ) => {
+        const currentTree = sessionTreeRef.current;
+        const runtime = projectSessionRuntimeState(currentTree);
+        let nextTree = currentTree;
+
+        if (runtime.model !== selection.model) {
+            nextTree = appendSessionEntry(nextTree, {
+                type: "model_change",
+                model: selection.model,
+                ...metadata,
+            });
+        }
+        if (runtime.mode !== selection.mode) {
+            nextTree = appendSessionEntry(nextTree, {
+                type: "mode_change",
+                mode: selection.mode,
+                ...metadata,
+            });
+        }
+
+        if (nextTree !== currentTree) applyTreeState(nextTree);
+        return nextTree;
+    }, [applyTreeState]);
 
     const chatStopRef = useRef(chat.stop);
     chatStopRef.current = chat.stop;
@@ -165,114 +273,254 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         });
     }
 
-    const jumpToNode = useCallback((nodeId: string) => {
-        if (agentLoop.isRunning) {
-            throw new Error("Cannot jump session nodes while a run is active");
+    const jumpToEntry = useCallback((entryId: string): SessionRuntimeState => {
+        if (agentLoop.isBusy) {
+            throw new Error("Cannot jump session entries while the agent runtime is busy");
         }
 
-        const nextTree = jumpToSessionTreeNode(sessionTreeRef.current, nodeId);
-        const node = getActiveSessionTreeNode(nextTree);
-        const messages = cloneMessages(node.messages);
+        const nextTree = jumpToSessionEntry(sessionTreeRef.current, entryId);
+        const messages = cloneMessages(projectSessionTreeMessages(nextTree));
+        const runtime = projectSessionRuntimeState(nextTree);
 
         latestMessagesRef.current = messages;
         chat.setMessages(messages);
         applyTreeState(nextTree);
+        return runtime;
     }, [agentLoop, applyTreeState, chat]);
 
     const jumpToParent = useCallback(() => {
-        const parent = getParentSessionTreeNode(sessionTreeRef.current);
-        if (!parent) return false;
-        jumpToNode(parent.id);
-        return true;
-    }, [jumpToNode]);
+        const parent = getParentSessionEntry(sessionTreeRef.current);
+        if (!parent) return null;
+        return jumpToEntry(parent.id);
+    }, [jumpToEntry]);
 
     const jumpToRoot = useCallback(() => {
-        const rootId = sessionTreeRef.current.rootNodeId;
-        jumpToNode(rootId);
-    }, [jumpToNode]);
+        return jumpToEntry(sessionTreeRef.current.rootEntryId);
+    }, [jumpToEntry]);
 
     return {
         messages: chat.messages,
         status: chat.status,
         error: chat.error,
         run,
+        busy,
         sessionTree,
-        jumpToNode,
+        jumpToEntry,
+        jumpToNode: jumpToEntry,
         jumpToParent,
         jumpToRoot,
+        recordPromptSelection,
+        recordConfigChange: (key: string, value: unknown, previousValue?: unknown) => {
+            return appendEntry({
+                type: "config_change",
+                key,
+                value,
+                ...(previousValue === undefined ? {} : { previousValue }),
+            });
+        },
+        recordCustomEntry: (customType: string, data: unknown) => {
+            return appendEntry({ type: "custom", customType, data });
+        },
         submit: async (params: {
             userText: string;
             mode: ModeType;
             model: SupportedChatModelId;
         }) => {
             const inputMessageId = crypto.randomUUID();
+            recordPromptSelection(params);
+            setBusy(true);
 
-            const completedRun = await agentLoop.run({
-                sessionId,
-                inputMessageId,
-                onStateChange: setRun,
-                adapter: {
-                    async runModelStep({ continuation }) {
-                        const responseMessage = await runModelRequest(() => {
-                            if (continuation) {
-                                return chat.sendMessage();
+            try {
+                let activeExecutionSelection: PromptSelection = {
+                    mode: params.mode,
+                    model: params.model,
+                };
+                let activeExecutionInputMessageId: string = inputMessageId;
+
+                const completedRun = await agentLoop.run({
+                    sessionId,
+                    inputMessageId,
+                    onStateChange: setRun,
+                    adapter: {
+                        async runModelStep({ continuation, interaction, run, turn, step }) {
+                            const prompt = interaction
+                                ? getInteractionPrompt(interaction, activeExecutionSelection)
+                                : continuation
+                                    ? null
+                                    : {
+                                        id: inputMessageId,
+                                        text: params.userText,
+                                        mode: params.mode,
+                                        model: params.model,
+                                    };
+
+                            if (prompt) {
+                                activeExecutionSelection = {
+                                    mode: prompt.mode,
+                                    model: prompt.model,
+                                };
+                                activeExecutionInputMessageId = prompt.id;
                             }
 
-                            return chat.sendMessage(createAgentUserMessage({
-                                id: inputMessageId,
-                                text: params.userText,
-                                mode: params.mode,
-                                model: params.model,
-                            }));
-                        });
-
-                        return {
-                            toolCalls: getPendingToolCalls(responseMessage),
-                        };
-                    },
-                    async runToolStep(toolCall) {
-                        try {
-                            const output = await executeLocalTool(
-                                toolCall.toolName,
-                                toolCall.input,
-                                params.mode,
-                            );
-
-                            await chat.addToolOutput({
-                                tool: toolCall.toolName as keyof ChatTools,
-                                toolCallId: toolCall.toolCallId,
-                                output,
+                            const metadata = getStepMetadata({
+                                runId: run.id,
+                                turnId: turn.id,
+                                stepId: step.id,
+                                inputMessageId: activeExecutionInputMessageId,
                             });
-                        } catch (error) {
-                            await chat.addToolOutput({
-                                tool: toolCall.toolName as keyof ChatTools,
-                                toolCallId: toolCall.toolCallId,
-                                state: "output-error",
-                                errorText: toError(error).message,
-                            });
-                        }
-                    },
-                    abortModelStep: stopModelStep,
-                },
-            });
+                            if (prompt) recordPromptSelection(activeExecutionSelection, metadata);
+                            activeModelStepMetadataRef.current = metadata;
 
-            if (completedRun.status === "completed") {
-                const parentTree = sessionTreeRef.current;
-                const nextTree = appendSessionTreeNode(
-                    parentTree,
-                    latestMessagesRef.current,
-                    {
+                            try {
+                                const responseMessage = await runModelRequest(() => {
+                                    if (prompt) {
+                                        return chat.sendMessage(createAgentUserMessage(prompt));
+                                    }
+
+                                    return chat.sendMessage();
+                                });
+
+                                syncMessagesToTree(metadata);
+                                return {
+                                    toolCalls: getPendingToolCalls(responseMessage),
+                                };
+                            } catch (error) {
+                                syncMessagesToTree(metadata);
+                                const resolved = toError(error);
+                                appendEntry({
+                                    type: "error",
+                                    message: resolved.message,
+                                    code: "model_step_failed",
+                                    details: { cause: turn.cause },
+                                    ...metadata,
+                                });
+                                throw resolved;
+                            }
+                        },
+                        async runToolStep(toolCall, { run, turn, step }) {
+                            const metadata = getStepMetadata({
+                                runId: run.id,
+                                turnId: turn.id,
+                                stepId: step.id,
+                                inputMessageId: turn.inputMessageId,
+                            });
+                            appendEntry({
+                                type: "tool_call",
+                                toolCallId: toolCall.toolCallId,
+                                toolName: toolCall.toolName,
+                                input: toolCall.input,
+                                ...metadata,
+                            });
+
+                            try {
+                                const output = await executeLocalTool(
+                                    toolCall.toolName,
+                                    toolCall.input,
+                                    activeExecutionSelection.mode,
+                                );
+
+                                await chat.addToolOutput({
+                                    tool: toolCall.toolName as keyof ChatTools,
+                                    toolCallId: toolCall.toolCallId,
+                                    output,
+                                });
+                                appendEntry({
+                                    type: "tool_result",
+                                    toolCallId: toolCall.toolCallId,
+                                    toolName: toolCall.toolName,
+                                    output,
+                                    ...metadata,
+                                });
+                            } catch (error) {
+                                const resolved = toError(error);
+                                await chat.addToolOutput({
+                                    tool: toolCall.toolName as keyof ChatTools,
+                                    toolCallId: toolCall.toolCallId,
+                                    state: "output-error",
+                                    errorText: resolved.message,
+                                });
+                                appendEntry({
+                                    type: "tool_result",
+                                    toolCallId: toolCall.toolCallId,
+                                    toolName: toolCall.toolName,
+                                    error: resolved.message,
+                                    ...metadata,
+                                });
+                                appendEntry({
+                                    type: "error",
+                                    message: resolved.message,
+                                    code: "tool_execution_failed",
+                                    details: {
+                                        toolCallId: toolCall.toolCallId,
+                                        toolName: toolCall.toolName,
+                                    },
+                                    ...metadata,
+                                });
+                            }
+                        },
+                        abortModelStep: stopModelStep,
+                    },
+                });
+
+                syncMessagesToTree({
+                    runId: completedRun.id,
+                    inputMessageId,
+                });
+                if (completedRun.status === "failed" && completedRun.error) {
+                    appendEntry({
+                        type: "error",
+                        message: completedRun.error,
+                        code: "run_failed",
                         runId: completedRun.id,
                         inputMessageId,
-                    },
-                );
-                applyTreeState(nextTree);
-            }
+                    });
+                }
 
-            return completedRun;
+                return completedRun;
+            } finally {
+                setBusy(false);
+            }
+        },
+        steer: (params: {
+            userText: string;
+            mode: ModeType;
+            model: SupportedChatModelId;
+        }) => {
+            const queued = agentLoop.steer({
+                text: params.userText,
+                inputMessageId: crypto.randomUUID(),
+                metadata: {
+                    mode: params.mode,
+                    model: params.model,
+                },
+            });
+            if (queued) recordPromptSelection(params, {
+                runId: agentLoop.currentRun?.id,
+            });
+            return queued;
+        },
+        followUp: (params: {
+            userText: string;
+            mode: ModeType;
+            model: SupportedChatModelId;
+        }) => {
+            const queued = agentLoop.followUp({
+                text: params.userText,
+                inputMessageId: crypto.randomUUID(),
+                metadata: {
+                    mode: params.mode,
+                    model: params.model,
+                },
+            });
+            if (queued) recordPromptSelection(params, {
+                runId: agentLoop.currentRun?.id,
+            });
+            return queued;
         },
         abort: interruptRun,
         interrupt: interruptRun,
-        getNode: (nodeId: string) => getSessionTreeNode(sessionTreeRef.current, nodeId),
+        waitForIdle: () => agentLoop.waitForIdle(),
+        getEntry: (entryId: string) => getSessionEntry(sessionTreeRef.current, entryId),
+        getNode: (nodeId: string) => getSessionEntry(sessionTreeRef.current, nodeId),
     };
 }

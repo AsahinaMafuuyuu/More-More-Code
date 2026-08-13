@@ -1,58 +1,54 @@
-# Implementation Plan: Context Runtime v1 and Session Tree
+# Implementation Plan: Session Entry Tree v3
 
 ## Overview
 
-Move model-context selection out of the React/AI SDK message list and into a reusable Harness context layer, then evolve cloud-restored sessions from a linear message snapshot into a versioned session tree. A tree node represents a resumable conversation point; jumping to any node changes the active projection, and submitting from an older node naturally creates a new branch.
+Replace the v2 checkpoint-node/message-upsert model with a Pi-inspired Session Entry Tree. A persisted Session becomes a branchable semantic event history: every durable event is one entry/node linked by `parentId`. Conversation messages are only one entry family; tool calls/results, errors, model/mode/config changes, compaction, branch summaries, and custom events can also be persisted. UI messages, model context, and runtime configuration are projections of the active root-to-leaf branch.
+
+ExecutionEventStore remains a separate Run/Turn/Step lifecycle log. High-frequency streaming/progress events remain ephemeral and are not Session Entries.
 
 ## Architecture Decisions
 
-- Keep `AgentLoop` focused on Run / Turn / Step orchestration. Context selection is a sibling Harness concern, not loop logic.
-- Add a generic Harness `ContextManager` that operates on context records and produces a budgeted projection without depending on React or AI SDK types.
-- Treat the UI message list as one projection of session state, not as the authoritative history model.
-- Represent session history as a versioned tree whose nodes contain resumable message snapshots. This first version favors correctness and simple recovery over snapshot deduplication; later event storage can replace the duplicated snapshots without changing tree semantics.
-- The active node is the continuation point. Jumping to an ancestor and submitting a new turn creates another child branch automatically.
-- Persist the versioned tree through the existing Session JSON storage so this phase does not require a database migration. Keep legacy array snapshots readable.
-- Add `/tree`, `/jump`, `/parent`, and `/root` commands. `/tree` and `/jump` open the same node browser; selecting a node makes it active.
-- Remove obsolete server-side chat/model runtime files after verifying they are no longer referenced.
-- Compaction/automatic summarization remains out of scope. Token budget projection should fail soft by retaining the newest required context rather than mutating historical data.
+- Introduce Session Tree snapshot version 3 with `SessionEntry[]`; one durable semantic entry equals one tree node.
+- Persist a `session_start` root entry so empty sessions still have a stable navigation root.
+- Keep entry identity distinct from message/tool/run identities.
+- Support conversation entries (`user_message`, `assistant_message`, `custom_message`, `message_update`), execution-facing semantic entries (`tool_call`, `tool_result`, `error`), state entries (`model_change`, `mode_change`, `config_change`), and context-control/custom entries (`compaction`, `branch_summary`, `custom`).
+- Reconstruct UI messages by replaying only message-bearing entries on the active branch. `message_update` updates a previously introduced message without mutating historical entries.
+- Reconstruct runtime state independently by replaying model/mode/config entries.
+- Keep Run/Turn/Step execution events separate from Session Entries; Session Entries are durable semantic history, Execution Events are runtime lifecycle facts/telemetry.
+- Upgrade v1 snapshots and v2 event-backed checkpoint trees in memory to v3 while preserving branch projections and active cursor semantics.
+- Keep cloud persistence on the existing `POST /sessions/:id/state` JSON payload for now; no Prisma migration is required in this phase.
+- Record stable conversation/tool/error/state events incrementally from the CLI instead of waiting for the entire Run to finish.
 
 ## Task List
 
-### Phase 1: Harness Context Foundation
-- [x] Add generic context record, model budget, projection, and `ContextManager` types.
-- [x] Add deterministic tests for tail-preserving budget projection and required-record behavior.
-- [x] Integrate the manager into `LocalModelTransport` before conversion to provider messages.
+### Phase 1: Domain Model and Migration
+- [x] Define Session Entry v3 types and branch/path validation.
+- [x] Add append/jump/parent/path APIs and message/runtime projections.
+- [x] Add message-snapshot reconciliation that emits message entries/updates.
+- [x] Migrate legacy arrays, v1 snapshots, and v2 event-backed trees to v3.
 
-### Phase 2: Session Tree Runtime
-- [x] Add generic session-tree state/types/helpers in the Harness package.
-- [x] Add tests for root creation, append, jump, branching from an ancestor, parent lookup, and legacy restoration.
-- [x] Add CLI session-state persistence and restore helpers using the existing cloud Session JSON field.
+### Phase 2: CLI Runtime Integration
+- [x] Persist user/assistant message boundaries during model steps.
+- [x] Persist tool call/result and error entries around local tool execution.
+- [x] Persist model/mode changes as state entries and restore them when navigating history.
+- [x] Keep branch continuation semantics after `/tree`, `/jump`, `/parent`, and `/root`.
 
-### Phase 3: CLI Navigation
-- [x] Make `useChat` own the active session-tree state and update it after completed turns.
-- [x] Support replacing the displayed/provider message projection when jumping to a node.
-- [x] Add a session-tree browser dialog plus `/tree`, `/jump`, `/parent`, and `/root` commands.
+### Phase 3: Server and UI Projection
+- [x] Accept v3 state in the Server while retaining v1/v2 compatibility reads/writes.
+- [x] Render Session Tree entries by entry type/preview instead of checkpoint message snapshots.
+- [x] Keep hidden/non-chat state events persisted even when normal chat UI does not render them.
 
-### Phase 4: Cleanup and Documentation
-- [x] Confirm obsolete server chat/model runtime stubs are inert and unmounted from the Server runtime.
-- [x] Add ADR for context projection and tree-shaped sessions.
-- [x] Update `.docs` current implementation snapshot.
-- [x] Run tests, Harness/CLI/Server typechecks, CLI build, and Server build.
+### Phase 4: Verification and Documentation
+- [x] Add v3 branch/projection/state/migration regression tests.
+- [x] Run Harness/CLI/Server typechecks, Harness/CLI tests, CLI/Server builds, and diff check.
+- [x] Add ADR-0008 and update README, changelog, current implementation notes, and domain glossary.
 
 ## Risks and Mitigations
 
 | Risk | Impact | Mitigation |
-| --- | --- | --- |
-| AI SDK chat state cannot be replaced safely | High | Use its `setMessages` state API and keep tree snapshots in the same UI message shape at the CLI adapter boundary. |
-| Branch persistence overwrites a newer local node | Medium | Serialize the full tree snapshot from one CLI runtime; revision/conflict resolution remains a later offline-sync concern. |
-| Token estimation is not provider tokenizer-exact | Medium | Use an explicitly approximate estimator for budgeting and maintain a conservative safety margin. Exact provider tokenizers can replace it behind the same interface. |
-| Tree snapshots duplicate messages | Medium | Accept for v1 to preserve simple arbitrary-node recovery; later event/delta storage can optimize without changing node IDs/parent semantics. |
-| Legacy sessions contain only an array | High | Normalize legacy arrays into a root/active tree on load. |
-
-## Out of Scope
-
-- Automatic compaction or model-generated summaries
-- Persistent Run / Turn / Step event store
-- Cross-device optimistic concurrency/revision merging
-- Permission engine and sandbox
-- Subagent/session-tree child runtimes
+|---|---|---|
+| v2 branches contain branch-local updates to existing message IDs | High | Convert each v2 checkpoint relative to its mapped parent and emit branch-local `message_update` entries |
+| AI SDK mutates an assistant UI message as tool results arrive | High | Persist the initial assistant entry and append immutable `message_update` entries after tool-result changes |
+| State entries accidentally enter model context | High | Keep runtime-state and message projections separate; only message projection feeds current UI/provider conversion |
+| Session history duplicates ExecutionEventStore | Medium | Persist only semantic milestones in Session Entry Tree; keep Run/Turn/Step/progress lifecycle in ExecutionEventStore |
+| Model/mode restoration creates duplicate change events while jumping | Medium | Restore prompt configuration without recording during the navigation transition, then record subsequent user changes normally |

@@ -4,22 +4,29 @@ import InputBar from "./input-bar";
 import { Spinner } from "./spinner";
 import { usePromptConfig } from "../providers/prompt-config";
 import type { SessionTreeCommandApi } from "./command-menu/types";
+import type { ModeType, SupportedChatModelId } from "@more-more-code/shared";
 
 type Props = {
     children?: ReactNode;
     onSubmit: (text: string) => void;
+    onFollowUp?: (text: string) => void;
     inputDisabled?: boolean;
     loading?: boolean;
     interruptible?: boolean;
     sessionTree?: SessionTreeCommandApi;
+    onModeChange?: (mode: ModeType) => void;
+    onModelChange?: (model: SupportedChatModelId) => void;
 };
 
 export function SessionShell({ children,
     onSubmit,
+    onFollowUp,
     inputDisabled = false,
     loading = false,
     interruptible = false, // 允许中断
     sessionTree,
+    onModeChange,
+    onModelChange,
 }
     : Props) {
     const { mode } = usePromptConfig()
@@ -43,7 +50,14 @@ export function SessionShell({ children,
             </scrollbox>
 
             <box flexShrink={0}>
-                <InputBar onSubmit={onSubmit} disabled={inputDisabled} sessionTree={sessionTree} />
+                <InputBar
+                    onSubmit={onSubmit}
+                    onFollowUp={onFollowUp}
+                    disabled={inputDisabled}
+                    sessionTree={sessionTree}
+                    onModeChange={onModeChange}
+                    onModelChange={onModelChange}
+                />
             </box>
 
             <box
@@ -61,7 +75,7 @@ export function SessionShell({ children,
                         loading ? (
                             <>
                                 <Spinner mode={mode} />
-                                {interruptible && <text>esc to interrupt</text>}
+                                {interruptible && <text>enter steer · alt+enter follow-up · esc interrupt</text>}
                             </>
                         ) : null
                     }

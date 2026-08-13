@@ -1,6 +1,8 @@
 # MORE MORE CODE
 
 > **终端里的 AI 编程助手** — 在终端中与 AI 对话，让 AI 直接操作你的代码。
+>
+> 当前版本：**v1.1.0**
 
 一款基于 **Bun + TypeScript Monorepo** 构建的终端 TUI（Text-based UI）应用。它让你在终端中与 GPT / Claude / DeepSeek 等 AI 模型交互，AI 可以读取、编辑你的项目文件，执行 shell 命令，真正辅助你写代码。
 
@@ -30,7 +32,7 @@
 │        │                                                     │
 │        ▼                                                     │
 │  packages/harness ───────────────► LLM Provider              │
-│  AgentLoop: Run → Turn → Step(model/tool)                    │
+│  AgentLoop → Lifecycle + Execution Events → Projections      │
 │        │                                                     │
 │        │ best-effort session sync                            │
 │        ▼                                                     │
@@ -52,19 +54,21 @@
     ↓
 [packages/cli]
     ↓
-[packages/harness] 创建 Run / Turn
+[packages/harness] Run Start
+    ↓
+Turn Start（一次 Model response + 该 response 的 Tools）
     ↓
 Model Step → CLI LocalModelTransport → LLM Provider（本地进程发起）
     ↓
 模型是否请求工具？
-    ├─ 否 → 完成 Turn / Run
-    └─ 是 → Tool Step → CLI 本地执行 read/write/edit/bash 等工具
-                     ↓
-                  写回 tool output
-                     ↓
-                  下一次 Model Step
+    ├─ 否 → Turn End → 无队列时 Run End
+    └─ 是 → Tool Step(s) → Turn End
+                         ↓
+                 steering 优先消费？
+                    ├─ 是 → 新 Turn(cause=steering)
+                    └─ 否 → 新 Turn(cause=tool-continuation)
 
-Context Manager 会在每个 Model Step 前按预算生成 Context Projection。会话由 CLI 维护为可跳转、可分叉的 Session Tree，并通过 Session Store 接口同步到 Server；Server 不参与 Agent Loop、模型调用或工具执行。
+当 Run 原本将结束时，follow-up 队列会启动新的 Turn(cause=follow-up)。ExecutionEventStore 保存 coarse-grained Run/Turn/Step 执行事实；`subscribe()` 另外发出 `run_start/end`、`turn_start/end`、`step_start/update/end` 生命周期事件供 UI/扩展交互。Context Manager 会在每个 Model Step 前按预算生成 Context Projection。会话由 CLI 维护为可跳转、可分叉的 **Session Entry Tree v3**：user/assistant message、tool call/result、error、model/mode/config change、compaction 与 custom event 都可以成为持久化 Entry；UI、Context 和 Runtime State 分别从 active branch 做 projection。Session state 通过 Session Store 同步到 Server；Server 不参与 Agent Loop、模型调用或工具执行。
 ```
 
 ---
@@ -86,10 +90,15 @@ MORE-MORE-CODE/
 │   │
 │   ├── harness/                # Agent Harness Runtime
 │   │   ├── src/
-│   │   │   ├── agent-loop.ts   # 显式 Agent Loop / 生命周期状态机
-│   │   │   ├── context.ts      # Context Manager / Token Budget Projection
-│   │   │   ├── session-tree.ts # 可跳转、可分叉的会话树 Runtime
-│   │   │   ├── types.ts        # Run / Turn / Step 类型
+│   │   │   ├── agent-loop.ts   # 显式 Agent Loop；只执行并发出 lifecycle events
+│   │   │   ├── execution-events.ts     # Run / Turn / Step execution event schema
+│   │   │   ├── execution-store.ts      # ExecutionEventStore + in-memory store
+│   │   │   ├── execution-projection.ts # Event replay → Run / Turn / Step
+│   │   │   ├── lifecycle.ts     # Awaited Run/Turn/Step lifecycle stream
+│   │   │   ├── context.ts      # Turn-aware Context Projection / Compaction
+│   │   │   ├── token-budget.ts # Model profile token-counter contracts
+│   │   │   ├── session-tree.ts # Session Entry Tree v3 + branch/projection/migration Runtime
+│   │   │   ├── types.ts        # Run / Turn / Step projection 类型
 │   │   │   └── index.ts
 │   │   └── tests/              # Harness 确定性测试
 │   │
@@ -191,10 +200,10 @@ bun dev:cli
 | `/agents` | 切换工作模式（PLAN / BUILD） |
 | `/models` | 选择 AI 模型 |
 | `/sessions` | 浏览历史会话 |
-| `/tree` | 浏览当前 Session Tree，并跳转任意节点 |
-| `/jump` | 打开节点跳转器 |
-| `/parent` | 跳转到当前节点的父节点 |
-| `/root` | 跳转到当前会话根节点 |
+| `/tree` | 浏览当前 Session Entry Tree，并跳转任意 Entry |
+| `/jump` | 打开 Session Entry 跳转器 |
+| `/parent` | 跳转到当前 Entry 的父 Entry |
+| `/root` | 跳转到当前会话的 `session_start` 根 Entry |
 | `/theme` | 切换配色主题 |
 | `/exit` | 退出程序 |
 
@@ -204,7 +213,7 @@ bun dev:cli
 |------|------|
 | `Tab` | 切换 PLAN / BUILD 模式 |
 | `Esc` | 中断 AI 响应 / 关闭对话框 |
-| `Ctrl+C` | 退出程序 |
+| `Ctrl+C` | 复制当前选区；1 秒内连续按两次退出程序 |
 | `↑` `↓` | 导航历史消息 / 对话框列表 |
 
 ---
@@ -274,11 +283,17 @@ AI 在 BUILD 模式下可以调用的工具（PLAN 模式仅前 4 个只读工�
 
 - **Session**：`id` / `userId` / `title` / `createdAt` / `updatedAt` / `messages: Json`。
 
-`messages` 字段当前作为兼容性的 JSON 状态容器。新 CLI 写入的是 versioned Session Tree state，而不是独立 Message 表；后续 Event Store 阶段再考虑结构化事件持久化。
+`messages` 字段当前作为兼容性的 JSON 状态容器。新 CLI 写入 **Session Entry Tree v3**：state 直接保存 `entries[]`，每个 durable semantic event 自身就是带 `id / parentId / type` 的树节点，不再使用 v2 的 checkpoint `nodes[] + eventIds[] + events[]` 双层结构。消息只是 Session Entry 的一个子集；tool call/result、error、model/mode/config change、compaction、branch summary 与 custom event 也可以被持久化。
+
+Harness 现在另有独立的 Run / Turn / Step `ExecutionEventStore`：AgentLoop 将执行事实记录为 append-only execution events，并通过 replay 投影出当前 `AgentRun`。Turn 的语义已经调整为“一次 Model response + 该 response 触发的 Tool executions”；工具结果继续调用模型时会开启新的 `tool-continuation` Turn。Harness 还提供 awaited lifecycle stream、`waitForIdle()`、steering/follow-up 队列与 Step progress。当前默认 Store 仍是**进程内 InMemory Store**，尚未写入 PostgreSQL/Cloud Session；下一步持久化工作是 Local WAL、crash recovery 与 cloud revision/conflict sync，而不是把数据库调用塞回 AgentLoop。
 
 ### 会话恢复与分支
 
-Session Tree 中每个节点都是一个可恢复点。CLI 可以从任意节点跳转；如果从旧节点重新提交消息，会在该节点下面创建新的 child branch，并保留原来的 sibling branch。旧版线性 message array 会在加载时自动恢复为单节点树。
+Session Entry Tree 中每个 Entry 都是一个可恢复的语义历史点。CLI 沿 `session_start → activeEntry` 路径分别投影 Message History 与 Runtime State；从旧 Entry 继续执行会创建新的 child branch，并保留 sibling branch。历史 message 更新通过不可变 `message_update` Entry 表达，不修改旧 Entry。旧线性 message array、v1 per-node snapshots 与 v2 checkpoint/event-backed trees 都会在 CLI 加载时升级为 v3，并保留 branch-local revision。
+
+模型调用前会使用 `ModelContextProfile` 做预算：最近 Turn 作为 retained tail 原子保留，旧 Turn 超预算时通过 bounded compaction 生成 summary。源 Session Entries 不会被删除或改写；当 Context Projection 实际发生 compaction 时，CLI 会额外写入一个 `compaction` Session Entry，记录 summary、被压缩的 message IDs 与 retained tail。当前 provider token counter 是显式标记为 `estimated` 的适配器，Harness 已保留 exact tokenizer adapter 接口。
+
+运行中的交互遵循 Turn-safe 语义：普通 **Enter** 排队 steering，**Alt+Enter** 排队 follow-up，**Escape** 请求中断当前 Run。steering 在当前 Turn 完成后、自动 tool continuation 之前消费；follow-up 只在 Run 原本将进入 idle 时消费。follow-up 仍保留在同一个 Run / Execution history 中，但会开启新的 loop-budget epoch，因此 `maxTurns` / `maxSteps` 从该 follow-up 边界重新计数，不继承上一段交互已经消耗的预算。
 
 ---
 

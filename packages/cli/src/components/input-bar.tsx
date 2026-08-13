@@ -17,6 +17,7 @@ import { useKeyboardLayer } from "../providers/keyboard-layer";
 import { useDialog } from "../providers/dialog";
 import { useTheme } from "../providers/theme";
 import { usePromptConfig } from "../providers/prompt-config";
+import type { ModeType, SupportedChatModelId } from "@more-more-code/shared";
 
 // 这些变量主要用于@提及功能的实现
 const MAX_VISIBLE_MENTIONS = 8; // 最大可见的提及数量
@@ -334,9 +335,12 @@ function FileMentionMenu({
 }
 
 interface Props {
-    onSubmit: Function,
-    disabled?: Boolean,
+    onSubmit: (text: string) => void,
+    onFollowUp?: (text: string) => void,
+    disabled?: boolean,
     sessionTree?: SessionTreeCommandApi,
+    onModeChange?: (mode: ModeType) => void,
+    onModelChange?: (model: SupportedChatModelId) => void,
 }
 
 export const TEXTAREA_KEY_BINDING: KeyBinding[] = [
@@ -359,8 +363,15 @@ export const TEXTAREA_KEY_BINDING: KeyBinding[] = [
         action: 'newline'
     }
 ]
-export default function InputBar({ onSubmit, disabled = false, sessionTree }: Props) {
-    const { mode, model, toggleMode, setMode, setModel } = usePromptConfig();
+export default function InputBar({
+    onSubmit,
+    onFollowUp,
+    disabled = false,
+    sessionTree,
+    onModeChange,
+    onModelChange,
+}: Props) {
+    const { mode, model, setMode, setModel } = usePromptConfig();
     const textareaRef = useRef<TextareaRenderable>(null);
     const onSubmitRef = useRef<() => void>(() => { });
 
@@ -370,12 +381,20 @@ export default function InputBar({ onSubmit, disabled = false, sessionTree }: Pr
     const renderer = useRenderer();
     const toast = useToast(); // 使用useToast()获取toast上下文对象
     const dialog = useDialog(); // 使用useDialog()获取dialog上下文对象
-    const { isTopLayer, push, pop, setResponder } = useKeyboardLayer();
+    const { isTopLayer, push, pop } = useKeyboardLayer();
     const [activeMention, setActiveMention] = useState<MentionMatch | null>(null);
     const [mentionCandidates, setMentionCandidates] = useState<MentionCandidate[]>([]);
     const [mentionSelectedIndex, setMentionSelectedIndex] = useState<number>(0);
     const { colors } = useTheme();
     const navigate = useNavigate();
+    const changeMode = useCallback((nextMode: ModeType) => {
+        setMode(nextMode);
+        onModeChange?.(nextMode);
+    }, [onModeChange, setMode]);
+    const changeModel = useCallback((nextModel: SupportedChatModelId) => {
+        setModel(nextModel);
+        onModelChange?.(nextModel);
+    }, [onModelChange, setModel]);
 
     // 结构useCommandsMenu()返回的对象
     const {
@@ -490,6 +509,19 @@ export default function InputBar({ onSubmit, disabled = false, sessionTree }: Pr
         textarea.setText(''); // 清空输入框
     }, [disabled, onSubmit]); // 监听disabled属性的变化
 
+    const handleFollowUpSubmit = useCallback(() => {
+        if (disabled || !onFollowUp) return;
+
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+
+        const text = textarea.plainText.trim();
+        if (text.length === 0) return;
+
+        onFollowUp(text);
+        textarea.setText('');
+    }, [disabled, onFollowUp]);
+
     const handleCommand = useCallback((command: Command | undefined) => {
         //  当用户选中一个命令时，执行该命令的回调
         const textarea = textareaRef.current
@@ -505,20 +537,34 @@ export default function InputBar({ onSubmit, disabled = false, sessionTree }: Pr
                 dialog,
                 navigate,
                 mode, // 获取模式
-                setMode, // 设置模式
-                setModel, // 设置模型
+                setMode: changeMode, // 设置模式并记录 Session state event
+                setModel: changeModel, // 设置模型并记录 Session state event
                 sessionTree,
             }); // 执行命令的action
         } else {
             textarea.insertText(command.value + ' ') // 插入命令的value
         }
-    }, [renderer, toast, dialog, navigate, mode, setMode, setModel, sessionTree])
+    }, [renderer, toast, dialog, navigate, mode, changeMode, changeModel, sessionTree])
 
     const handleCommandExecute = useCallback((index: number) => {
         // 当用户执行一个命令时，执行该命令的回调
         const command = resolveCommand(index);
         handleCommand(command);
     }, [resolveCommand, handleCommand])
+
+    // Alt/Option+Enter 用于在 Agent Run 中排队 follow-up；普通 Enter 仍走 onSubmit/steering。
+    useKeyboard((key) => {
+        if (disabled || !onFollowUp) return;
+        if (!isTopLayer("base")) return;
+        if (
+            (key.name === "enter" || key.name === "return")
+            && (key.option || key.meta)
+        ) {
+            key.preventDefault();
+            key.stopPropagation();
+            handleFollowUpSubmit();
+        }
+    });
 
     // 当用户按下Tab键时，切换模式Plan和Build
     useKeyboard((key) => {
@@ -527,7 +573,7 @@ export default function InputBar({ onSubmit, disabled = false, sessionTree }: Pr
         if (key.name === "tab") {
             // 如果按下Tab键，则显示命令菜单
             key.preventDefault();
-            toggleMode(); // 切换模式
+            changeMode(mode === "BUILD" ? "PLAN" : "BUILD"); // 切换模式并记录 Session state event
         }
     })
 
@@ -592,22 +638,6 @@ export default function InputBar({ onSubmit, disabled = false, sessionTree }: Pr
 
         handleSubmit(); // 触发提交事件
     }
-
-    // 当用户按下Ctrl+C时，清空输入框内容
-    useEffect(() => {
-        setResponder("base", () => {
-            if (disabled) {
-                return false;
-            }
-            const textarea = textareaRef.current;
-            if (textarea && textarea.plainText.length > 0) {
-                textarea.setText(''); // 清空输入框
-                return true;
-            }
-            return false;
-        })
-        return () => setResponder("base", null)
-    }, [disabled, setResponder]);
 
     useKeyboard((key) => {
         if (disabled) return;
