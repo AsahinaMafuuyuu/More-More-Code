@@ -4,6 +4,33 @@ All notable changes to MORE MORE CODE are recorded here.
 
 ## Unreleased
 
+### Added
+
+- Agent Bootstrap using user-global `~/.more-more-code/` and project-local `.more-more-code/` configuration homes.
+- Global → project `AGENTS.md` instruction chain composed into the coding-agent system prompt before Model Steps.
+- Progressive Skill Registry discovery from `~/.agents/skills/*/SKILL.md`, user-global `.more-more-code/skills/*/SKILL.md`, and project `.more-more-code/skills/*/SKILL.md`, with metadata-only bootstrap and the read-only native `loadSkill` tool for on-demand full skill loading.
+- Tool Registry source model that keeps native tools separate from configured MCP extension sources.
+- `/settings` dialog for inspecting resolved agent sources, opening global/project config and instruction files plus the compatible `~/.agents/skills` source, and reloading the Agent Environment.
+- ADR-0009 documenting Agent Bootstrap, Skill progressive disclosure, and native/MCP tool-source boundaries.
+- Cache-aware canonical Context categories/stability classes with deterministic stable-to-dynamic compilation.
+- Deterministic mode-aware `ToolSetSnapshot`, `ToolSetFingerprint`, and `PromptPrefixFingerprint` identities for provider prompt-cache families.
+- Provider Runtime request-compilation boundary with `OpenAIResponsesAdapter` and normalized provider/cache telemetry.
+- ADR-0010 documenting cache-aware Context ordering, persisted compaction-checkpoint reuse, prefix identities, and provider runtime boundaries.
+
+### Changed
+
+- CLI startup now bootstraps the Agent Environment before rendering or starting any Session Run.
+- The local system prompt is now a concise coding-agent prompt that includes PLAN/BUILD rules, skill metadata, and the resolved instruction chain.
+- PLAN mode includes `loadSkill` alongside the existing read-only native tools.
+- System-prefix construction is ordered as core prompt → global instructions → project instructions → Skill catalog, while model-visible Tool schemas remain deterministic through the ToolSet snapshot.
+- Persisted Session `compaction` entries are reused as Context checkpoints across later Model Steps and restored sessions; a checkpoint is replaced only when a new real compaction is required.
+- OpenAI model execution explicitly selects the Responses API through `openai.responses(...)` and derives `promptCacheKey` from the prompt-prefix fingerprint; `previousResponseId` remains outside canonical Session authority.
+- Provider cache read/write usage is retained as runtime diagnostics rather than semantic Session history.
+
+### Deferred
+
+- MCP transport/auth/remote tool execution, Local WAL/crash recovery, Permission/Sandbox redesign, and Subagent runtime remain outside this stage.
+
 ## [2.0.1] - 2026-08-13
 
 ### Added

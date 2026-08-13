@@ -15,6 +15,7 @@ import {
     getParentSessionEntry,
     getSessionEntry,
     jumpToSessionEntry,
+    projectLatestSessionCompaction,
     projectSessionRuntimeState,
     projectSessionTreeMessages,
     restoreSessionTree,
@@ -120,6 +121,15 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
             },
             onContextCompaction(event) {
                 contextCompactionHandlerRef.current?.(event);
+            },
+            getContextCheckpoint() {
+                const checkpoint = projectLatestSessionCompaction(sessionTreeRef.current);
+                if (!checkpoint) return null;
+                return {
+                    summary: structuredClone(checkpoint.summary) as Message,
+                    compactedMessageIds: checkpoint.compactedMessageIds,
+                    retainedTailMessageIds: checkpoint.retainedTailMessageIds,
+                };
             },
         });
     }, []);

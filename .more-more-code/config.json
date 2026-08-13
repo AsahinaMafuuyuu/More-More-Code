@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "instructions": {
+    "file": "AGENTS.md"
+  },
+  "skills": {
+    "enabled": true,
+    "directories": [
+      "skills"
+    ]
+  },
+  "tools": {
+    "native": {
+      "enabled": true
+    },
+    "mcp": {
+      "servers": {}
+    }
+  }
+}

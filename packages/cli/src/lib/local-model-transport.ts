@@ -7,21 +7,30 @@ import {
     type LanguageModelUsage,
 } from "ai";
 import {
-    getToolContracts,
     type ModeType,
     type SupportedChatModelId,
     type ToolContracts,
 } from "@more-more-code/shared";
 import {
     ContextManager,
-    type ContextCompactor,
     type ContextRecord,
     type ModelContextProfile,
 } from "@more-more-code/harness";
 import type { Message } from "./chat-types";
 import { resolveChatModel } from "./models";
 import { resolveModelContextProfile } from "./model-context-profile";
-import { buildSystemPrompt } from "./system-prompt";
+import {
+    buildSystemPrompt,
+    getPromptPrefixSources,
+    SYSTEM_PROMPT_VERSION,
+} from "./system-prompt";
+import { getAgentEnvironment } from "./agent-environment";
+import { createPromptPrefixIdentity } from "./cache-identity";
+import {
+    compileProviderRequest,
+    createProviderCacheTelemetry,
+    type ProviderCacheTelemetry,
+} from "./provider-runtime";
 
 export type ContextCompactionEvent = {
     summary: Message;
@@ -30,9 +39,17 @@ export type ContextCompactionEvent = {
     retainedTailMessageIds: string[];
 };
 
+export type PersistedContextCheckpoint = {
+    summary: Message;
+    compactedMessageIds?: string[];
+    retainedTailMessageIds?: string[];
+};
+
 type LocalModelTransportOptions = {
     onMessageSnapshot?: (messages: Message[]) => void;
     onContextCompaction?: (event: ContextCompactionEvent) => void;
+    getContextCheckpoint?: () => PersistedContextCheckpoint | null;
+    onProviderTelemetry?: (telemetry: ProviderCacheTelemetry) => void;
 };
 
 function getMessageText(message: Message) {
@@ -83,26 +100,52 @@ function summarizeNonTextParts(message: Message) {
     return details.join("\n");
 }
 
-function buildContextRecords(messages: Message[], profile: ModelContextProfile) {
+function buildContextRecords(
+    messages: Message[],
+    profile: ModelContextProfile,
+    checkpoint: PersistedContextCheckpoint | null,
+) {
+    const compactedIds = new Set(checkpoint?.compactedMessageIds ?? []);
+    const activeMessages = messages.filter((message) => !compactedIds.has(message.id));
     let turnIndex = -1;
     const turns: number[] = [];
 
-    for (const message of messages) {
+    for (const message of activeMessages) {
         if (message.role === "user") turnIndex += 1;
         turns.push(Math.max(turnIndex, 0));
     }
 
     const lastTurn = Math.max(0, ...turns);
     const firstRequiredTurn = Math.max(0, lastTurn - profile.retainedTailTurns + 1);
+    const historyRecords = activeMessages.map((message, index): ContextRecord<Message> => {
+        const turn = turns[index] ?? 0;
+        const retained = turn >= firstRequiredTurn;
+        return {
+            id: message.id,
+            kind: "history",
+            payload: message,
+            estimatedTokens: profile.tokenCounter.countPayload(message),
+            groupId: `turn:${turn}`,
+            required: retained,
+            category: retained ? "retained-turn" : "historical-conversation",
+            stability: retained ? "retained" : "history",
+        };
+    });
 
-    return messages.map((message, index): ContextRecord<Message> => ({
-        id: message.id,
-        kind: "history",
-        payload: message,
-        estimatedTokens: profile.tokenCounter.countPayload(message),
-        groupId: `turn:${turns[index] ?? 0}`,
-        required: (turns[index] ?? 0) >= firstRequiredTurn,
-    }));
+    if (!checkpoint) return historyRecords;
+    return [
+        {
+            id: checkpoint.summary.id,
+            kind: "summary" as const,
+            payload: checkpoint.summary,
+            estimatedTokens: profile.tokenCounter.countPayload(checkpoint.summary),
+            required: true,
+            groupId: "compacted-prefix",
+            category: "compaction-checkpoint" as const,
+            stability: "checkpoint" as const,
+        },
+        ...historyRecords,
+    ];
 }
 
 function fitTextToTokens(text: string, profile: ModelContextProfile, targetTokens: number) {
@@ -117,7 +160,12 @@ function fitTextToTokens(text: string, profile: ModelContextProfile, targetToken
     return `${text.slice(0, low).trimEnd()}\n[summary truncated]`;
 }
 
-function createDeterministicCompactor(profile: ModelContextProfile): ContextCompactor<Message> {
+function createDeterministicCompactor(profile: ModelContextProfile): {
+    compact(input: {
+        records: readonly ContextRecord<Message>[];
+        targetTokens: number;
+    }): ContextRecord<Message> | null;
+} {
     return {
         compact({ records, targetTokens }) {
             if (records.length === 0 || targetTokens < 32) return null;
@@ -158,11 +206,13 @@ async function projectMessages(
     messages: Message[],
     systemPrompt: string,
     profile: ModelContextProfile,
+    checkpoint: PersistedContextCheckpoint | null,
 ) {
     const manager = new ContextManager<Message>();
-    const records = buildContextRecords(messages, profile);
+    const records = buildContextRecords(messages, profile, checkpoint);
     const deterministicCompactor = createDeterministicCompactor(profile);
     let compactedSource: readonly ContextRecord<Message>[] = [];
+    let generatedSummaryId: string | null = null;
 
     const projection = await manager.projectWithCompaction(
         records,
@@ -175,13 +225,15 @@ async function projectMessages(
         {
             compact(input) {
                 compactedSource = input.records;
-                return deterministicCompactor.compact(input);
+                const summary = deterministicCompactor.compact(input);
+                generatedSummaryId = summary?.id ?? null;
+                return summary;
             },
         },
         { maxSummaryTokens: profile.maxSummaryTokens },
     );
 
-    return { projection, compactedSource };
+    return { projection, compactedSource, generatedSummaryId };
 }
 
 function resolveExecutionConfig(messages: Message[]): {
@@ -204,14 +256,23 @@ function resolveExecutionConfig(messages: Message[]): {
 
 /** Executes one model step locally; context projection is owned by the CLI/Harness boundary. */
 export class LocalModelTransport implements ChatTransport<Message> {
+    private lastProviderTelemetry: ProviderCacheTelemetry | null = null;
+
     constructor(private readonly options: LocalModelTransportOptions = {}) {}
+
+    getLastProviderTelemetry() {
+        return this.lastProviderTelemetry
+            ? structuredClone(this.lastProviderTelemetry)
+            : null;
+    }
 
     async sendMessages({
         messages,
         abortSignal,
     }: Parameters<ChatTransport<Message>["sendMessages"]>[0]) {
         const { mode, model } = resolveExecutionConfig(messages);
-        const tools = getToolContracts(mode) as ToolContracts;
+        const environment = getAgentEnvironment();
+        const tools = environment.tools.getModelTools(mode) as ToolContracts;
         const resolvedModel = resolveChatModel(model);
         const contextProfile = resolveModelContextProfile(model);
         const startedAt = Date.now();
@@ -220,17 +281,33 @@ export class LocalModelTransport implements ChatTransport<Message> {
             messages,
             tools,
         });
-        const systemPrompt = buildSystemPrompt({ mode });
-        const { projection, compactedSource } = await projectMessages(
+        const systemPrompt = buildSystemPrompt({ mode, environment });
+        const prefixSources = getPromptPrefixSources(environment);
+        const prefixIdentity = createPromptPrefixIdentity({
+            provider: resolvedModel.provider,
+            model: resolvedModel.modelId,
+            mode,
+            systemPromptVersion: SYSTEM_PROMPT_VERSION,
+            globalInstructions: prefixSources.globalInstructions,
+            projectInstructions: prefixSources.projectInstructions,
+            skillCatalog: prefixSources.skillCatalog,
+            toolSetSnapshot: environment.tools.getToolSetSnapshot(mode),
+        });
+        const providerRequest = compileProviderRequest({ resolvedModel, mode, prefixIdentity });
+        const checkpoint = this.options.getContextCheckpoint?.() ?? null;
+        const { projection, compactedSource, generatedSummaryId } = await projectMessages(
             validatedMessages,
             systemPrompt,
             contextProfile,
+            checkpoint,
         );
         const projectedMessages = projection.records.map((record) => record.payload);
         const modelMessages = await convertToModelMessages(projectedMessages, { tools });
 
         this.emitMessageSnapshot(validatedMessages);
-        const summaryRecord = projection.records.find((record) => record.kind === "summary");
+        const summaryRecord = generatedSummaryId
+            ? projection.records.find((record) => record.id === generatedSummaryId)
+            : undefined;
         if (summaryRecord && compactedSource.length > 0) {
             this.options.onContextCompaction?.({
                 summary: structuredClone(summaryRecord.payload),
@@ -238,7 +315,12 @@ export class LocalModelTransport implements ChatTransport<Message> {
                     (total, record) => total + record.estimatedTokens,
                     0,
                 ),
-                compactedMessageIds: compactedSource.map((record) => record.id),
+                compactedMessageIds: [
+                    ...(checkpoint?.compactedMessageIds ?? []),
+                    ...compactedSource
+                        .filter((record) => record.kind === "history")
+                        .map((record) => record.id),
+                ].filter((id, index, ids) => ids.indexOf(id) === index),
                 retainedTailMessageIds: projection.records
                     .filter((record) => record.kind === "history")
                     .map((record) => record.id),
@@ -251,10 +333,17 @@ export class LocalModelTransport implements ChatTransport<Message> {
             system: systemPrompt,
             messages: modelMessages,
             tools,
-            providerOptions: resolvedModel.providerOptions,
+            providerOptions: providerRequest.providerOptions,
             abortSignal,
-            onFinish(event) {
+            onFinish: (event) => {
                 completedUsage = event.totalUsage;
+                const telemetry = createProviderCacheTelemetry({
+                    resolvedModel,
+                    usage: completedUsage,
+                    prefixIdentity,
+                });
+                this.lastProviderTelemetry = telemetry;
+                this.options.onProviderTelemetry?.(structuredClone(telemetry));
             },
         });
 

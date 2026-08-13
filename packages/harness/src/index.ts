@@ -6,7 +6,12 @@ export {
 } from "./agent-loop";
 export type { AgentLoopOptions } from "./agent-loop";
 
-export { ContextManager } from "./context";
+export {
+  ContextManager,
+  compileContextRecords,
+  inferContextCategory,
+  inferContextStability,
+} from "./context";
 export {
   ExecutionProjectionError,
   projectAgentRun,
@@ -34,6 +39,7 @@ export {
   jumpToSessionEntry,
   jumpToSessionRoot,
   jumpToSessionTreeNode,
+  projectLatestSessionCompaction,
   projectSessionEntryPath,
   projectSessionRuntimeState,
   projectSessionTreeMessages,
@@ -83,7 +89,9 @@ export type {
   ContextCompactor,
   ContextProjection,
   ContextRecord,
+  ContextRecordCategory,
   ContextRecordKind,
+  ContextStabilityClass,
 } from "./context";
 export type {
   SessionBranchSummaryEntry,

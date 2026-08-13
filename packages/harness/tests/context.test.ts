@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { ContextManager, type ContextRecord } from "../src";
+import {
+  ContextManager,
+  compileContextRecords,
+  type ContextRecord,
+} from "../src";
 
 function record(
   id: string,
@@ -16,6 +20,38 @@ function record(
     ...(groupId ? { groupId } : {}),
   };
 }
+
+describe("canonical context compilation", () => {
+  test("orders records from stable prefix to dynamic input deterministically", () => {
+    const records: ContextRecord<string>[] = [
+      { id: "input", kind: "runtime", category: "current-input", payload: "input", estimatedTokens: 1 },
+      { id: "tool-b", kind: "instruction", category: "tool-definition", deterministicKey: "b", payload: "b", estimatedTokens: 1 },
+      { id: "history", kind: "history", category: "historical-conversation", payload: "history", estimatedTokens: 1 },
+      { id: "project", kind: "instruction", category: "project-instruction", payload: "project", estimatedTokens: 1 },
+      { id: "core", kind: "instruction", category: "core-instruction", payload: "core", estimatedTokens: 1 },
+      { id: "checkpoint", kind: "summary", payload: "checkpoint", estimatedTokens: 1 },
+      { id: "tool-a", kind: "instruction", category: "tool-definition", deterministicKey: "a", payload: "a", estimatedTokens: 1 },
+      { id: "retained", kind: "history", category: "retained-turn", payload: "retained", estimatedTokens: 1 },
+      { id: "global", kind: "instruction", category: "global-instruction", payload: "global", estimatedTokens: 1 },
+      { id: "skill", kind: "instruction", category: "skill-catalog", payload: "skill", estimatedTokens: 1 },
+      { id: "runtime", kind: "runtime", payload: "runtime", estimatedTokens: 1 },
+    ];
+
+    expect(compileContextRecords(records).map((item) => item.id)).toEqual([
+      "core",
+      "global",
+      "project",
+      "skill",
+      "tool-a",
+      "tool-b",
+      "checkpoint",
+      "history",
+      "retained",
+      "runtime",
+      "input",
+    ]);
+  });
+});
 
 describe("ContextManager", () => {
   test("keeps the newest optional records that fit the input budget", () => {
@@ -79,6 +115,55 @@ describe("ContextManager", () => {
     expect(projection.records.map((item) => item.id)).toEqual(["summary", "u2", "a2"]);
     expect(projection.estimatedInputTokens).toBe(10);
     expect(projection.truncated).toBe(false);
+  });
+
+  test("reuses a persisted checkpoint when no new compaction is required", async () => {
+    const manager = new ContextManager<string>();
+    let compactCalls = 0;
+    const projection = await manager.projectWithCompaction(
+      [
+        { id: "checkpoint", kind: "summary", payload: "checkpoint", estimatedTokens: 2, required: true },
+        record("u2", 2, false, "turn-2"),
+        record("a2", 2, false, "turn-2"),
+      ],
+      { contextWindowTokens: 10, reservedOutputTokens: 0 },
+      {
+        compact() {
+          compactCalls += 1;
+          return null;
+        },
+      },
+    );
+
+    expect(compactCalls).toBe(0);
+    expect(projection.records.map((item) => item.id)).toEqual(["checkpoint", "u2", "a2"]);
+  });
+
+  test("supersedes the persisted checkpoint only when new history requires compaction", async () => {
+    const manager = new ContextManager<string>();
+    const projection = await manager.projectWithCompaction(
+      [
+        { id: "checkpoint-old", kind: "summary", payload: "old summary", estimatedTokens: 2, required: true },
+        record("old", 5),
+        record("tail", 4, true, "tail"),
+      ],
+      { contextWindowTokens: 8, reservedOutputTokens: 0 },
+      {
+        compact({ records, targetTokens }) {
+          expect(records.map((item) => item.id)).toEqual(["checkpoint-old", "old"]);
+          expect(targetTokens).toBe(3);
+          return {
+            id: "checkpoint-new",
+            kind: "summary",
+            payload: "new summary",
+            estimatedTokens: 3,
+          };
+        },
+      },
+      { maxSummaryTokens: 3 },
+    );
+
+    expect(projection.records.map((item) => item.id)).toEqual(["checkpoint-new", "tail"]);
   });
 
   test("keeps required records even when they exceed the safe input budget", () => {

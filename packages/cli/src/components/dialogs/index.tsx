@@ -3,3 +3,4 @@ export { SessionsDialogContent } from "./sessions-dialog";
 export { SessionTreeDialogContent } from "./session-tree-dialog";
 export { AgentsDialogContent } from "./agents-dialog";
 export { ModelsDialogContent } from "./models-dialog";
+export { SettingsDialogContent } from "./settings-dialog";

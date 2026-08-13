@@ -357,6 +357,18 @@ export function projectSessionTreeMessages<TMessage>(
   return order.map((messageId) => messages.get(messageId)!);
 }
 
+export function projectLatestSessionCompaction<TMessage>(
+  state: SessionTreeState<TMessage>,
+  entryId = state.activeEntryId,
+): SessionCompactionEntry | null {
+  const path = projectSessionEntryPath(state, entryId);
+  for (let index = path.length - 1; index >= 0; index -= 1) {
+    const entry = path[index]!;
+    if (entry.type === "compaction") return cloneEntry(entry) as SessionCompactionEntry;
+  }
+  return null;
+}
+
 export function projectSessionRuntimeState<TMessage>(
   state: SessionTreeState<TMessage>,
   entryId = state.activeEntryId,

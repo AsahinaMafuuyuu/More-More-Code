@@ -1,7 +1,7 @@
 import { Children } from "react";
 import type { Command } from "./types";
 import { SUPPORTED_CHAT_MODELS } from "@more-more-code/shared";
-import { ThemeDialogContent, AgentsDialogContent, SessionsDialogContent, ModelsDialogContent, SessionTreeDialogContent } from "../dialogs";
+import { ThemeDialogContent, AgentsDialogContent, SessionsDialogContent, ModelsDialogContent, SessionTreeDialogContent, SettingsDialogContent } from "../dialogs";
 import { performLogin } from "../../lib/oauth";
 import { clearAuth } from "../../lib/auth";
 import { openBillingPortal, openUpgradeCheckout } from "../../lib/upgrade";
@@ -104,6 +104,17 @@ export const COMMANDS: Command[] = [
                 return;
             }
             ctx.sessionTree.jumpRoot();
+        },
+    },
+    {
+        name: 'settings',
+        description: "Inspect and configure global/project agent settings",
+        value: "/settings",
+        action: (ctx) => {
+            ctx.dialog.open({
+                title: "MORE-MORE-CODE Settings",
+                children: <SettingsDialogContent />,
+            });
         },
     },
     {

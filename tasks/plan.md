@@ -1,54 +1,246 @@
-# Implementation Plan: Session Entry Tree v3
+# Implementation Plan: Stage 5 — Context & Provider Runtime
+
+**Status:** Completed on 2026-08-13. All implementation, focused tests, typechecks, and CLI/Server builds pass.
 
 ## Overview
 
-Replace the v2 checkpoint-node/message-upsert model with a Pi-inspired Session Entry Tree. A persisted Session becomes a branchable semantic event history: every durable event is one entry/node linked by `parentId`. Conversation messages are only one entry family; tool calls/results, errors, model/mode/config changes, compaction, branch summaries, and custom events can also be persisted. UI messages, model context, and runtime configuration are projections of the active root-to-leaf branch.
+Stage 5 focuses on cache-aware context construction and provider-specific model execution.
 
-ExecutionEventStore remains a separate Run/Turn/Step lifecycle log. High-frequency streaming/progress events remain ephemeral and are not Session Entries.
+The goal is to evolve the existing Context Manager from a token-budget projection layer into a deterministic Context Runtime that controls context ordering, prefix-cache stability, compaction checkpoint reuse, provider request compilation, and cache telemetry.
+
+MCP Runtime, Permission Engine, Sandbox, WAL, and Subagent Runtime are explicitly out of scope for this stage.
 
 ## Architecture Decisions
 
-- Introduce Session Tree snapshot version 3 with `SessionEntry[]`; one durable semantic entry equals one tree node.
-- Persist a `session_start` root entry so empty sessions still have a stable navigation root.
-- Keep entry identity distinct from message/tool/run identities.
-- Support conversation entries (`user_message`, `assistant_message`, `custom_message`, `message_update`), execution-facing semantic entries (`tool_call`, `tool_result`, `error`), state entries (`model_change`, `mode_change`, `config_change`), and context-control/custom entries (`compaction`, `branch_summary`, `custom`).
-- Reconstruct UI messages by replaying only message-bearing entries on the active branch. `message_update` updates a previously introduced message without mutating historical entries.
-- Reconstruct runtime state independently by replaying model/mode/config entries.
-- Keep Run/Turn/Step execution events separate from Session Entries; Session Entries are durable semantic history, Execution Events are runtime lifecycle facts/telemetry.
-- Upgrade v1 snapshots and v2 event-backed checkpoint trees in memory to v3 while preserving branch projections and active cursor semantics.
-- Keep cloud persistence on the existing `POST /sessions/:id/state` JSON payload for now; no Prisma migration is required in this phase.
-- Record stable conversation/tool/error/state events incrementally from the CLI instead of waiting for the entire Run to finish.
+- Context is ordered from most stable to most dynamic to maximize prefix-cache reuse.
+- Canonical Context remains provider-independent.
+- Provider-specific behavior is implemented behind Provider Adapters / Compilers.
+- OpenAI uses `OpenAIResponsesAdapter` while retaining Vercel AI SDK for streaming, tool-call integration, and UI message normalization.
+- OpenAI Responses API is the execution protocol, but OpenAI server-side conversation state is not the canonical MORE-MORE-CODE Session state.
+- Compaction checkpoints are reused instead of regenerating summaries every Model Step.
+- Tool definitions are deterministic and contribute to the prompt-prefix fingerprint.
+- PLAN and BUILD have independent cache families because their exposed Tool Sets differ.
+- MCP, Permission, Sandbox, tool cancellation, and WAL remain deferred.
 
-## Task List
+## Canonical Context Order
 
-### Phase 1: Domain Model and Migration
-- [x] Define Session Entry v3 types and branch/path validation.
-- [x] Add append/jump/parent/path APIs and message/runtime projections.
-- [x] Add message-snapshot reconciliation that emits message entries/updates.
-- [x] Migrate legacy arrays, v1 snapshots, and v2 event-backed trees to v3.
+Every Model Step should compile context in this order:
 
-### Phase 2: CLI Runtime Integration
-- [x] Persist user/assistant message boundaries during model steps.
-- [x] Persist tool call/result and error entries around local tool execution.
-- [x] Persist model/mode changes as state entries and restore them when navigating history.
-- [x] Keep branch continuation semantics after `/tree`, `/jump`, `/parent`, and `/root`.
+```text
+1. Core Coding Agent System Prompt
+2. Global AGENTS.md
+3. Project AGENTS.md
+4. Skill Catalog Metadata
+5. Tool Definitions / Schemas
+--------------------------------
+   Stable Prefix Boundary
+--------------------------------
+6. Persisted Compaction Checkpoint
+7. Historical Conversation
+8. Retained Recent Complete Turns
+9. Current Tool Results / Runtime Continuation
+10. Current User / Steering / Follow-up Input
+```
 
-### Phase 3: Server and UI Projection
-- [x] Accept v3 state in the Server while retaining v1/v2 compatibility reads/writes.
-- [x] Render Session Tree entries by entry type/preview instead of checkpoint message snapshots.
-- [x] Keep hidden/non-chat state events persisted even when normal chat UI does not render them.
+General rule:
 
-### Phase 4: Verification and Documentation
-- [x] Add v3 branch/projection/state/migration regression tests.
-- [x] Run Harness/CLI/Server typechecks, Harness/CLI tests, CLI/Server builds, and diff check.
-- [x] Add ADR-0008 and update README, changelog, current implementation notes, and domain glossary.
+```text
+most stable
+    ↓
+semi-stable
+    ↓
+append-only history
+    ↓
+most dynamic
+```
 
-## Risks and Mitigations
+Stable sections must use deterministic ordering and serialization.
 
-| Risk | Impact | Mitigation |
-|---|---|---|
-| v2 branches contain branch-local updates to existing message IDs | High | Convert each v2 checkpoint relative to its mapped parent and emit branch-local `message_update` entries |
-| AI SDK mutates an assistant UI message as tool results arrive | High | Persist the initial assistant entry and append immutable `message_update` entries after tool-result changes |
-| State entries accidentally enter model context | High | Keep runtime-state and message projections separate; only message projection feeds current UI/provider conversion |
-| Session history duplicates ExecutionEventStore | Medium | Persist only semantic milestones in Session Entry Tree; keep Run/Turn/Step/progress lifecycle in ExecutionEventStore |
-| Model/mode restoration creates duplicate change events while jumping | Medium | Restore prompt configuration without recording during the navigation transition, then record subsequent user changes normally |
+## Phase 1: Canonical Context Model
+
+### Task 1: Define Context Record categories and stability classes
+
+**Description:** Extend the current Context model so records explicitly describe semantic role and cache stability.
+
+**Acceptance criteria:**
+
+- Stable, historical, retained-tail, and dynamic records are distinguishable.
+- Ordering rules are deterministic.
+- Provider-specific fields do not enter canonical Context records.
+
+**Verification:**
+
+- Unit tests verify deterministic ordering.
+- Existing Context tests continue to pass.
+
+### Task 2: Implement deterministic Context Compiler ordering
+
+**Description:** Compile canonical Context records according to the fixed stable-to-dynamic ordering.
+
+**Acceptance criteria:**
+
+- Stable prefix always precedes historical and dynamic content.
+- Skill metadata and tools use deterministic sorting.
+- Equivalent Agent Environments produce byte-stable prefix input.
+
+**Dependencies:** Task 1
+
+## Checkpoint: Canonical Context
+
+- Context ordering tests pass.
+- Existing compaction behavior remains non-destructive.
+- No provider-specific logic exists inside ContextManager.
+
+## Phase 2: Prefix Cache Identity
+
+### Task 3: Add ToolSetSnapshot and ToolSetFingerprint
+
+**Description:** Produce a deterministic snapshot of model-visible tools for each Model Step.
+
+Fingerprint inputs should include:
+
+```text
+tool name
+source
+description
+input schema
+mode availability
+```
+
+PLAN and BUILD must naturally produce different fingerprints.
+
+### Task 4: Add PromptPrefixFingerprint
+
+**Description:** Create a deterministic identity for the stable prompt prefix.
+
+Initial fingerprint inputs:
+
+```text
+provider
+model
+systemPromptVersion
+globalInstructionsHash
+projectInstructionsHash
+skillCatalogHash
+toolSetFingerprint
+mode
+```
+
+The fingerprint should be suitable for deriving provider cache keys.
+
+**Dependencies:** Tasks 2, 3
+
+## Phase 3: Compaction Checkpoint Reuse
+
+### Task 5: Reuse persisted compaction checkpoints
+
+**Description:** Stop regenerating an equivalent summary on every projection after compaction.
+
+Expected behavior:
+
+```text
+Stable Prefix
++
+Existing Compaction Checkpoint
++
+Newer Turns
+```
+
+until another compaction threshold is actually reached.
+
+**Acceptance criteria:**
+
+- A persisted checkpoint remains stable across subsequent Model Steps.
+- New turns append after the checkpoint.
+- A new checkpoint is produced only when another real compaction occurs.
+- Original Session Entries remain unchanged.
+
+## Checkpoint: Cache-Stable Context
+
+- Repeated Model Steps preserve the longest possible stable prefix.
+- Compaction checkpoint tests cover append-after-compaction behavior.
+- Token-budget constraints remain valid.
+
+## Phase 4: Provider Runtime
+
+### Task 6: Introduce Provider Adapter boundary
+
+Target structure:
+
+```text
+Canonical Context Projection
+        ↓
+Provider Runtime
+        ├── OpenAIResponsesAdapter
+        ├── AnthropicAdapter
+        └── DeepSeekAdapter
+```
+
+Provider adapters translate canonical model input into provider-specific execution configuration without modifying Session or Context semantics.
+
+### Task 7: Implement OpenAIResponsesAdapter
+
+Use:
+
+```text
+Vercel AI SDK
++
+@ai-sdk/openai
++
+openai.responses(...)
+```
+
+Responsibilities:
+
+- select OpenAI Responses model;
+- configure provider-specific Responses options;
+- derive/use prompt cache key;
+- expose reasoning configuration;
+- collect Responses/cache metadata;
+- keep streaming through Vercel AI SDK.
+
+Do not make `previous_response_id` the canonical session mechanism in this stage.
+
+**Dependencies:** Tasks 4, 6
+
+## Phase 5: Cache Telemetry
+
+### Task 8: Record provider cache metrics
+
+Expose at minimum when available:
+
+```text
+input tokens
+output tokens
+cached prompt tokens
+cache write tokens
+prompt prefix fingerprint
+tool set fingerprint
+provider/model
+```
+
+Telemetry should be observable without becoming canonical Session semantic history unless explicitly projected into a future diagnostics layer.
+
+## Final Verification
+
+- Harness tests pass.
+- CLI tests pass.
+- CLI / Harness / Server typecheck passes.
+- CLI / Server build passes.
+- Context ordering is deterministic.
+- Prefix fingerprints are deterministic.
+- OpenAI uses explicit Responses API adapter semantics.
+- Existing Session Tree and AgentLoop behavior remains unchanged.
+
+## Deferred
+
+```text
+MCP Runtime
+Permission Engine
+Sandbox
+Tool cancellation
+Local WAL / Crash Recovery
+Cloud revision/conflict sync
+Subagent Runtime
+OpenAI server-side conversation as Session authority
+```

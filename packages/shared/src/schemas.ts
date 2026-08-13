@@ -36,6 +36,10 @@ export const toolInputSchemas = {
             .optional()
             .describe("Optional glob for files to include."),
     }),
+    loadSkill: z.object({
+        name: z.string()
+            .describe("Name of an available skill to load on demand."),
+    }),
     writeFile: z.object({
         path: z.string()
             .describe("Relative path to the file to write."),
@@ -84,6 +88,11 @@ export const readOnlyToolContracts = {
         description:
             "Search file contents with a regular expression under the current project directory.",
         inputSchema: toolInputSchemas.grep,
+        outputSchema: z.unknown(),
+    }),
+    loadSkill: tool({
+        description: "Load the full instructions for an available agent skill by name when that workflow is relevant.",
+        inputSchema: toolInputSchemas.loadSkill,
         outputSchema: z.unknown(),
     }),
 } as const;

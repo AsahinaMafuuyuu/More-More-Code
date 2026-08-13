@@ -1,7 +1,7 @@
 # MORE-MORE-CODE 当前实现与近期代码抉择
 
-> 日期：2026-08-12  
-> 产品版本：v1.1.0
+> 日期：2026-08-13
+> 产品版本：v2.0.1
 > 用途：记录当前工程已经实现的核心能力、最近一次 Harness/会话架构整改、关键边界和后续开发约束，供后续开发者与 Agent 快速恢复上下文。
 
 ---
@@ -328,20 +328,27 @@ reasoningEffort = medium
 
 Provider API Key 因此需要存在于 CLI 本地运行环境中。
 
-### 5.3 System Prompt
+### 5.3 System Prompt + Agent Bootstrap
 
-System Prompt 也已经迁移到 CLI。
+System Prompt 由 CLI 在每个 Model Step 前组装，Server 不参与 Prompt 构造。
 
-Server 不再负责 Prompt 组装。
-
-当前 Prompt 会根据模式区分：
+CLI 启动时会先 bootstrap Agent Environment：
 
 ```text
-PLAN
-BUILD
+~/.more-more-code/
+├── config.json
+├── AGENTS.md
+└── skills/
+
+<workspace>/.more-more-code/
+├── config.json
+├── AGENTS.md
+└── skills/
 ```
 
-并给模型描述可用工具和行为限制。
+Instruction Chain 固定按 global → project 加载，project 规则更具体；二者会进入 system prompt，但不会因此成为 Session Entry。
+
+System Prompt 当前包含：coding-agent 基础行为、PLAN/BUILD 边界、Tools/Skills 区分、Skill metadata catalog，以及已解析的 Instruction Chain。完整 `SKILL.md` 不会启动时全部注入；只有模型调用 native `loadSkill` 后才按需取得完整内容。
 
 ---
 
@@ -364,6 +371,7 @@ readFile
 listDirectory
 glob
 grep
+loadSkill
 ```
 
 ### Write / execution tools
@@ -383,6 +391,7 @@ readFile
 listDirectory
 glob
 grep
+loadSkill
 ```
 
 BUILD 模式允许读写与 Shell 执行。
@@ -911,28 +920,30 @@ POST
 
 ---
 
-## 16. 当前 Harness 第三阶段状态与未实现能力
+## 16. 当前 Harness / Agent Environment 阶段状态与未实现能力
 
-当前已经完成 Agent Loop 第一阶段、Context / Session Runtime 第二阶段，并进入 **Execution Event Runtime 第三阶段**。
+Agent Loop、Context / Session Runtime、Execution Event Runtime 三个基础阶段已经完成；当前进一步完成了 **Stage 4.1 Agent Bootstrap**、**Stage 4.2 Skill Registry** 与 **Stage 5 Context & Provider Runtime**。WAL、安全层、完整 MCP Runtime 与 Subagent 仍未实现。
 
-### 16.1 Context Manager：已完成 Turn-aware projection
+### 16.1 Context Manager：已完成 cache-aware canonical ordering
 
 `packages/harness/src/context.ts` 已形成与 React / AI SDK 解耦的 Context Runtime：
 
 - 输入 `ContextRecord<TPayload>[]`，输出不可变 `ContextProjection`；
+- Record 现在显式区分 `category` 与 `stability`，覆盖 core/global/project instruction、skill catalog、tool definition、checkpoint、history、retained tail、runtime continuation 与 current input；
+- `compileContextRecords()` 固定按“最稳定 → 最动态”排序，稳定集合可用 `deterministicKey` 做确定性排序；
 - `groupId` 将同一 Turn 的 user/assistant records 作为原子组；
 - required groups / retained tail 不会被预算裁掉；
 - 可选历史只保留连续的最近 suffix，不跨越一个被裁掉的大 Turn 去捡更旧的小消息；
 - projection 显式返回 selected / omitted records、`truncated` / `overBudget`；
 - 原始 canonical history 永远不因 context projection 或 compaction 被改写。
 
-CLI `LocalModelTransport` 先将经过校验的 UI Messages 映射为 Context Records，再执行 projection/compaction，最后才转换为 Provider `ModelMessage`。
+CLI `LocalModelTransport` 先将经过校验的 UI Messages 映射为 Context Records，再执行 projection/compaction，最后才转换为 Provider `ModelMessage`。System/global/project instructions 与 Skill metadata 以固定顺序进入系统前缀；Tool schemas 仍通过 Vercel AI SDK 的独立 `tools` 参数传递，但会进入确定性的 ToolSet snapshot/fingerprint，因此不会为了“统一上下文”而重复塞进消息文本。
 
 仍可继续扩展：
 
-- System / project instructions 统一纳入 canonical context record；
 - selected files / project memory；
-- provider 官方精确 tokenizer implementation。
+- provider 官方精确 tokenizer implementation；
+- 更细粒度的 runtime continuation/current-input Context Record 构造。
 
 ### 16.2 Token Budget：已完成 ModelProfile + TokenCounter adapter
 
@@ -970,7 +981,9 @@ bounded summary + retained tail
 Model Context
 ```
 
-当前 compactor 为确定性文本 chronology：保留旧 user/assistant 文本与非文本 part 类型，并严格服从 `maxSummaryTokens`。它不是 LLM semantic summarizer，但已经实现 split-turn-safe compaction、retained tail 和“不改写原历史”的关键边界。实际发生 compaction 时，CLI 还会在当前 Session branch 追加 `compaction` Entry，记录 summary、被压缩的 message IDs、retained tail IDs 与 Run/Turn/Step 关联；源 Session Entries 不会被删除。
+当前 compactor 为确定性文本 chronology：保留旧 user/assistant 文本与非文本 part 类型，并严格服从 `maxSummaryTokens`。它不是 LLM semantic summarizer，但已经实现 split-turn-safe compaction、retained tail 和“不改写原历史”的关键边界。实际发生 compaction 时，CLI 会在当前 Session branch 追加 `compaction` Entry，记录 summary、被压缩的 message IDs、retained tail IDs 与 Run/Turn/Step 关联；源 Session Entries 不会被删除。
+
+Stage 5 进一步把这个 Entry 作为**持久化 Context checkpoint**：后续 Model Step 或会话恢复后，通过 active branch 的最新 `compaction` Entry 直接复用 summary，并跳过已经由该 checkpoint 表示的旧 messages。只有新历史再次真正超过预算时，ContextManager 才把“旧 checkpoint + 新被裁历史”重新压缩为替代 checkpoint；不会在每个 Model Step 重复生成等价 summary。
 
 ### 16.4 Execution Event + Lifecycle Runtime：已完成进程内 v2
 
@@ -1140,11 +1153,71 @@ Session Entry Tree 继续通过 `POST /sessions/:id/state` 保存到现有 Sessi
 
 仍未实现：
 
-- 已持久化 compaction checkpoint 的跨后续请求复用策略；
 - Subagent child runtime 与 parent/child Session linkage；
 - subagent context/result projection；
 - Session / Execution Events 的 Local WAL + crash recovery；
 - 多设备 revision / conflict resolution。
+
+### 16.9 Agent Bootstrap + Skill Registry：Stage 4.1 / 4.2 已完成
+
+CLI 现在在 renderer 和 Session Run 创建前完成 Agent Bootstrap。新增模块：
+
+```text
+packages/cli/src/lib/
+├── agent-config.ts
+├── agent-environment.ts
+├── instruction-resolver.ts
+├── skill-registry.ts
+└── tool-registry.ts
+```
+
+当前规则：
+
+- `~/.more-more-code` 为用户全局配置目录；
+- `<workspace>/.more-more-code` 为项目配置目录；
+- `config.json` 按 global → project 合并，项目覆盖全局；
+- `AGENTS.md` 按 global → project 形成 Instruction Chain；
+- Skills 从 `~/.agents/skills`、`~/.more-more-code/skills`、`<workspace>/.more-more-code/skills` 三层发现；同名优先级为 `agents < global < project`；
+- 启动只读取 Skill metadata，不预载完整 Skill body；
+- `loadSkill` 是 read-only native tool，可在 PLAN/BUILD 中按名称加载完整 Skill；
+- Tools 与 Skills 是独立 domain；Tool Registry 显式区分 `native` 与 `mcp` source；
+- MCP server 已可在配置中表达，但 MCP transport/auth/remote execution 本阶段没有实现；
+- `/settings` 可检查两级配置与兼容 `.agents` Skill 路径、打开 config/AGENTS/`.agents/skills` 并 reload Agent Environment。
+
+本阶段明确不做 WAL、Permission/Sandbox 重构和 Subagent。
+
+### 16.10 Context & Provider Runtime：Stage 5 已完成
+
+Stage 5 把“上下文预算”进一步升级成**缓存稳定的 Model Step 编译链**。新增/扩展的核心模块包括：
+
+```text
+packages/harness/src/context.ts
+packages/cli/src/lib/cache-identity.ts
+packages/cli/src/lib/provider-runtime.ts
+packages/cli/src/lib/local-model-transport.ts
+packages/cli/src/lib/tool-registry.ts
+packages/cli/src/lib/system-prompt.ts
+```
+
+当前 Model Step 的稳定前缀逻辑是：
+
+```text
+Core coding-agent prompt
+→ Global instructions
+→ Project instructions
+→ Skill catalog metadata
+→ Tool definitions / schemas
+→ persisted compaction checkpoint
+→ history / retained tail / runtime / current input
+```
+
+其中 Skill catalog 与 ToolSet 都按确定性顺序序列化。Tool Registry 会为当前模式生成 `ToolSetSnapshot`，再派生 `ToolSetFingerprint`；provider/model/mode、system prompt version、global/project instruction hash、skill catalog hash 与 tool fingerprint 共同生成 `PromptPrefixFingerprint`。因此 PLAN 与 BUILD 因暴露 ToolSet 不同，自然属于不同 cache family。
+
+Provider 侧新增独立 request compiler boundary。OpenAI 模型显式通过 `openai.responses(model)` 选择 Responses API；`OpenAIResponsesAdapter` 从 `PromptPrefixFingerprint` 派生 `promptCacheKey`，同时继续让 Vercel AI SDK 负责 streaming、tool-call integration 与 UI message normalization。`previousResponseId` 没有进入 adapter，也不会替代本地 Session Entry Tree。
+
+Provider usage 会规范化成诊断 telemetry：input/output tokens、cache read/write tokens、provider/model、prompt/tool fingerprints。该数据保留在 LocalModelTransport 的 runtime diagnostics/callback 中，不会自动写成 Session semantic Entry。
+
+本阶段测试覆盖 canonical ordering、PLAN/BUILD fingerprint 差异、checkpoint reuse/replacement、OpenAI provider compilation 与 cache telemetry；完整 Harness + CLI 测试、Harness/Shared/CLI/Server typecheck、CLI/Server build 均通过。
 
 ---
 
@@ -1196,38 +1269,40 @@ Cloud persistence 应保持外围能力。
 
 ---
 
-## 18. 下一阶段推荐顺序
+## 18. 当前阶段边界与后续候选
 
-Session Entry Tree v3 semantic history、Message/Runtime State Projection、Turn-aware Context Projection、ModelProfile/TokenCounter、bounded compaction，以及 **pi-style Run/Turn/Step lifecycle + 进程内 Execution Event Runtime** 都已经建立。下一阶段不应继续扩张 `AgentLoop`，而应把 durable runtime 与 Tool/Security Runtime 补齐：
+Stage 4.1 Agent Bootstrap、Stage 4.2 Skill Registry 与 Stage 5 Context & Provider Runtime 均已完成。当前从启动到 Model Step 的链路已经形成：
 
 ```text
-1. Local WAL + crash recovery
-      ↓
-2. Cloud revision / conflict sync for execution history
-      ↓
-3. Tool Registry + Tool cancellation
-      ↓
-4. Permission Engine
-      ↓
-5. Sandbox
-      ↓
-6. Provider exact tokenizer adapters（可独立并行）
-      ↓
-7. Subagent on Session Tree
+CLI bootstrap
+  ↓
+Global .more-more-code
+  ↓
+Project .more-more-code
+  ↓
+Instruction Chain + Skill metadata + Tool Registry
+  ↓
+Cache-aware Context Compiler + Prefix Fingerprints
+  ↓
+Provider Adapter / Model Step
 ```
+
+这一轮明确不继续实现 WAL，也暂不进入 Permission/Sandbox 重构。后续可以在现有边界上独立选择 MCP transport adapter、Tool cancellation、Permission/Sandbox、Local WAL、exact tokenizer 或 Subagent；其中任何一项都不应重新把职责塞入 `AgentLoop`、`ContextManager` 或 OpenAI-specific adapter。
 
 当前关键边界已经分离：
 
 ```text
 Session Entries          = Session 的 durable semantic history 与 branch topology
 Execution Events         = Run / Turn / Step 实际发生了什么
-Context Projection       = 当前 Model Step 发给模型什么
+Context Projection       = 当前 Model Step 发给模型什么，以及 stable→dynamic ordering / compaction checkpoint
+Provider Runtime         = provider-specific model/options/cache telemetry 编译
 Message / UI Projection  = 当前 branch 显示哪些聊天/树信息
 Runtime State Projection = 当前 branch 恢复哪些 model / mode / config
-Cloud Snapshot / WAL     = 用于跨进程/设备恢复什么（WAL 待完善）
+Agent Environment        = 当前进程加载了哪些 global/project instructions、skills 与 tool sources
+Cloud Snapshot / WAL     = 用于跨进程/设备恢复什么（WAL 当前明确延后）
 ```
 
-下一项最有价值的 Harness 基础设施是 **Local WAL + crash recovery**，把已经稳定的 execution events 变成可恢复的本地执行日志，而不是把数据库或 Tool/Sandbox 职责塞回 `AgentLoop`。
+下一阶段应根据安全层、MCP 或持久化的重构方案单独立项，而不是继续扩大 `AgentLoop`。
 
 ---
 
@@ -1244,7 +1319,9 @@ docs/decisions/
 ├── 0005-event-backed-session-history-and-context-compaction.md
 ├── 0006-event-backed-agent-execution-runtime.md
 ├── 0007-pi-style-run-turn-step-lifecycle-and-interaction.md
-└── 0008-session-entry-tree-and-semantic-session-history.md
+├── 0008-session-entry-tree-and-semantic-session-history.md
+├── 0009-agent-bootstrap-instructions-skills-and-tool-sources.md
+└── 0010-cache-aware-context-and-provider-runtime.md
 ```
 
 其中：
@@ -1255,6 +1332,8 @@ docs/decisions/
 - ADR-0005 记录旧 v2 canonical message-event history、Turn-aware compaction 与 TokenCounter adapter；其 Session history representation 已由 ADR-0008 部分取代；
 - ADR-0006 记录 append-only Execution Events、ExecutionEventStore 与 Run/Turn/Step projection 的设计，仍然有效；
 - ADR-0007 记录 pi-style Turn 语义、awaited lifecycle stream、steering/follow-up safe-point interaction 与 settlement 规则；
-- ADR-0008 记录 Session Entry Tree v3：durable semantic Entry、Message/Runtime State Projection、tool/state/compaction entries、v1/v2 migration 与持久化边界。
+- ADR-0008 记录 Session Entry Tree v3：durable semantic Entry、Message/Runtime State Projection、tool/state/compaction entries、v1/v2 migration 与持久化边界；
+- ADR-0009 记录 `.more-more-code` 两级 Agent Bootstrap、Instruction Chain、Skill progressive disclosure 与 native/MCP Tool Source 边界；
+- ADR-0010 记录 stable→dynamic Context ordering、Tool/Prompt prefix fingerprint、persisted compaction checkpoint reuse、Provider Adapter 与 OpenAI Responses/cache 边界。
 
 本文件属于近期工程状态快照，不替代正式 ADR。

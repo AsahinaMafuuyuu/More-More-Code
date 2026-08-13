@@ -50,7 +50,7 @@ function resolveSupportedChatModel(model: SupportedChatModel): ResolvedModel {
             };
         case "openai":
             return {
-                model: openai(model.id as OpenAIModelId),
+                model: openai.responses(model.id as OpenAIModelId),
                 provider: model.provider,
                 modelId: model.id,
             };

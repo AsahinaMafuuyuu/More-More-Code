@@ -1,6 +1,7 @@
 import { mkdir, readFile, readdir, stat, writeFile } from "fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "path";
 import { toolInputSchemas, Mode, type ModeType } from "@more-more-code/shared";
+import { getAgentEnvironment } from "./agent-environment";
 
 const MAX_FILE_SIZE = 10_000;
 const MAX_RESULTS = 200;
@@ -34,7 +35,7 @@ export async function executeLocalTool(
 ) {
     if (
         mode === Mode.PLAN &&
-        !["readFile", "listDirectory", "glob", "grep"].includes(toolName)
+        !["readFile", "listDirectory", "glob", "grep", "loadSkill"].includes(toolName)
     ) {
         throw new Error(`Tool ${toolName} is not available in PLAN mode`);
     }
@@ -189,6 +190,18 @@ export async function executeLocalTool(
                     : {}
                 ),
             }
+        }
+
+        case "loadSkill": {
+            const { name } = toolInputSchemas.loadSkill.parse(input);
+            const skill = await getAgentEnvironment().skills.load(name);
+            return {
+                name: skill.name,
+                description: skill.description,
+                scope: skill.scope,
+                source: skill.path,
+                content: skill.content,
+            };
         }
 
         case "writeFile": {

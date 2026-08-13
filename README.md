@@ -50,6 +50,13 @@
 ### 数据流
 
 ```
+CLI 启动
+    ↓
+Agent Bootstrap
+~/.more-more-code + <workspace>/.more-more-code
+    ↓
+Instruction Chain + Skill metadata + Tool Registry
+    ↓
 用户键盘输入
     ↓
 [packages/cli]
@@ -85,7 +92,8 @@ MORE-MORE-CODE/
 │   │       ├── screens/        # 路由页面（首页、新建会话、聊天）
 │   │       ├── layouts/        # 布局组件
 │   │       ├── hooks/          # 自定义 hooks（useChat 等）
-│   │       ├── index.tsx       # 入口文件
+│   │       ├── lib/            # Agent bootstrap / config / skills / tools / model runtime
+│   │       ├── index.tsx       # 入口文件；先 bootstrap agent environment
 │   │       └── theme.ts        # 9 种配色主题定义
 │   │
 │   ├── harness/                # Agent Harness Runtime
@@ -119,6 +127,7 @@ MORE-MORE-CODE/
 │           ├── models.ts       # AI 模型定义与定价
 │           └── schemas.ts      # Zod 校验 Schema（SSE 事件、消息等）
 │
+├── .more-more-code/            # 项目级 Agent 配置 / AGENTS.md / Skills
 ├── package.json                # Monorepo 根配置（workspaces）
 ├── tsconfig.base.json          # TypeScript 基础配置
 └── bun.lock                    # Bun 锁文件
@@ -189,8 +198,8 @@ bun dev:cli
 
 | 模式 | 图标 | AI 可用工具 | 适用场景 |
 |------|------|-------------|----------|
-| **PLAN** | 🔍 | `readFile` `listDirectory` `glob` `grep` | 代码审查、方案分析、问题排查 |
-| **BUILD** | 🛠️ | 全部工具（含 `writeFile` `editFile` `bash`） | 实现功能、修改代码、执行命令 |
+| **PLAN** | 🔍 | `readFile` `listDirectory` `glob` `grep` `loadSkill` | 代码审查、方案分析、问题排查 |
+| **BUILD** | 🛠️ | 全部 native tools（含 `writeFile` `editFile` `bash`） | 实现功能、修改代码、执行命令 |
 
 ### 命令菜单（输入 `/`）
 
@@ -204,6 +213,7 @@ bun dev:cli
 | `/jump` | 打开 Session Entry 跳转器 |
 | `/parent` | 跳转到当前 Entry 的父 Entry |
 | `/root` | 跳转到当前会话的 `session_start` 根 Entry |
+| `/settings` | 查看全局/项目 `.more-more-code` 配置、打开配置/AGENTS 文件并重新加载 |
 | `/theme` | 切换配色主题 |
 | `/exit` | 退出程序 |
 
@@ -257,9 +267,33 @@ bun dev:cli
 
 ---
 
+## 🧭 Agent Bootstrap 与 Skills
+
+CLI 会在渲染 UI 和创建 Agent Run 之前完成一次 Agent Bootstrap：
+
+```text
+~/.agents/skills/<skill>/SKILL.md       # 兼容的用户级 Skill 来源
+
+~/.more-more-code/
+├── config.json
+├── AGENTS.md
+└── skills/<skill>/SKILL.md
+
+<workspace>/.more-more-code/
+├── config.json
+├── AGENTS.md
+└── skills/<skill>/SKILL.md
+```
+
+全局配置先加载，项目配置随后覆盖。`AGENTS.md` 按 **global → project** 组成 instruction chain，并进入每次 Model Step 的 system prompt。Skill discovery 的同名优先级为 **`~/.agents/skills < ~/.more-more-code/skills < project/.more-more-code/skills`**。Skills 与 Tools 是两个不同概念：启动时只发现 Skill 的 `name / description / path / scope`，完整 `SKILL.md` 只有在模型通过 native `loadSkill` 工具明确加载时才进入工作上下文，从而避免无关 Skill 占用 context window。
+
+`/settings` 可查看当前解析出的全局/项目路径、兼容 `.agents` Skill 路径、instruction/skill/tool source 数量，打开两级 `config.json` / `AGENTS.md` 或 `.agents/skills` 后可以执行 reload。当前配置格式为 JSON。
+
 ## 🛠️ AI 工具系统
 
-AI 在 BUILD 模式下可以调用的工具（PLAN 模式仅前 4 个只读工具）：
+Tools 通过 Tool Registry 按来源区分为 **native** 与 **MCP extension source**。当前实际执行面仍以 native tools 为默认；MCP server 可以在 `.more-more-code/config.json` 中配置，但 MCP transport/auth/remote tool execution 将在后续阶段接入。
+
+当前 native tools：
 
 | 工具 | 作用 | 模式限制 |
 |------|------|----------|
@@ -267,6 +301,7 @@ AI 在 BUILD 模式下可以调用的工具（PLAN 模式仅前 4 个只读工�
 | `listDirectory` | 列出目录内容 | ✅ PLAN / ✅ BUILD |
 | `glob` | 按模式匹配文件 | ✅ PLAN / ✅ BUILD |
 | `grep` | 正则搜索文件内容 | ✅ PLAN / ✅ BUILD |
+| `loadSkill` | 按名称加载完整 `SKILL.md` | ✅ PLAN / ✅ BUILD |
 | `writeFile` | 创建或覆写文件 | ❌ PLAN / ✅ BUILD |
 | `editFile` | 精准替换文件内容 | ❌ PLAN / ✅ BUILD |
 | `bash` | 执行 shell 命令 | ❌ PLAN / ✅ BUILD |
@@ -285,13 +320,13 @@ AI 在 BUILD 模式下可以调用的工具（PLAN 模式仅前 4 个只读工�
 
 `messages` 字段当前作为兼容性的 JSON 状态容器。新 CLI 写入 **Session Entry Tree v3**：state 直接保存 `entries[]`，每个 durable semantic event 自身就是带 `id / parentId / type` 的树节点，不再使用 v2 的 checkpoint `nodes[] + eventIds[] + events[]` 双层结构。消息只是 Session Entry 的一个子集；tool call/result、error、model/mode/config change、compaction、branch summary 与 custom event 也可以被持久化。
 
-Harness 现在另有独立的 Run / Turn / Step `ExecutionEventStore`：AgentLoop 将执行事实记录为 append-only execution events，并通过 replay 投影出当前 `AgentRun`。Turn 的语义已经调整为“一次 Model response + 该 response 触发的 Tool executions”；工具结果继续调用模型时会开启新的 `tool-continuation` Turn。Harness 还提供 awaited lifecycle stream、`waitForIdle()`、steering/follow-up 队列与 Step progress。当前默认 Store 仍是**进程内 InMemory Store**，尚未写入 PostgreSQL/Cloud Session；下一步持久化工作是 Local WAL、crash recovery 与 cloud revision/conflict sync，而不是把数据库调用塞回 AgentLoop。
+Harness 现在另有独立的 Run / Turn / Step `ExecutionEventStore`：AgentLoop 将执行事实记录为 append-only execution events，并通过 replay 投影出当前 `AgentRun`。Turn 的语义已经调整为“一次 Model response + 该 response 触发的 Tool executions”；工具结果继续调用模型时会开启新的 `tool-continuation` Turn。Harness 还提供 awaited lifecycle stream、`waitForIdle()`、steering/follow-up 队列与 Step progress。当前默认 Store 仍是**进程内 InMemory Store**，尚未写入 PostgreSQL/Cloud Session；Local WAL、crash recovery 与 cloud revision/conflict sync 已明确延后，不应把数据库调用塞回 AgentLoop。
 
 ### 会话恢复与分支
 
 Session Entry Tree 中每个 Entry 都是一个可恢复的语义历史点。CLI 沿 `session_start → activeEntry` 路径分别投影 Message History 与 Runtime State；从旧 Entry 继续执行会创建新的 child branch，并保留 sibling branch。历史 message 更新通过不可变 `message_update` Entry 表达，不修改旧 Entry。旧线性 message array、v1 per-node snapshots 与 v2 checkpoint/event-backed trees 都会在 CLI 加载时升级为 v3，并保留 branch-local revision。
 
-模型调用前会使用 `ModelContextProfile` 做预算：最近 Turn 作为 retained tail 原子保留，旧 Turn 超预算时通过 bounded compaction 生成 summary。源 Session Entries 不会被删除或改写；当 Context Projection 实际发生 compaction 时，CLI 会额外写入一个 `compaction` Session Entry，记录 summary、被压缩的 message IDs 与 retained tail。当前 provider token counter 是显式标记为 `estimated` 的适配器，Harness 已保留 exact tokenizer adapter 接口。
+模型调用前会使用 `ModelContextProfile` 做预算，并先按 **core prompt → global instructions → project instructions → skill catalog → tool definitions → persisted checkpoint → history → retained tail → runtime continuation → current input** 的稳定→动态顺序建立 canonical Context。Skill/tool 集合使用确定性排序，PLAN/BUILD 分别生成 `ToolSetFingerprint` 与 `PromptPrefixFingerprint`。最近 Turn 作为 retained tail 原子保留；旧 Turn 超预算时通过 bounded compaction 生成 summary，并把该 summary 作为 Session `compaction` Entry 持久化。后续 Model Step 会直接复用最近 checkpoint，只有再次真正超预算时才生成替代 checkpoint；源 Session Entries 不会被删除或改写。OpenAI 模型显式走 `openai.responses(...)`，`OpenAIResponsesAdapter` 从 prefix fingerprint 派生 `promptCacheKey`，Vercel AI SDK 继续负责 streaming、tool integration 与 UI message normalization；`previous_response_id` 不作为 MORE-MORE-CODE Session authority。当前 provider token counter 仍是显式标记为 `estimated` 的适配器，Harness 已保留 exact tokenizer adapter 接口。
 
 运行中的交互遵循 Turn-safe 语义：普通 **Enter** 排队 steering，**Alt+Enter** 排队 follow-up，**Escape** 请求中断当前 Run。steering 在当前 Turn 完成后、自动 tool continuation 之前消费；follow-up 只在 Run 原本将进入 idle 时消费。follow-up 仍保留在同一个 Run / Execution history 中，但会开启新的 loop-budget epoch，因此 `maxTurns` / `maxSteps` 从该 follow-up 边界重新计数，不继承上一段交互已经消耗的预算。
 
@@ -305,7 +340,7 @@ Session Entry Tree 中每个 Entry 都是一个可恢复的语义历史点。CLI
 | **终端 UI** | [OpenTUI](https://github.com/opentui/core) + [React 19](https://react.dev/) |
 | **路由** | [React Router 8](https://reactrouter.com/) |
 | **后端框架** | [Hono](https://hono.dev/) |
-| **AI SDK** | [Vercel AI SDK](https://sdk.vercel.ai/docs) (`ai` v7) |
+| **AI SDK** | [Vercel AI SDK](https://sdk.vercel.ai/docs) (`ai` v7) + provider adapters；OpenAI 显式使用 Responses API |
 | **数据库** | PostgreSQL + [Prisma](https://www.prisma.io/) v7 |
 | **数据校验** | [Zod](https://zod.dev/) v4 |
 | **错误监控** | [Sentry](https://sentry.io/) |
