@@ -10,6 +10,8 @@ import {
     SYSTEM_PROMPT_VERSION,
 } from "../src/lib/system-prompt";
 import { createPromptPrefixIdentity } from "../src/lib/cache-identity";
+import { ToolRuntime } from "../src/lib/tool-runtime";
+import { ToolRegistry } from "../src/lib/tool-registry";
 
 const tempRoots: string[] = [];
 
@@ -194,5 +196,109 @@ describe("agent bootstrap", () => {
         });
         expect(planIdentity.fingerprint).not.toBe(buildIdentity.fingerprint);
         expect(planIdentity.toolSetFingerprint).not.toBe(buildIdentity.toolSetFingerprint);
+    });
+
+    test("normalizes tool cancellation and timeout", async () => {
+        const registry = new ToolRegistry(mergeAgentConfig({}, {}));
+        const blockingExecutor = {
+            source: "native" as const,
+            async execute(_name: string, _input: unknown, context: { signal: AbortSignal }) {
+                return new Promise((_resolve, reject) => {
+                    context.signal.addEventListener("abort", () => reject(context.signal.reason), { once: true });
+                });
+            },
+        };
+        const controller = new AbortController();
+        const context = {
+            sessionId: "session-1",
+            runId: "run-1",
+            turnId: "turn-1",
+            stepId: "step-1",
+            workspaceRoot: process.cwd(),
+            mode: "BUILD" as const,
+            signal: controller.signal,
+        };
+        const cancellationRuntime = new ToolRuntime({ registry, executors: [blockingExecutor] });
+        const pending = cancellationRuntime.run({
+            toolName: "readFile",
+            input: { path: "README.md" },
+            context,
+        });
+        controller.abort();
+        expect((await pending).status).toBe("cancelled");
+
+        const timeoutRuntime = new ToolRuntime({
+            registry,
+            executors: [blockingExecutor],
+            defaultTimeoutMs: 5,
+        });
+        const timedOut = await timeoutRuntime.run({
+            toolName: "readFile",
+            input: { path: "README.md" },
+            context: { ...context, signal: new AbortController().signal },
+        });
+        expect(timedOut.status).toBe("timed_out");
+    });
+
+    test("permission policy can deny or defer a registered tool", async () => {
+        const registry = new ToolRegistry(mergeAgentConfig({}, {}));
+        const context = {
+            sessionId: "session-1",
+            runId: "run-1",
+            turnId: "turn-1",
+            stepId: "step-1",
+            workspaceRoot: process.cwd(),
+            mode: "BUILD" as const,
+            signal: new AbortController().signal,
+        };
+        const createRuntime = (effect: "deny" | "ask") => new ToolRuntime({
+            registry,
+            executors: [{ source: "native", async execute() { return null; } }],
+            permissionPolicy: { evaluate: () => ({ effect }) },
+        });
+
+        expect((await createRuntime("deny").run({ toolName: "readFile", input: { path: "README.md" }, context })).status).toBe("denied");
+        expect((await createRuntime("ask").run({ toolName: "readFile", input: { path: "README.md" }, context })).status).toBe("approval_required");
+    });
+
+    test("routes registered native tools through normalized runtime outcomes", async () => {
+        const registry = new ToolRegistry(mergeAgentConfig({}, {}));
+        let calls = 0;
+        const runtime = new ToolRuntime({
+            registry,
+            executors: [{
+                source: "native",
+                async execute() {
+                    calls += 1;
+                    return { ok: true };
+                },
+            }],
+        });
+        const context = {
+            sessionId: "session-1",
+            runId: "run-1",
+            turnId: "turn-1",
+            stepId: "step-1",
+            workspaceRoot: process.cwd(),
+            mode: "BUILD" as const,
+            signal: new AbortController().signal,
+        };
+
+        const completed = await runtime.run({
+            toolName: "readFile",
+            input: { path: "README.md" },
+            context,
+        });
+        const denied = await runtime.run({
+            toolName: "writeFile",
+            input: { path: "x", content: "x" },
+            context: { ...context, mode: "PLAN" },
+        });
+
+        expect(completed.status).toBe("completed");
+        expect(completed.output).toEqual({ ok: true });
+        expect(completed.durationMs).toBeGreaterThanOrEqual(0);
+        expect(denied.status).toBe("denied");
+        expect(calls).toBe(1);
     });
 });

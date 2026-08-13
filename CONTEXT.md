@@ -10,7 +10,7 @@ One durable semantic fact in a Session. A Session Entry is the atomic node of Se
 
 ## Session Entry Tree
 
-The branchable history formed by Session Entries and their parent relationships. Selecting an Entry chooses one historical branch and one continuation point without deleting sibling futures.
+The append-only, branchable history formed by Session Entries and their parent relationships. Existing Entries are immutable; new Entries are appended as children of the current Active Entry. Selecting an earlier Entry chooses one historical branch and continuation point without deleting sibling futures.
 
 ## Active Entry
 
@@ -38,7 +38,7 @@ A provider-independent classification of Context Records as stable, checkpoint, 
 
 ## Compaction Entry
 
-A durable record that a context compaction occurred, including the resulting summary and the history range it represented. The latest Compaction Entry on the active branch also acts as the persisted Context checkpoint for later Model Steps; it does not erase the original Session Entries.
+A durable record that a context compaction occurred, including the resulting summary and the history range it represented. The latest Compaction Entry on the active branch acts as the persisted Context checkpoint for later Model Steps. A newer checkpoint summarizes the previous effective checkpoint plus newly compacted history; older checkpoints remain Session history but are superseded for model Context Projection.
 
 ## ToolSet Fingerprint
 
@@ -71,3 +71,11 @@ A reusable workflow/instruction package stored as `.more-more-code/skills/<name>
 ## Tool Source
 
 The origin of executable tool capabilities. `native` is the built-in default source; `mcp` represents externally configured Model Context Protocol extension sources. MCP transport execution is not implemented yet.
+
+## Tool Runtime
+
+The local boundary between AgentLoop Tool Steps and concrete Tool Sources. It applies Tool Registry visibility/capabilities, permission decisions, timeout/cancellation propagation, source selection, and normalized status/timing outcomes. AgentLoop owns lifecycle orchestration; Tool Runtime owns these execution concerns.
+
+## Tool Capability
+
+A semantic capability label attached to a registered Tool, such as `filesystem.read`, `filesystem.write`, `process.execute`, or `agent.skill.read`. Capability metadata is intended for policy evaluation and is distinct from the model-facing input schema.

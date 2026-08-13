@@ -1221,6 +1221,21 @@ Provider usage 会规范化成诊断 telemetry：input/output tokens、cache rea
 
 ---
 
+### 16.11 Session/Context 语义收口与 Tool Runtime：Stage 5.1 / Stage 6
+
+本轮进一步固定了四条 Session/Context 不变量：
+
+1. Session Entry 是 append-only durable fact；从历史 Entry 继续时新增 child branch，不原地改写既有 Entry；
+2. 新 checkpoint 由“上一有效 checkpoint + 新被压缩历史”生成，旧 compaction 仍留在 Session Tree，但 Model Context 只使用 active branch 最新有效 checkpoint；
+3. restore 的 durable authority 仍是 `Session Tree + activeEntryId`，Message / Runtime / Context checkpoint 都从当前 branch 投影；
+4. Session Tree 的 message/tool/compaction/state/branch/error/custom/timestamp 颜色进入 Theme semantic tokens。
+
+同时新增 `packages/cli/src/lib/tool-runtime.ts` 作为 AgentLoop 与具体 Tool Source 之间的本地运行时边界。Tool Registry 现在除了模型可见 contract snapshot 外还提供 capability metadata；Tool Runtime 统一处理 mode visibility、`allow | deny | ask` permission seam、AbortSignal/timeout propagation、source adapter 选择与 normalized execution result。`tool_result` Entry 增加可选 `status/source/startedAt/completedAt/durationMs` 字段，并保持旧 `output/error` 兼容。
+
+CLI `runToolStep` 已将 Harness 提供的 Run/Turn/Step `AbortSignal` 传入 Tool Runtime。filesystem read/write 与 grep 路径能够消费该 signal。当前 shell 路径仍保留旧的内部 timeout；本轮 DevTools 写入策略阻止修改该子进程的即时中断绑定，因此“active shell 在 AgentLoop abort 后立即终止”仍作为 Stage 6.1 收尾项，不应误报为已完成。
+
+---
+
 ## 17. 当前需要特别避免的架构回退
 
 后续开发时不要重新引入以下模式：
@@ -1271,7 +1286,7 @@ Cloud persistence 应保持外围能力。
 
 ## 18. 当前阶段边界与后续候选
 
-Stage 4.1 Agent Bootstrap、Stage 4.2 Skill Registry 与 Stage 5 Context & Provider Runtime 均已完成。当前从启动到 Model Step 的链路已经形成：
+Stage 4.1 Agent Bootstrap、Stage 4.2 Skill Registry、Stage 5 Context & Provider Runtime，以及 Stage 5.1 Session/Context 语义收口与 Stage 6 Tool Runtime 第一版均已完成主体实现。当前从启动到 Model Step / Tool Step 的链路已经形成：
 
 ```text
 CLI bootstrap
@@ -1285,6 +1300,10 @@ Instruction Chain + Skill metadata + Tool Registry
 Cache-aware Context Compiler + Prefix Fingerprints
   ↓
 Provider Adapter / Model Step
+  ↓
+AgentLoop Tool Step
+  ↓
+Tool Runtime → Registry / Permission / Timeout / Source Adapter
 ```
 
 这一轮明确不继续实现 WAL，也暂不进入 Permission/Sandbox 重构。后续可以在现有边界上独立选择 MCP transport adapter、Tool cancellation、Permission/Sandbox、Local WAL、exact tokenizer 或 Subagent；其中任何一项都不应重新把职责塞入 `AgentLoop`、`ContextManager` 或 OpenAI-specific adapter。
@@ -1296,6 +1315,7 @@ Session Entries          = Session 的 durable semantic history 与 branch topol
 Execution Events         = Run / Turn / Step 实际发生了什么
 Context Projection       = 当前 Model Step 发给模型什么，以及 stable→dynamic ordering / compaction checkpoint
 Provider Runtime         = provider-specific model/options/cache telemetry 编译
+Tool Runtime             = tool visibility / capability / policy / cancellation / timeout / normalized result
 Message / UI Projection  = 当前 branch 显示哪些聊天/树信息
 Runtime State Projection = 当前 branch 恢复哪些 model / mode / config
 Agent Environment        = 当前进程加载了哪些 global/project instructions、skills 与 tool sources
@@ -1321,7 +1341,8 @@ docs/decisions/
 ├── 0007-pi-style-run-turn-step-lifecycle-and-interaction.md
 ├── 0008-session-entry-tree-and-semantic-session-history.md
 ├── 0009-agent-bootstrap-instructions-skills-and-tool-sources.md
-└── 0010-cache-aware-context-and-provider-runtime.md
+├── 0010-cache-aware-context-and-provider-runtime.md
+└── 0011-session-runtime-invariants.md
 ```
 
 其中：
@@ -1334,6 +1355,7 @@ docs/decisions/
 - ADR-0007 记录 pi-style Turn 语义、awaited lifecycle stream、steering/follow-up safe-point interaction 与 settlement 规则；
 - ADR-0008 记录 Session Entry Tree v3：durable semantic Entry、Message/Runtime State Projection、tool/state/compaction entries、v1/v2 migration 与持久化边界；
 - ADR-0009 记录 `.more-more-code` 两级 Agent Bootstrap、Instruction Chain、Skill progressive disclosure 与 native/MCP Tool Source 边界；
-- ADR-0010 记录 stable→dynamic Context ordering、Tool/Prompt prefix fingerprint、persisted compaction checkpoint reuse、Provider Adapter 与 OpenAI Responses/cache 边界。
+- ADR-0010 记录 stable→dynamic Context ordering、Tool/Prompt prefix fingerprint、persisted compaction checkpoint reuse、Provider Adapter 与 OpenAI Responses/cache 边界；
+- ADR-0011 记录 append-only Session、compaction supersession、restore authority、semantic Theme tokens 与 Tool Runtime 边界。
 
 本文件属于近期工程状态快照，不替代正式 ADR。

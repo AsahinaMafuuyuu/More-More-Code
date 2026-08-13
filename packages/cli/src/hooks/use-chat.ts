@@ -27,7 +27,9 @@ import {
     type SessionRuntimeState,
     type SessionTreeState,
 } from "@more-more-code/harness";
-import { executeLocalTool } from "../lib/local-tools";
+import { executeNativeTool } from "../lib/local-tools";
+import { getAgentEnvironment } from "../lib/agent-environment";
+import { ToolRuntime, type ToolExecutionResult } from "../lib/tool-runtime";
 import { createAgentUserMessage } from "../lib/agent-chat-message";
 import {
     LocalModelTransport,
@@ -50,6 +52,38 @@ type PromptSelection = {
 
 function toError(error: unknown) {
     return error instanceof Error ? error : new Error(String(error));
+}
+
+function toolFailureCode(result: ToolExecutionResult) {
+    switch (result.status) {
+        case "denied":
+            return "tool_permission_denied";
+        case "approval_required":
+            return "tool_approval_required";
+        case "timed_out":
+            return "tool_execution_timed_out";
+        default:
+            return "tool_execution_failed";
+    }
+}
+
+function createLocalToolRuntime() {
+    const environment = getAgentEnvironment();
+    return {
+        workspaceRoot: environment.config.paths.workspaceRoot,
+        runtime: new ToolRuntime({
+            registry: environment.tools,
+            executors: [{
+                source: "native",
+                execute(toolName, input, context) {
+                    return executeNativeTool(toolName, input, {
+                        workspaceRoot: context.workspaceRoot,
+                        signal: context.signal,
+                    });
+                },
+            }],
+        }),
+    };
 }
 
 function getPendingToolCalls(message: Message): AgentToolCall[] {
@@ -407,7 +441,7 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
                                 throw resolved;
                             }
                         },
-                        async runToolStep(toolCall, { run, turn, step }) {
+                        async runToolStep(toolCall, { run, turn, step, signal }) {
                             const metadata = getStepMetadata({
                                 runId: run.id,
                                 turnId: turn.id,
@@ -422,12 +456,26 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
                                 ...metadata,
                             });
 
+                            let toolRuntimeResult: ToolExecutionResult | null = null;
                             try {
-                                const output = await executeLocalTool(
-                                    toolCall.toolName,
-                                    toolCall.input,
-                                    activeExecutionSelection.mode,
-                                );
+                                const { runtime: toolRuntime, workspaceRoot } = createLocalToolRuntime();
+                                toolRuntimeResult = await toolRuntime.run({
+                                    toolName: toolCall.toolName,
+                                    input: toolCall.input,
+                                    context: {
+                                        sessionId,
+                                        runId: run.id,
+                                        turnId: turn.id,
+                                        stepId: step.id,
+                                        workspaceRoot,
+                                        mode: activeExecutionSelection.mode,
+                                        signal,
+                                    },
+                                });
+                                if (toolRuntimeResult.status !== "completed") {
+                                    throw new Error(toolRuntimeResult.error ?? `Tool ended with status ${toolRuntimeResult.status}`);
+                                }
+                                const output = toolRuntimeResult.output;
 
                                 await chat.addToolOutput({
                                     tool: toolCall.toolName as keyof ChatTools,
@@ -439,6 +487,11 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
                                     toolCallId: toolCall.toolCallId,
                                     toolName: toolCall.toolName,
                                     output,
+                                    status: toolRuntimeResult.status,
+                                    source: toolRuntimeResult.source,
+                                    startedAt: toolRuntimeResult.startedAt,
+                                    completedAt: toolRuntimeResult.completedAt,
+                                    durationMs: toolRuntimeResult.durationMs,
                                     ...metadata,
                                 });
                             } catch (error) {
@@ -454,18 +507,32 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
                                     toolCallId: toolCall.toolCallId,
                                     toolName: toolCall.toolName,
                                     error: resolved.message,
+                                    status: toolRuntimeResult?.status ?? "failed",
+                                    ...(toolRuntimeResult ? {
+                                        source: toolRuntimeResult.source,
+                                        startedAt: toolRuntimeResult.startedAt,
+                                        completedAt: toolRuntimeResult.completedAt,
+                                        durationMs: toolRuntimeResult.durationMs,
+                                    } : {}),
                                     ...metadata,
                                 });
-                                appendEntry({
-                                    type: "error",
-                                    message: resolved.message,
-                                    code: "tool_execution_failed",
-                                    details: {
-                                        toolCallId: toolCall.toolCallId,
-                                        toolName: toolCall.toolName,
-                                    },
-                                    ...metadata,
-                                });
+                                if (toolRuntimeResult?.status !== "cancelled") {
+                                    appendEntry({
+                                        type: "error",
+                                        message: resolved.message,
+                                        code: toolRuntimeResult ? toolFailureCode(toolRuntimeResult) : "tool_execution_failed",
+                                        details: {
+                                            toolCallId: toolCall.toolCallId,
+                                            toolName: toolCall.toolName,
+                                            ...(toolRuntimeResult ? {
+                                                status: toolRuntimeResult.status,
+                                                source: toolRuntimeResult.source,
+                                                durationMs: toolRuntimeResult.durationMs,
+                                            } : {}),
+                                        },
+                                        ...metadata,
+                                    });
+                                }
                             }
                         },
                         abortModelStep: stopModelStep,

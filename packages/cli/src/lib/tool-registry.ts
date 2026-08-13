@@ -8,12 +8,33 @@ import type { McpServerConfig, ResolvedAgentConfig } from "./agent-config";
 
 export type ToolSourceKind = "native" | "mcp";
 
-export type ToolSetSnapshotEntry = {
+export type ToolCapability =
+    | "filesystem.read"
+    | "filesystem.write"
+    | "process.execute"
+    | "agent.skill.read";
+
+const NATIVE_TOOL_CAPABILITIES: Record<string, ToolCapability[]> = {
+    readFile: ["filesystem.read"],
+    listDirectory: ["filesystem.read"],
+    glob: ["filesystem.read"],
+    grep: ["filesystem.read", "process.execute"],
+    loadSkill: ["agent.skill.read"],
+    writeFile: ["filesystem.write"],
+    editFile: ["filesystem.read", "filesystem.write"],
+    bash: ["process.execute"],
+};
+
+export type RegisteredToolDefinition = {
     name: string;
     source: ToolSourceKind;
     description: string;
-    inputSchema: unknown;
+    capabilities: ToolCapability[];
     availableModes: ModeType[];
+};
+
+export type ToolSetSnapshotEntry = RegisteredToolDefinition & {
+    inputSchema: unknown;
 };
 
 export type ToolSetSnapshot = ToolSetSnapshotEntry[];
@@ -62,12 +83,37 @@ export class ToolRegistry {
                 source: "native" as const,
                 description: typeof contract.description === "string" ? contract.description : "",
                 inputSchema: z.toJSONSchema(contract.inputSchema as z.ZodType),
+                capabilities: [...(NATIVE_TOOL_CAPABILITIES[name] ?? [])],
                 availableModes: [
                     ...(planNames.has(name) ? [Mode.PLAN] : []),
                     ...(buildNames.has(name) ? [Mode.BUILD] : []),
                 ],
             }))
             .sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    getToolDefinition(
+        name: string,
+        mode: ModeType,
+        source: ToolSourceKind = "native",
+    ): RegisteredToolDefinition | null {
+        if (source !== "native" || !this.config.tools.native.enabled) return null;
+        const contract = Object.entries(getNativeToolContracts(mode))
+            .find(([toolName]) => toolName === name)?.[1];
+        if (!contract) return null;
+
+        const planNames = new Set(this.listNativeToolNames(Mode.PLAN));
+        const buildNames = new Set(this.listNativeToolNames(Mode.BUILD));
+        return {
+            name,
+            source,
+            description: typeof contract.description === "string" ? contract.description : "",
+            capabilities: [...(NATIVE_TOOL_CAPABILITIES[name] ?? [])],
+            availableModes: [
+                ...(planNames.has(name) ? [Mode.PLAN] : []),
+                ...(buildNames.has(name) ? [Mode.BUILD] : []),
+            ],
+        };
     }
 
     listSources(): ToolSourceDescriptor[] {

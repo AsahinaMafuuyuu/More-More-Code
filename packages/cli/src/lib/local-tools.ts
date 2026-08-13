@@ -1,6 +1,6 @@
 import { mkdir, readFile, readdir, stat, writeFile } from "fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "path";
-import { toolInputSchemas, Mode, type ModeType } from "@more-more-code/shared";
+import { toolInputSchemas } from "@more-more-code/shared";
 import { getAgentEnvironment } from "./agent-environment";
 
 const MAX_FILE_SIZE = 10_000;
@@ -9,8 +9,8 @@ const MAX_MATCHES = 50;
 const MAX_OUTPUT = 20_000;
 const DEFAULT_TIMEOUT = 30_000;
 
-function resolveInsideCwd(path: string) {
-    const cwd = process.cwd();
+function resolveInsideWorkspace(workspaceRoot: string, path: string) {
+    const cwd = resolve(workspaceRoot);
     const resolved = resolve(cwd, path); // 转换成绝对路径
     const rel = relative(cwd, resolved); // 转换成相对路径
 
@@ -21,30 +21,40 @@ function resolveInsideCwd(path: string) {
     return { cwd, resolved };
 }
 
+// Compatibility for the existing shell implementation; non-shell tools use the explicit runtime workspace root.
+function resolveInsideCwd(path: string) {
+    return resolveInsideWorkspace(process.cwd(), path);
+}
+
 function truncate(value: string, limit: number) {
     return value.length > limit
         ? `${value.slice(0, limit)}\n... (truncated, ${value.length} total chars)`
         : value;
 }
 
-// 用于通过大模型返回的工具调用结果进行本地执行
-export async function executeLocalTool(
-    toolName: string, // 工具名称
-    input: unknown, // 输入参数
-    mode: ModeType, // 当前模式
+type NativeToolExecutionContext = {
+    workspaceRoot: string;
+    signal: AbortSignal;
+};
+
+function throwIfAborted(signal: AbortSignal) {
+    if (!signal.aborted) return;
+    throw signal.reason instanceof Error ? signal.reason : new Error("Tool execution was cancelled");
+}
+
+// Concrete native implementations. Visibility and policy belong to ToolRuntime.
+export async function executeNativeTool(
+    toolName: string,
+    input: unknown,
+    context: NativeToolExecutionContext,
 ) {
-    if (
-        mode === Mode.PLAN &&
-        !["readFile", "listDirectory", "glob", "grep", "loadSkill"].includes(toolName)
-    ) {
-        throw new Error(`Tool ${toolName} is not available in PLAN mode`);
-    }
+    throwIfAborted(context.signal);
 
     switch (toolName) {
         case "readFile": {
             const { path } = toolInputSchemas.readFile.parse(input);
-            const { resolved } = resolveInsideCwd(path);
-            const content = await readFile(resolved, "utf-8");
+            const { resolved } = resolveInsideWorkspace(context.workspaceRoot, path);
+            const content = await readFile(resolved, { encoding: "utf-8", signal: context.signal });
 
             return content.length > MAX_FILE_SIZE
                 ? {
@@ -56,7 +66,7 @@ export async function executeLocalTool(
         }
         case "listDirectory": {
             const { path } = toolInputSchemas.listDirectory.parse(input);
-            const { cwd, resolved } = resolveInsideCwd(path);
+            const { cwd, resolved } = resolveInsideWorkspace(context.workspaceRoot, path);
             const entries = await readdir(resolved); // 读取目录内容
             const results: {
                 name: string;
@@ -94,7 +104,7 @@ export async function executeLocalTool(
 
         case "glob": {
             const { pattern, path } = toolInputSchemas.glob.parse(input);
-            const { cwd, resolved } = resolveInsideCwd(path);
+            const { cwd, resolved } = resolveInsideWorkspace(context.workspaceRoot, path);
             const glob = new Bun.Glob(pattern);
             const files: string[] = [];
             let truncated = false; // 未截断
@@ -125,7 +135,7 @@ export async function executeLocalTool(
 
         case "grep": {
             const { pattern, path, includes } = toolInputSchemas.grep.parse(input);
-            const { cwd, resolved } = resolveInsideCwd(path);
+            const { cwd, resolved } = resolveInsideWorkspace(context.workspaceRoot, path);
 
             const args = [
                 "-rn",
@@ -143,6 +153,8 @@ export async function executeLocalTool(
                 stdout: "pipe",
                 stderr: "pipe",
             });
+            const cancel = () => proc.kill();
+            context.signal.addEventListener("abort", cancel, { once: true });
 
             const [stdout, stderr] = await Promise.all([
                 new Response(proc.stdout).text(),
@@ -150,6 +162,8 @@ export async function executeLocalTool(
             ]);
 
             const exitCode = await proc.exited;
+            context.signal.removeEventListener("abort", cancel);
+            throwIfAborted(context.signal);
 
             if (exitCode !== 0 && exitCode !== 1) {
                 throw new Error(`grep failed: ${stderr.trim()}`);
@@ -206,10 +220,11 @@ export async function executeLocalTool(
 
         case "writeFile": {
             const { path, content } = toolInputSchemas.writeFile.parse(input);
-            const { cwd, resolved } = resolveInsideCwd(path);
+            const { cwd, resolved } = resolveInsideWorkspace(context.workspaceRoot, path);
 
             await mkdir(dirname(resolved), { recursive: true });
-            await writeFile(resolved, content, "utf-8");
+            throwIfAborted(context.signal);
+            await writeFile(resolved, content, { encoding: "utf-8", signal: context.signal });
 
             return {
                 success: true as const,
@@ -220,8 +235,8 @@ export async function executeLocalTool(
 
         case "editFile": {
             const { path, oldString, newString } = toolInputSchemas.editFile.parse(input);
-            const { cwd, resolved } = resolveInsideCwd(path);
-            const content = await readFile(resolved, "utf-8");
+            const { cwd, resolved } = resolveInsideWorkspace(context.workspaceRoot, path);
+            const content = await readFile(resolved, { encoding: "utf-8", signal: context.signal });
             const occurrences = content.split(oldString).length - 1;
 
             if (occurrences === 0) throw new Error("oldString not found in file");
@@ -229,7 +244,8 @@ export async function executeLocalTool(
                 throw new Error(`oldString is ambiguous; found ${occurrences} matches`);
             }
 
-            await writeFile(resolved, content.replace(oldString, newString), "utf-8");
+            throwIfAborted(context.signal);
+            await writeFile(resolved, content.replace(oldString, newString), { encoding: "utf-8", signal: context.signal });
             return { success: true as const, path: relative(cwd, resolved) };
         }
 

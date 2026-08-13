@@ -16,6 +16,9 @@ All notable changes to MORE MORE CODE are recorded here.
 - Deterministic mode-aware `ToolSetSnapshot`, `ToolSetFingerprint`, and `PromptPrefixFingerprint` identities for provider prompt-cache families.
 - Provider Runtime request-compilation boundary with `OpenAIResponsesAdapter` and normalized provider/cache telemetry.
 - ADR-0010 documenting cache-aware Context ordering, persisted compaction-checkpoint reuse, prefix identities, and provider runtime boundaries.
+- Local Tool Runtime with Registry visibility enforcement, capability metadata, permission decisions, timeout/cancellation propagation, and normalized execution status/timing.
+- Semantic Session Tree theme tokens for message, tool, compaction, state-change, branch, error/custom, and timestamp presentation.
+- ADR-0011 documenting append-only Session, compaction supersession, restore authority, and Tool Runtime boundaries.
 
 ### Changed
 
@@ -23,13 +26,15 @@ All notable changes to MORE MORE CODE are recorded here.
 - The local system prompt is now a concise coding-agent prompt that includes PLAN/BUILD rules, skill metadata, and the resolved instruction chain.
 - PLAN mode includes `loadSkill` alongside the existing read-only native tools.
 - System-prefix construction is ordered as core prompt → global instructions → project instructions → Skill catalog, while model-visible Tool schemas remain deterministic through the ToolSet snapshot.
-- Persisted Session `compaction` entries are reused as Context checkpoints across later Model Steps and restored sessions; a checkpoint is replaced only when a new real compaction is required.
+- Persisted Session `compaction` entries are reused as Context checkpoints across later Model Steps and restored sessions; a newer checkpoint summarizes the previous effective checkpoint plus newly compacted history, while older checkpoint Entries remain durable tree history.
+- AgentLoop Tool Steps now route native capabilities through Tool Runtime and persist optional normalized status/source/timing metadata on `tool_result` Entries.
+- Native filesystem operations now receive the Tool Step workspace root and cooperative AbortSignal where supported.
 - OpenAI model execution explicitly selects the Responses API through `openai.responses(...)` and derives `promptCacheKey` from the prompt-prefix fingerprint; `previousResponseId` remains outside canonical Session authority.
 - Provider cache read/write usage is retained as runtime diagnostics rather than semantic Session history.
 
 ### Deferred
 
-- MCP transport/auth/remote tool execution, Local WAL/crash recovery, Permission/Sandbox redesign, and Subagent runtime remain outside this stage.
+- MCP transport/auth/remote tool execution, interactive permission approval UI, OS-level Sandbox enforcement, Local WAL/crash recovery, and Subagent runtime remain outside this stage.
 
 ## [2.0.1] - 2026-08-13
 

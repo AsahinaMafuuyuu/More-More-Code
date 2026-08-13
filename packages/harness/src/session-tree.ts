@@ -53,12 +53,25 @@ export type SessionToolCallEntry = SessionEntryBase & {
   input: unknown;
 };
 
+export type SessionToolResultStatus =
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "timed_out"
+  | "denied"
+  | "approval_required";
+
 export type SessionToolResultEntry = SessionEntryBase & {
   type: "tool_result";
   toolCallId: string;
   toolName?: string;
   output?: unknown;
   error?: string;
+  status?: SessionToolResultStatus;
+  source?: string;
+  startedAt?: number;
+  completedAt?: number;
+  durationMs?: number;
 };
 
 export type SessionErrorEntry = SessionEntryBase & {
@@ -142,6 +155,11 @@ export type SessionEntryInput<TMessage = unknown> =
       toolName?: string;
       output?: unknown;
       error?: string;
+      status?: SessionToolResultStatus;
+      source?: string;
+      startedAt?: number;
+      completedAt?: number;
+      durationMs?: number;
     })
   | (SessionEntryMetadata & {
       type: "error";
@@ -558,7 +576,19 @@ function isSessionEntry(value: unknown): value is SessionEntry<unknown> {
     case "tool_result":
       return typeof entry.toolCallId === "string"
         && (entry.toolName === undefined || typeof entry.toolName === "string")
-        && (entry.error === undefined || typeof entry.error === "string");
+        && (entry.error === undefined || typeof entry.error === "string")
+        && (entry.status === undefined || [
+          "completed",
+          "failed",
+          "cancelled",
+          "timed_out",
+          "denied",
+          "approval_required",
+        ].includes(entry.status as string))
+        && (entry.source === undefined || typeof entry.source === "string")
+        && (entry.startedAt === undefined || typeof entry.startedAt === "number")
+        && (entry.completedAt === undefined || typeof entry.completedAt === "number")
+        && (entry.durationMs === undefined || typeof entry.durationMs === "number");
     case "error":
       return typeof entry.message === "string"
         && (entry.code === undefined || typeof entry.code === "string");

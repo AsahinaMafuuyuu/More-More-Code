@@ -1,245 +1,107 @@
-# Implementation Plan: Stage 5 — Context & Provider Runtime
+# Implementation Plan: Stage 5.1 + Stage 6 — Session Semantics & Tool Runtime
 
-**Status:** Completed on 2026-08-13. All implementation, focused tests, typechecks, and CLI/Server builds pass.
+**Status:** Delivered — 2026-08-13. Stage 5.1 and Stage 6 core runtime are implemented and verified; immediate termination of an already-running native shell subprocess remains a documented Stage 6.1 follow-up because the current DevTools write policy blocked that specific subprocess binding change.
 
 ## Overview
 
-Stage 5 focuses on cache-aware context construction and provider-specific model execution.
-
-The goal is to evolve the existing Context Manager from a token-budget projection layer into a deterministic Context Runtime that controls context ordering, prefix-cache stability, compaction checkpoint reuse, provider request compilation, and cache telemetry.
-
-MCP Runtime, Permission Engine, Sandbox, WAL, and Subagent Runtime are explicitly out of scope for this stage.
+This delivery first locks the Session/Context invariants agreed after Stage 5, then introduces a first-class local Tool Runtime between AgentLoop and native tool implementations. The Server remains persistence-only. MCP transport, OS-level sandboxing, WAL, cloud conflict resolution, and Subagent Runtime remain out of scope.
 
 ## Architecture Decisions
 
-- Context is ordered from most stable to most dynamic to maximize prefix-cache reuse.
-- Canonical Context remains provider-independent.
-- Provider-specific behavior is implemented behind Provider Adapters / Compilers.
-- OpenAI uses `OpenAIResponsesAdapter` while retaining Vercel AI SDK for streaming, tool-call integration, and UI message normalization.
-- OpenAI Responses API is the execution protocol, but OpenAI server-side conversation state is not the canonical MORE-MORE-CODE Session state.
-- Compaction checkpoints are reused instead of regenerating summaries every Model Step.
-- Tool definitions are deterministic and contribute to the prompt-prefix fingerprint.
-- PLAN and BUILD have independent cache families because their exposed Tool Sets differ.
-- MCP, Permission, Sandbox, tool cancellation, and WAL remain deferred.
+- Session history is an append-only semantic tree. New entries are appended as children of the current `activeEntry`; existing entries are never rewritten in place.
+- A newer compaction checkpoint supersedes older checkpoints for model context projection while every historical compaction entry remains in the Session Tree.
+- Session restore restores durable `Tree + activeEntry`; messages, runtime state, and latest compaction checkpoint are projections of that branch.
+- Session-tree event colors and timestamp colors are semantic theme tokens, not hard-coded UI colors.
+- AgentLoop decides when a tool step runs; Tool Runtime decides whether and how the tool executes, how cancellation/timeout is propagated, and how execution status is normalized.
+- Native tools are the first Tool Runtime executor. MCP remains a future executor/source adapter.
+- Permission policy is introduced as an interface with `allow | deny | ask`; this stage ships deterministic local policy enforcement but not an interactive approval UI or OS sandbox.
 
-## Canonical Context Order
+## Phase 1: Stage 5.1 Semantic Lock
 
-Every Model Step should compile context in this order:
-
-```text
-1. Core Coding Agent System Prompt
-2. Global AGENTS.md
-3. Project AGENTS.md
-4. Skill Catalog Metadata
-5. Tool Definitions / Schemas
---------------------------------
-   Stable Prefix Boundary
---------------------------------
-6. Persisted Compaction Checkpoint
-7. Historical Conversation
-8. Retained Recent Complete Turns
-9. Current Tool Results / Runtime Continuation
-10. Current User / Steering / Follow-up Input
-```
-
-General rule:
-
-```text
-most stable
-    ↓
-semi-stable
-    ↓
-append-only history
-    ↓
-most dynamic
-```
-
-Stable sections must use deterministic ordering and serialization.
-
-## Phase 1: Canonical Context Model
-
-### Task 1: Define Context Record categories and stability classes
-
-**Description:** Extend the current Context model so records explicitly describe semantic role and cache stability.
+### Task 1: Lock compaction supersession semantics
 
 **Acceptance criteria:**
+- `compact2` compacts the previous checkpoint plus newly compacted history.
+- Context projection contains only the latest effective checkpoint plus post-checkpoint history.
+- Old compaction entries remain in Session Tree history.
 
-- Stable, historical, retained-tail, and dynamic records are distinguishable.
-- Ordering rules are deterministic.
-- Provider-specific fields do not enter canonical Context records.
+**Verification:** focused Context and Session Tree tests.
 
-**Verification:**
-
-- Unit tests verify deterministic ordering.
-- Existing Context tests continue to pass.
-
-### Task 2: Implement deterministic Context Compiler ordering
-
-**Description:** Compile canonical Context records according to the fixed stable-to-dynamic ordering.
+### Task 2: Lock append-only Session Tree / restore semantics
 
 **Acceptance criteria:**
+- Appending after a historical jump creates a child branch without modifying prior entries.
+- Restore preserves `activeEntryId` and derives branch messages/runtime/latest checkpoint from projections.
 
-- Stable prefix always precedes historical and dynamic content.
-- Skill metadata and tools use deterministic sorting.
-- Equivalent Agent Environments produce byte-stable prefix input.
+**Verification:** Session Tree tests.
 
-**Dependencies:** Task 1
-
-## Checkpoint: Canonical Context
-
-- Context ordering tests pass.
-- Existing compaction behavior remains non-destructive.
-- No provider-specific logic exists inside ContextManager.
-
-## Phase 2: Prefix Cache Identity
-
-### Task 3: Add ToolSetSnapshot and ToolSetFingerprint
-
-**Description:** Produce a deterministic snapshot of model-visible tools for each Model Step.
-
-Fingerprint inputs should include:
-
-```text
-tool name
-source
-description
-input schema
-mode availability
-```
-
-PLAN and BUILD must naturally produce different fingerprints.
-
-### Task 4: Add PromptPrefixFingerprint
-
-**Description:** Create a deterministic identity for the stable prompt prefix.
-
-Initial fingerprint inputs:
-
-```text
-provider
-model
-systemPromptVersion
-globalInstructionsHash
-projectInstructionsHash
-skillCatalogHash
-toolSetFingerprint
-mode
-```
-
-The fingerprint should be suitable for deriving provider cache keys.
-
-**Dependencies:** Tasks 2, 3
-
-## Phase 3: Compaction Checkpoint Reuse
-
-### Task 5: Reuse persisted compaction checkpoints
-
-**Description:** Stop regenerating an equivalent summary on every projection after compaction.
-
-Expected behavior:
-
-```text
-Stable Prefix
-+
-Existing Compaction Checkpoint
-+
-Newer Turns
-```
-
-until another compaction threshold is actually reached.
+### Task 3: Add semantic Session UI theme tokens
 
 **Acceptance criteria:**
+- Session message/tool/compaction/state/branch/error/custom and timestamp colors live in `ThemeColors`.
+- Session Tree UI maps entry semantics to theme tokens and contains no hard-coded event colors.
 
-- A persisted checkpoint remains stable across subsequent Model Steps.
-- New turns append after the checkpoint.
-- A new checkpoint is produced only when another real compaction occurs.
-- Original Session Entries remain unchanged.
+**Verification:** CLI typecheck/build.
 
-## Checkpoint: Cache-Stable Context
+## Checkpoint: Session Semantics
 
-- Repeated Model Steps preserve the longest possible stable prefix.
-- Compaction checkpoint tests cover append-after-compaction behavior.
-- Token-budget constraints remain valid.
+- Context + Session Tree tests pass.
+- Theme typecheck passes.
 
-## Phase 4: Provider Runtime
+## Phase 2: Stage 6 Tool Runtime Foundation
 
-### Task 6: Introduce Provider Adapter boundary
+### Task 4: Introduce Tool Runtime contracts
 
-Target structure:
+Define provider-independent execution types for:
+- Tool capability metadata;
+- execution context (`sessionId/runId/turnId/stepId/workspaceRoot/mode/signal`);
+- permission decisions;
+- normalized execution results and telemetry;
+- executor/source boundary.
 
-```text
-Canonical Context Projection
-        ↓
-Provider Runtime
-        ├── OpenAIResponsesAdapter
-        ├── AnthropicAdapter
-        └── DeepSeekAdapter
-```
+### Task 5: Adapt native tools to the Runtime
 
-Provider adapters translate canonical model input into provider-specific execution configuration without modifying Session or Context semantics.
+**Acceptance criteria:**
+- Native implementations no longer own mode policy.
+- Tool Runtime validates visibility through Tool Registry.
+- Native filesystem/shell tools receive the runtime AbortSignal.
+- Tool-level timeout and cancellation produce normalized statuses.
 
-### Task 7: Implement OpenAIResponsesAdapter
+### Task 6: Wire AgentLoop tool steps through Tool Runtime
 
-Use:
+**Acceptance criteria:**
+- `use-chat` no longer calls `executeLocalTool` directly.
+- AgentLoop `context.signal` reaches the Tool Runtime.
+- Session `tool_result` captures normalized status/duration while preserving output/error compatibility.
 
-```text
-Vercel AI SDK
-+
-@ai-sdk/openai
-+
-openai.responses(...)
-```
+## Checkpoint: Tool Runtime
 
-Responsibilities:
+- Runtime unit tests cover allow/deny/ask, completion, failure, cancellation, and timeout.
+- AgentLoop interruption can cancel an active native shell tool.
+- Existing AgentLoop behavior remains unchanged.
 
-- select OpenAI Responses model;
-- configure provider-specific Responses options;
-- derive/use prompt cache key;
-- expose reasoning configuration;
-- collect Responses/cache metadata;
-- keep streaming through Vercel AI SDK.
+## Phase 3: Documentation & Delivery
 
-Do not make `previous_response_id` the canonical session mechanism in this stage.
+### Task 7: Record architecture decision and current state
 
-**Dependencies:** Tasks 4, 6
+- Add ADR for Session semantic invariants + Tool Runtime boundary.
+- Update README, CONTEXT, CHANGELOG, current-state notes, and project Agent rules where relevant.
 
-## Phase 5: Cache Telemetry
-
-### Task 8: Record provider cache metrics
-
-Expose at minimum when available:
-
-```text
-input tokens
-output tokens
-cached prompt tokens
-cache write tokens
-prompt prefix fingerprint
-tool set fingerprint
-provider/model
-```
-
-Telemetry should be observable without becoming canonical Session semantic history unless explicitly projected into a future diagnostics layer.
-
-## Final Verification
+### Task 8: Final verification
 
 - Harness tests pass.
 - CLI tests pass.
-- CLI / Harness / Server typecheck passes.
-- CLI / Server build passes.
-- Context ordering is deterministic.
-- Prefix fingerprints are deterministic.
-- OpenAI uses explicit Responses API adapter semantics.
-- Existing Session Tree and AgentLoop behavior remains unchanged.
+- Shared/Harness/CLI/Server typechecks pass.
+- CLI/Server builds pass.
+- `git diff --check` has no whitespace errors.
 
 ## Deferred
 
 ```text
-MCP Runtime
-Permission Engine
-Sandbox
-Tool cancellation
-Local WAL / Crash Recovery
+MCP transport / remote tool execution
+Interactive permission approval UI
+OS-level Sandbox enforcement
+Local WAL / crash recovery
 Cloud revision/conflict sync
 Subagent Runtime
 OpenAI server-side conversation as Session authority

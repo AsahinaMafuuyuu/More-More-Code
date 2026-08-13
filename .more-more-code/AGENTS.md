@@ -31,7 +31,17 @@ When working on Context or model-provider code:
 - Keep Vercel AI SDK responsible for streaming and unified message/tool integration unless an explicit architectural decision supersedes this.
 - Do not use OpenAI `previous_response_id` as the canonical MORE-MORE-CODE Session history in this stage.
 - Prefer reusing persisted compaction checkpoints instead of regenerating summaries on every Model Step.
+- A newer compaction checkpoint summarizes the previous effective checkpoint plus newly compacted history; older compaction entries remain durable Session history while model context starts from the latest effective checkpoint.
+- Session restore authority is `Session Tree + activeEntryId`; message/runtime/context state is derived as branch projections.
 - PLAN and BUILD may have different prompt-cache families because their model-visible Tool Sets differ.
+
+## Session and Tool Runtime
+
+- Treat Session Entries as append-only semantic facts. New entries append as children of the current `activeEntry`; continuing from history creates a branch instead of rewriting prior entries.
+- Keep AgentLoop source-agnostic: it owns Run/Turn/Step orchestration, while Tool Runtime owns registry visibility, permission decisions, cancellation/timeout propagation, source selection, and normalized outcomes.
+- Permission decisions use `allow | deny | ask`; interactive approval remains a separate UI concern.
+- Workspace path validation is not OS-level Sandbox enforcement.
+- Session event and timestamp colors belong to semantic Theme tokens rather than component-specific colors.
 
 ## DevTools file deletion
 
