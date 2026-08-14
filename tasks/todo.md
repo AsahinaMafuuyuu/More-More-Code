@@ -120,3 +120,72 @@
 - [ ] Aggressive manual modes such as `/compact --all`
 - [ ] Branch Summary semantic transfer implementation
 - [ ] Exact tokenizer support for every provider/model family
+
+---
+
+# Stage 5.4 — Branch Knowledge Transfer & Lazy Branch Summary
+
+**Status:** Planned — implementation not started.
+
+### Navigation Delta & Provenance
+
+- [ ] Add pure Session Tree source/target path comparison and LCA calculation
+- [ ] Treat target-path containment of the current source path as no information-loss navigation
+- [ ] Extract only source-only Entries after the LCA for ancestor/cross-branch navigation
+- [ ] Filter Branch Summary candidates to semantic Entries; ignore `session_start`, `model_change`, `mode_change`, and `config_change` by default
+- [ ] Keep `user_message`, `assistant_message`, relevant message updates, tool call/results, errors, compaction, branch summaries, and supported semantic custom Entries eligible
+- [ ] Add structured transfer metadata with `sourceTipEntryId`, `targetEntryId`, `commonAncestorEntryId`, and exact `coveredEntryIds`
+- [ ] Deduplicate repeated transfers by subtracting Entry IDs already covered by prior relevant Branch Summary transfers
+- [ ] Allow prior Branch Summary Entries to participate as transferable semantic knowledge
+
+### Branch Summary Reduction
+
+- [ ] Keep `summary` itself as bounded plain text; keep provenance/coverage as structured Session metadata
+- [ ] Add a Branch Summary reducer contract separate from Context Compaction semantics
+- [ ] Use stable text sections for key findings, decisions, artifacts, failures/lessons, and pending work
+- [ ] Cap Branch Summary output at `min(4096 tokens, 4% effective input budget)`
+- [ ] Do not add a Compaction-style gain-ratio gate; meaningful knowledge preservation is sufficient reason to transfer
+- [ ] Run Tool Result Working Set/pruning before Branch Summary reduction when source delta contains large Tool Results
+- [ ] Add deterministic fallback for reducer failure
+- [ ] Append nothing when both semantic and deterministic reduction cannot produce valid non-empty summary text
+
+### Lazy Navigation Transfer
+
+- [ ] Add `branchSummaryOnJump = ask | always | never` with `ask` as the default
+- [ ] Route `/tree`, `/jump`, parent/root, and equivalent navigation through one navigation/transfer controller
+- [ ] Do not ask when target Context already contains the source path or source-only semantic delta is empty
+- [ ] `Cancel`: keep the original source active and append nothing
+- [ ] `No Carry`: jump only; append nothing and do not create a branch until a later real Session mutation
+- [ ] `Carry`: jump to target, generate transfer, append exactly one `branch_summary` child, and make it active
+- [ ] If Carry reduction fails completely, leave the target active and append no invalid/empty Branch Summary
+- [ ] Verify ordinary browsing never creates durable Session branches
+
+### Context & Compaction Interop
+
+- [ ] Project active-path Branch Summary text into canonical historical Context without creating fake chat messages
+- [ ] Keep UI Message Projection unchanged
+- [ ] Preserve stable provider-independent Context ordering
+- [ ] Allow sufficiently old Branch Summary records to participate in normal historical Compaction
+- [ ] Ensure absorbed Branch Summary knowledge is not duplicated after checkpoint reuse
+- [ ] Preserve append-only source Branch Summary Entries after Compaction
+
+### Tests, UX & Delivery
+
+- [ ] Add Harness tests for descendant, ancestor, sibling, cross-branch, and root navigation analysis
+- [ ] Add tests for state-only delta, incremental coverage, prior-summary propagation, and non-contiguous coverage
+- [ ] Add reducer/fallback/oversized-Tool-Result tests
+- [ ] Add CLI tests for `ask | always | never`, Carry / No Carry / Cancel, and lazy branch creation
+- [ ] Add Branch Summary -> Compaction -> restore regression coverage
+- [ ] Add/update ADR for Branch Knowledge Transfer and lazy navigation semantics
+- [ ] Update README / CONTEXT / PROJECT_ANALYSIS / CHANGELOG / command/settings documentation
+- [ ] Run full tests, Shared/Harness/CLI/Server typechecks, CLI/Server builds, and `git diff --check`
+- [ ] Verify backward compatibility with existing `branch_summary` Entries that contain only `summary`
+
+### Deferred from Stage 5.4
+
+- [ ] Automatic semantic branch merge/conflict resolution
+- [ ] Branch ranking or relevance search across unrelated branches
+- [ ] LLM relevance scoring over arbitrary branch history
+- [ ] In-place editing/rewriting of existing Branch Summary Entries
+- [ ] Dedicated branch IDs instead of path-derived branches
+- [ ] Cloud collaborative branch merge semantics

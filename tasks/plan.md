@@ -362,3 +362,237 @@ Expected behavior:
 - Aggressive/manual compaction flags such as `/compact --all`; V1 exposes one safe `/compact` behavior.
 - Branch Summary semantic transfer implementation.
 - Exact tokenizer support for every provider/model family.
+
+---
+
+# Next Plan: Stage 5.4 — Branch Knowledge Transfer & Lazy Branch Summary
+
+**Status:** Planned — 2026-08-14.
+
+## Overview
+
+Implement Branch Summary as a branch-to-branch knowledge-transfer mechanism on top of the append-only Session Entry Tree. Navigation itself remains non-destructive and does not automatically create a branch. The runtime asks about knowledge transfer only when moving to a target path would discard meaningful source-only semantic information. If the user chooses to carry that information, a `branch_summary` Entry is appended under the target and immediately forms the new branch. If the user declines, navigation remains a pure view-state change and a new branch forms only when the user later performs a real Session mutation such as submitting a new message.
+
+Branch Summary is intentionally distinct from Compaction. Compaction produces a bounded replacement snapshot for one active branch; Branch Summary transfers useful discoveries from a departed branch into another branch. The summary itself is plain text, while Session metadata records provenance and coverage for incremental transfer and deduplication.
+
+## Architecture Decisions
+
+- **Navigation loss is determined by tree paths, not UI direction labels.** If the target path already contains the current source path, navigation loses no source knowledge and does not ask. If source-only meaningful entries would disappear from the target Context, the configured Branch Summary policy applies.
+- **Browsing is not branching.** `jumpToEntry()` may change `activeEntryId` and projected messages/runtime state without appending any Session Entry. Merely inspecting older or sibling history must not create durable branch artifacts.
+- **Lazy transfer.** With policy `ask`, the user is prompted only when source-only meaningful semantic delta exists. Choosing Carry immediately appends a `branch_summary` Entry under the target and therefore creates a new branch. Choosing No Carry leaves the target unchanged; the first later real Session mutation creates the branch naturally.
+- **Summary content is plain text; provenance is structured metadata.** The model-facing knowledge remains a bounded text summary. Harness metadata records source tip, target, common ancestor, and exact covered Entry IDs.
+- **Incremental transfer is coverage-based.** Previous transfers are not rewritten. Already-covered source Entry IDs are excluded from later transfer candidates so repeated navigation summarizes only newly discovered source knowledge.
+- **A prior `branch_summary` may itself be summarized/transferred.** This allows knowledge to survive multiple branch hops. Provenance still claims only the Entries consumed by the current transfer.
+- **Branch Summary is historical semantic Context, not a checkpoint and not a fake chat Message.** It participates in canonical Context Projection at its Session-path position and can later be absorbed by normal historical Compaction.
+- **Runtime/config state is not transferred as branch knowledge.** Target branch model/mode/config state is restored from its own path. Branch Summary does not overwrite target runtime state.
+- **Branch Summary has a bounded independent output budget.** V1 uses `min(4096 tokens, 4% of effective input budget)` as the maximum generated summary size. There is no Compaction-style gain-ratio gate because transfer exists to preserve knowledge, not primarily to reclaim tokens.
+- **Reducer failure is isolated.** Semantic transfer falls back to a bounded deterministic summary. If neither semantic nor deterministic reduction can produce valid non-empty content, no `branch_summary` Entry is appended and the target remains the active navigation point.
+
+## Proposed Session Entry Shape
+
+The existing `branch_summary` Session Entry is extended conceptually to:
+
+```ts
+type SessionBranchSummaryEntry = {
+  id: string;
+  parentId: string | null;
+  createdAt: number;
+  type: "branch_summary";
+
+  summary: string;
+
+  transfer: {
+    sourceTipEntryId: string;
+    targetEntryId: string;
+    commonAncestorEntryId: string;
+    coveredEntryIds: string[];
+    previousTransferEntryIds?: string[];
+  };
+};
+```
+
+`coveredEntryIds` is preferred over a simple `fromEntryId -> throughEntryId` range because transfer candidates may intentionally exclude state-only Entries such as `model_change`, `mode_change`, or `config_change`.
+
+## Meaningful Transfer Candidates
+
+V1 treats the following source-only Entry types as branch-summary semantic candidates:
+
+- `user_message`
+- `assistant_message`
+- `custom_message`
+- `message_update` when it materially changes a candidate message
+- `tool_call`
+- `tool_result`
+- `error`
+- `compaction`
+- `branch_summary`
+- relevant `custom` semantic entries when explicitly supported by the projector
+
+The following are not transferred as branch knowledge by default:
+
+- `session_start`
+- `model_change`
+- `mode_change`
+- `config_change`
+
+Tool Results remain subject to the existing Tool Result Working Set/pruning rules before they are given to a Branch Summary reducer, so one large log cannot dominate transfer input.
+
+## Phase 1: Navigation Delta & Transfer Provenance
+
+### Task 1: Add path/LCA and source-only delta analysis
+
+Introduce provider-independent Session Tree helpers that compare the current source path and requested target path, compute their lowest common ancestor, and return source-only Entries in stable tree order.
+
+**Acceptance criteria:**
+- Descendant navigation where the target path contains the source path reports no lost source delta.
+- Ancestor and cross-branch navigation reports only the source-only path segment after the LCA.
+- Analysis is pure/read-only and never changes `activeEntryId` or appends Entries.
+
+**Verification:** Harness Session Tree tests for descendant, ancestor, sibling, deep cross-branch, and root navigation.
+
+### Task 2: Filter meaningful transfer candidates and track coverage
+
+Filter source-only Entries through the Branch Summary semantic eligibility rules and subtract Entries already covered by prior relevant transfer metadata.
+
+**Acceptance criteria:**
+- State-only source delta does not trigger Branch Summary Ask.
+- Repeated transfer from the same evolved source branch excludes previously covered Entry IDs.
+- Existing Branch Summary Entries may participate as semantic input without corrupting coverage provenance.
+
+**Verification:** Harness tests for state-only delta, repeated transfer, prior summary propagation, and non-contiguous covered Entry IDs.
+
+## Checkpoint: Navigation Analysis
+
+- Path comparison distinguishes browsing from knowledge-loss navigation.
+- LCA/source-only delta is deterministic.
+- Meaningful transfer filtering and coverage deduplication are test-covered.
+- No Session mutations occur during analysis.
+
+## Phase 2: Branch Summary Reduction
+
+### Task 3: Define Branch Summary reducer contract and text format
+
+Add a provider-independent Branch Summary reducer contract in Harness and a CLI semantic reducer implementation. The result is plain text, preferably using stable Markdown sections such as Key Findings, Decisions, Artifacts, Failures/Lessons, and Pending Work.
+
+**Acceptance criteria:**
+- Reducer receives only meaningful uncovered source Entries plus relevant prior transferred summaries.
+- Output is a non-empty string bounded by `min(4096 tokens, 4% effective input budget)`.
+- State-only runtime/config changes are not represented as target-state overrides.
+
+**Verification:** reducer prompt/contract tests and bounded-output tests.
+
+### Task 4: Add deterministic fallback and Tool Result input pruning
+
+Reuse existing bounded Tool Result projection before semantic branch reduction and provide a deterministic Branch Summary fallback when the model reducer fails.
+
+**Acceptance criteria:**
+- Large Tool Results are bounded before branch-summary generation without mutating canonical Session Entries.
+- Semantic reducer failure does not fail navigation or corrupt the Session Tree.
+- If both semantic and deterministic reduction produce no valid text, transfer returns a typed failure/no-op and appends nothing.
+
+**Verification:** oversized Tool Result, reducer-error, empty-output, and deterministic-fallback tests.
+
+## Phase 3: Lazy Navigation Transfer
+
+### Task 5: Introduce a unified navigation/transfer controller
+
+Route `/tree`, `/jump`, parent/root navigation, and future navigation surfaces through one controller that can inspect the source/target paths before applying navigation.
+
+Branch Summary policy:
+
+```text
+branchSummaryOnJump = "ask" | "always" | "never"
+default = "ask"
+```
+
+Expected decision flow:
+
+```text
+request target
+  -> analyze source/target paths
+  -> no meaningful source-only delta: jump directly
+  -> meaningful delta + never: jump directly
+  -> meaningful delta + ask: prompt Carry / No Carry / Cancel
+  -> meaningful delta + always: carry automatically
+```
+
+**Acceptance criteria:**
+- No prompt is shown when target Context already contains the source path or source-only delta is semantically empty.
+- Cancel leaves the source active and makes no Session mutation.
+- No Carry changes only navigation state; it does not append a branch Entry.
+
+**Verification:** controller tests for each policy and navigation topology.
+
+### Task 6: Append Branch Summary lazily when Carry is selected
+
+After Carry is selected, navigate to the target, generate the transfer summary, then append exactly one `branch_summary` child under that target. The new Branch Summary becomes active and therefore immediately establishes the new branch.
+
+**Acceptance criteria:**
+- Successful Carry creates exactly one branch-summary child under the target.
+- Summary metadata records source tip, target, LCA, and exact covered Entry IDs.
+- No Carry leaves the target as the active Entry and waits for a later real Session mutation to create a branch.
+- Failed transfer leaves the target active but appends no empty/invalid branch-summary Entry.
+
+**Verification:** Session Tree branch-local tests and CLI navigation integration tests.
+
+## Checkpoint: Lazy Transfer Semantics
+
+- Browsing alone creates no durable branch.
+- Carry immediately creates a branch via one `branch_summary` Entry.
+- No Carry creates no branch until a later real mutation.
+- Repeated transfer is incremental and coverage-aware.
+
+## Phase 4: Context Projection & Compaction Interop
+
+### Task 7: Project Branch Summary into canonical model Context
+
+Add Branch Summary as a semantic historical Context record at its Session-path position rather than converting it into a fake user/assistant message or a second checkpoint.
+
+**Acceptance criteria:**
+- Branch Summary text reaches model Context when it lies on the active Session path.
+- UI Message Projection remains unchanged; Branch Summary is not rendered as normal chat content.
+- Context ordering remains stable and provider-independent.
+
+**Verification:** Context projection tests with messages, checkpoint, branch summary, retained tail, and current input.
+
+### Task 8: Allow normal Compaction to absorb old Branch Summaries
+
+Extend historical Compaction source selection so sufficiently old Branch Summary semantic records can be folded into the next replacement checkpoint while their Session Entries remain append-only history.
+
+**Acceptance criteria:**
+- A newer checkpoint may represent prior Branch Summary knowledge together with older conversation history.
+- Compaction never deletes or rewrites the source `branch_summary` Entry.
+- Latest checkpoint reuse does not duplicate absorbed branch knowledge in model Context.
+
+**Verification:** chained Branch Summary -> Compaction -> restored Session tests.
+
+## Phase 5: UI, Documentation & Delivery
+
+### Task 9: Add Branch Summary navigation UX and policy setting
+
+Expose Carry / No Carry / Cancel when `ask` applies and add the `ask | always | never` policy to the relevant settings surface. Preserve existing semantic theme tokens for Branch Summary presentation in the Session Tree.
+
+**Acceptance criteria:**
+- Prompt appears only for meaningful knowledge-loss navigation.
+- User choice is clear and does not manufacture a chat Turn.
+- Policy is deterministic across `/tree`, `/jump`, parent/root, and equivalent navigation surfaces.
+
+**Verification:** command/dialog tests plus manual CLI check.
+
+### Task 10: Document and verify Stage 5.4
+
+- Add/update ADR for Branch Knowledge Transfer and lazy navigation semantics.
+- Update README, CONTEXT, PROJECT_ANALYSIS, CHANGELOG, AGENTS rules where necessary.
+- Run focused and full Harness/CLI tests.
+- Run Shared/Harness/CLI/Server typechecks.
+- Run CLI/Server builds and `git diff --check`.
+- Verify Session Tree persistence remains backward compatible when older `branch_summary` Entries contain only `summary`.
+
+## Explicitly Deferred
+
+- Automatic semantic branch merging or conflict resolution.
+- Branch ranking/relevance search across unrelated branches.
+- LLM-based relevance scoring over arbitrary branch history.
+- Editing or rewriting existing Branch Summary Entries in place; transfers remain append-only.
+- Dedicated branch IDs; V1 continues to derive branches from Session Entry paths.
+- Remote/cloud collaborative branch merge semantics.
