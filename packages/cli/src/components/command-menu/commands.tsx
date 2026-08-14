@@ -1,10 +1,44 @@
 import { Children } from "react";
 import type { Command } from "./types";
 import { SUPPORTED_CHAT_MODELS } from "@more-more-code/shared";
-import { ThemeDialogContent, AgentsDialogContent, SessionsDialogContent, ModelsDialogContent, SessionTreeDialogContent, SettingsDialogContent } from "../dialogs";
+import { ThemeDialogContent, AgentsDialogContent, SessionsDialogContent, ModelsDialogContent, SessionTreeDialogContent, SettingsDialogContent, BranchSummaryDecisionDialogContent, showNavigationResultToast } from "../dialogs";
 import { performLogin } from "../../lib/oauth";
 import { clearAuth } from "../../lib/auth";
 import { openBillingPortal, openUpgradeCheckout } from "../../lib/upgrade";
+
+async function requestSessionTreeJump(
+    ctx: Parameters<NonNullable<Command["action"]>>[0],
+    targetEntryId: string,
+) {
+    if (!ctx.sessionTree) {
+        ctx.toast.show({ variant: "error", message: "Session tree is not available here" });
+        return;
+    }
+
+    const intent = ctx.sessionTree.inspectJump(targetEntryId);
+    if (intent.action === "ask") {
+        ctx.dialog.open({
+            title: "Carry Branch Knowledge",
+            children: (
+                <BranchSummaryDecisionDialogContent
+                    tree={ctx.sessionTree}
+                    targetEntryId={targetEntryId}
+                />
+            ),
+        });
+        return;
+    }
+
+    try {
+        const result = await ctx.sessionTree.jump(targetEntryId);
+        showNavigationResultToast(result, ctx.toast);
+    } catch (error) {
+        ctx.toast.show({
+            variant: "error",
+            message: error instanceof Error ? error.message : String(error),
+        });
+    }
+}
 
 export const COMMANDS: Command[] = [
     {
@@ -88,22 +122,28 @@ export const COMMANDS: Command[] = [
         name: 'parent',
         description: "Jump to the parent of the active session node",
         value: "/parent",
-        action: (ctx) => {
-            if (!ctx.sessionTree?.jumpParent()) {
-                ctx.toast.show({ message: "Already at the root session node" });
+        action: async (ctx) => {
+            if (!ctx.sessionTree) {
+                ctx.toast.show({ variant: "error", message: "Session tree is not available here" });
+                return;
             }
+            if (!ctx.sessionTree.parentEntryId) {
+                ctx.toast.show({ message: "Already at the root session node" });
+                return;
+            }
+            await requestSessionTreeJump(ctx, ctx.sessionTree.parentEntryId);
         },
     },
     {
         name: 'root',
         description: "Jump to the root of the current session tree",
         value: "/root",
-        action: (ctx) => {
+        action: async (ctx) => {
             if (!ctx.sessionTree) {
                 ctx.toast.show({ variant: "error", message: "Session tree is not available here" });
                 return;
             }
-            ctx.sessionTree.jumpRoot();
+            await requestSessionTreeJump(ctx, ctx.sessionTree.rootEntryId);
         },
     },
     {

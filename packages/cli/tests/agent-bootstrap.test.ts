@@ -31,6 +31,7 @@ describe("agent bootstrap", () => {
         const merged = mergeAgentConfig(
             {
                 skills: { enabled: false },
+                session: { branchSummaryOnJump: "never" },
                 tools: {
                     mcp: {
                         servers: {
@@ -41,6 +42,7 @@ describe("agent bootstrap", () => {
             },
             {
                 skills: { enabled: true, directories: ["project-skills"] },
+                session: { branchSummaryOnJump: "always" },
                 tools: {
                     mcp: {
                         servers: {
@@ -53,7 +55,12 @@ describe("agent bootstrap", () => {
 
         expect(merged.skills.enabled).toBe(true);
         expect(merged.skills.directories).toEqual(["project-skills"]);
+        expect(merged.session.branchSummaryOnJump).toBe("always");
         expect(Object.keys(merged.tools.mcp.servers).sort()).toEqual(["globalDocs", "projectTools"]);
+    });
+
+    test("defaults Branch Summary navigation policy to ask", () => {
+        expect(mergeAgentConfig({}, {}).session.branchSummaryOnJump).toBe("ask");
     });
 
     test("loads global then project instructions and progressively discovers skills", async () => {

@@ -258,6 +258,70 @@ describe("session entry tree v3", () => {
     });
   });
 
+  test("restores Branch Summary provenance and later compaction without rewriting source entries", () => {
+    const options = deterministicOptions();
+    let state = createSessionTree<TestMessage>([], options);
+    state = appendSessionTreeMessages(state, [message("u1"), message("a1")], {}, options);
+    const sourceTip = state.activeEntryId;
+    const targetEntryId = state.rootEntryId;
+    state = jumpToSessionEntry(state, targetEntryId);
+    state = appendSessionEntry(state, {
+      type: "branch_summary",
+      summary: "Transferred branch knowledge",
+      transfer: {
+        sourceTipEntryId: sourceTip,
+        targetEntryId,
+        commonAncestorEntryId: targetEntryId,
+        coveredEntryIds: [sourceTip],
+      },
+    }, options);
+    const branchSummaryId = state.activeEntryId;
+    state = appendSessionEntry(state, {
+      type: "compaction",
+      summary: "Checkpoint containing transferred branch knowledge",
+      compactedRecordIds: [branchSummaryId],
+      retainedTailRecordIds: [],
+    }, options);
+
+    const restored = restoreSessionTree<TestMessage>(structuredClone(state), options);
+    const branchSummary = restored.entries.find((entry) => entry.id === branchSummaryId);
+    expect(branchSummary).toMatchObject({
+      type: "branch_summary",
+      summary: "Transferred branch knowledge",
+      transfer: {
+        sourceTipEntryId: sourceTip,
+        coveredEntryIds: [sourceTip],
+      },
+    });
+    expect(projectLatestSessionCompaction(restored)).toMatchObject({
+      compactedRecordIds: [branchSummaryId],
+    });
+  });
+
+  test("keeps older summary-only Branch Summary entries backward compatible", () => {
+    const state = createSessionTree<TestMessage>([], deterministicOptions());
+    const persisted = {
+      ...state,
+      activeEntryId: "legacy-branch-summary",
+      entries: [
+        ...state.entries,
+        {
+          id: "legacy-branch-summary",
+          parentId: state.rootEntryId,
+          createdAt: 123,
+          type: "branch_summary",
+          summary: "legacy summary",
+        },
+      ],
+    };
+
+    const restored = restoreSessionTree<TestMessage>(persisted, deterministicOptions());
+    expect(getActiveSessionEntry(restored)).toMatchObject({
+      type: "branch_summary",
+      summary: "legacy summary",
+    });
+  });
+
   test("restores legacy linear message arrays as v3 message entries", () => {
     const restored = restoreSessionTree<TestMessage>(
       [message("u1"), message("a1")],

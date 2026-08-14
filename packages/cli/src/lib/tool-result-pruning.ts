@@ -220,7 +220,7 @@ function genericProjection(candidate: ToolResultProjectionCandidate<unknown>) {
   return headTail(serialize(candidate.payload), 16, 12).join("\n");
 }
 
-function projectCandidate(input: {
+export function projectToolResultCandidate(input: {
   candidate: ToolResultProjectionCandidate<unknown>;
   targetTokens: number;
   reason: Exclude<ToolResultPruningReason, "within-budget">;
@@ -352,7 +352,7 @@ export function projectToolResultWorkingSet(input: {
     input.inputBudgetTokens,
     {
       project(request) {
-        return projectCandidate({ ...request, profile: input.profile });
+        return projectToolResultCandidate({ ...request, profile: input.profile });
       },
     },
     {

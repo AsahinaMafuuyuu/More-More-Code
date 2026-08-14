@@ -58,7 +58,7 @@ The provider-independent Context policy that decides when and how much history t
 
 ## Branch Summary
 
-A knowledge-transfer summary created when leaving or navigating between Session branches. It answers what useful information a departed branch discovered and is intentionally separate from Compaction, which reduces the active branch into a bounded current-state snapshot.
+A bounded knowledge-transfer record created only when navigation would otherwise drop meaningful source-only branch knowledge and policy/user choice requests Carry. Navigation analysis compares source/target Session paths, computes their LCA, excludes runtime-only state Entries, and deduplicates already-covered Entry IDs. The summary is plain semantic text with structured provenance (`sourceTipEntryId`, `targetEntryId`, `commonAncestorEntryId`, `coveredEntryIds`); older summary-only Entries remain valid. `ask` is the default `branchSummaryOnJump` policy, with `always` and `never` alternatives. Cancel mutates nothing, No Carry performs only navigation, and Carry jumps to the target before appending exactly one `branch_summary` child. Branch Summary is historical canonical Context rather than a fake chat Message or Compaction checkpoint; sufficiently old summaries may later be absorbed by normal Compaction without deleting their Session Entries or being duplicated after checkpoint reuse.
 
 ## ToolSet Fingerprint
 

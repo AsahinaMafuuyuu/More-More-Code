@@ -38,6 +38,7 @@ When working on Context or model-provider code:
 - Preserve fresh/current Tool Results for immediate continuation when feasible; warm/cold results may use bounded `full | truncated | summary | reference` projections under a budget derived from the effective model input budget.
 - Manual `/compact` must reuse the normal compaction source-selection/reducer/checkpoint pipeline with `trigger=manual`; it may bypass automatic utilization thresholds but must first pass the provider-independent manual eligibility gates for minimum compactable history, checkpoint-relative new Turn progress, and estimated token savings. Do not implement repeat-compaction protection as a wall-clock cooldown. Manual compaction must not bypass required/retained records, atomic group boundaries, branch-local persistence, or append-only Session history.
 - Branch Summary is a separate branch knowledge-transfer mechanism and must not reuse Compaction trigger/state-snapshot semantics by default.
+- Session navigation must remain lazy: browsing/jumping alone does not append Session Entries. Analyze source/target path loss first; only an explicit/configured Carry may append one provenance-bearing `branch_summary` child under the target. `No Carry` is navigation-only and `Cancel` must leave the source active.
 - Session restore authority is `Session Tree + activeEntryId`; message/runtime/context state is derived as branch projections.
 - PLAN and BUILD may have different prompt-cache families because their model-visible Tool Sets differ.
 

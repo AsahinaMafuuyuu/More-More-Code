@@ -283,8 +283,8 @@ CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为
 2. **模型清单与实际 Provider 支持仍不完全一致**
    当前本地 resolver 实现 OpenAI、Anthropic 和 DeepSeek；其他模型应在清单或 resolver 层统一处理。
 
-3. **云 Session 已升级为 event-backed tree snapshot，但同步仍是 last-write-wins**
-   Session Tree v2 的节点只保存 `eventIds`，canonical message events 独立存放在 `events[]`，避免每个分支节点复制完整历史；`POST /sessions/:id/state` 仍没有 revision / optimistic concurrency / conflict resolution。
+3. **云 Session 已升级为 Session Entry Tree v3，但同步仍是 last-write-wins**
+   v3 直接持久化 append-only `entries[]`；message、tool、runtime-state change、compaction 与 branch summary 都是可分支的 Session Entries，旧 linear/v1/v2 状态在 CLI 恢复时兼容升级。`POST /sessions/:id/state` 仍没有 revision / optimistic concurrency / conflict resolution。
 
 4. **Execution Events + 生命周期交互已建立，但仍只在进程内**
    Run / Turn / Step 已经是 `ExecutionEvent[]` 的 projection，并拥有明确的 lifecycle/interaction boundary；默认由 `InMemoryExecutionEventStore` 保存。CLI 重启后仍不会恢复精确执行轨迹或尚未消费的 steering/follow-up queue。下一步需要 Local WAL / crash recovery，再考虑 cloud revision/conflict sync。
@@ -292,8 +292,8 @@ CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为
 5. **Tool Step 的主动取消尚未完善**
    Model Step 可以被 abort，Harness 也会停止后续 Step，但已启动的本地 shell/tool 还需要 Tool Runtime 级 cancellation。
 
-6. **Context reduction 已形成 Tool Working Set + semantic Compaction 两层，但 tokenizer 仍是显式估算器**
-   Model Step 先按有效输入预算建立 Tool Result Working Set：fresh 结果优先保持完整，warm/cold shell、test/build、search/grep、file-read、generic 输出可在 model-facing clone 中做 `truncated/summary/reference` 投影，canonical Session `tool_result` 不变；默认工作集/单结果 full/reference 比例为 25% / 6% / 0.6%。若 pruning 后仍需要历史压缩，ContextManager 再按 80% soft / 92% hard / 70% post-compaction policy 和完整 Context group/Turn 原子 cut point执行 semantic Compaction。`/compact` 复用同一 reducer/checkpoint pipeline，以 `manual` trigger 绕过自动阈值，但执行 reducer 前会先检查最小可压缩历史、已有 checkpoint 后的新 Turn 增量与保守压缩收益；重复压缩判断基于 Session/checkpoint 进展而非时间 cooldown。Harness 同时提供 exact tokenizer adapter 接口，但当前配置的模型家族尚未安装对应精确 tokenizer 实现，因此运行时仍明确标记为 `estimated`。
+6. **Context reduction 已形成 Tool Working Set + Branch Summary + semantic Compaction 三种独立语义，但 tokenizer 仍是显式估算器**
+   Tool Result Working Set 先对过大的 warm/cold shell、test/build、search/grep、file-read、generic 输出做 model-facing `truncated/summary/reference` 投影，canonical `tool_result` 不变。Branch Summary 则在跨路径导航确实会丢失 source-only 语义知识时按 `ask | always | never` 做 lazy transfer；Carry 使用独立 bounded reducer（上限 `min(4096, 4% input budget)`），并以 provenance/coverage 去重，No Carry/Cancel 均不制造 Session branch。Active-path Branch Summary 作为 historical Context record 参与普通 Compaction；checkpoint 使用 generic record IDs 防止已吸收知识重复投影。历史 Compaction 仍按 80% soft / 92% hard / 70% target 和完整 group/Turn cut point运行，`/compact` 复用同一 checkpoint pipeline并执行安全 eligibility gate。Harness 同时提供 exact tokenizer adapter 接口，但当前模型家族仍使用明确标记为 `estimated` 的计数器。
 
 7. **云同步暂时是 best-effort**
    同步失败不会让本地 Agent Run 失败，这是正确的故障域隔离；但目前只有日志，没有 retry queue、本地 WAL 或离线 Session Store。
@@ -320,7 +320,7 @@ CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为
 - CLI 本地 Model Step 与 Tool Step；
 - 终端流式交互和中断；
 - 云端 Session 创建、读取和 event-backed Session Tree v2 snapshot 同步；
-- Canonical message event history、任意节点投影、跳转与从历史节点自然分叉；
+- Session Entry Tree v3、任意 Entry 投影、lazy navigation 与 coverage-aware Branch Summary knowledge transfer；
 - Harness ContextManager、ModelContextProfile、Turn-aware token budget、retained tail、Tool Result Working Set 与 automatic/manual semantic Compaction；
 - 多 Provider 的本地抽象；
 - AgentLoop / lifecycle interaction / ExecutionEventStore / Execution Projection / ContextManager / Session Tree 确定性测试基础。

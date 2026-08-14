@@ -24,6 +24,11 @@ export {
 export { createExactTokenCounter, createHeuristicTokenCounter } from "./token-budget";
 export { ToolResultWorkingSetManager } from "./tool-result-projection";
 export {
+  analyzeBranchSummaryNavigation,
+  createBranchSummaryTransferMetadata,
+  resolveBranchSummaryTokenBudget,
+} from "./branch-summary";
+export {
   SESSION_TREE_VERSION,
   appendSessionEntries,
   appendSessionEntry,
@@ -47,6 +52,12 @@ export {
   restoreSessionTree,
 } from "./session-tree";
 
+export type {
+  BranchSummaryAnalysisOptions,
+  BranchSummaryNavigationAnalysis,
+  BranchSummaryReducer,
+  BranchSummaryReducerInput,
+} from "./branch-summary";
 export type {
   ExecutionEvent,
   ExecutionEventBase,
@@ -115,6 +126,7 @@ export type {
 } from "./context";
 export type {
   SessionBranchSummaryEntry,
+  SessionBranchSummaryTransferMetadata,
   SessionCompactionEntry,
   SessionConfigChangeEntry,
   SessionCustomEntry,

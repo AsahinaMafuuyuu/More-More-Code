@@ -111,14 +111,26 @@ export type SessionCompactionEntry = SessionEntryBase & {
   inputBudgetTokens?: number;
   targetInputTokens?: number;
   targetSummaryTokens?: number;
+  compactedThroughRecordId?: string;
   compactedThroughMessageId?: string;
   compactedMessageIds?: string[];
   retainedTailMessageIds?: string[];
+  compactedRecordIds?: string[];
+  retainedTailRecordIds?: string[];
 };
 
 export type SessionBranchSummaryEntry = SessionEntryBase & {
   type: "branch_summary";
   summary: unknown;
+  transfer?: SessionBranchSummaryTransferMetadata;
+};
+
+export type SessionBranchSummaryTransferMetadata = {
+  sourceTipEntryId: string;
+  targetEntryId: string;
+  commonAncestorEntryId: string;
+  coveredEntryIds: string[];
+  previousTransferEntryIds?: string[];
 };
 
 export type SessionCustomEntry = SessionEntryBase & {
@@ -201,13 +213,17 @@ export type SessionEntryInput<TMessage = unknown> =
       inputBudgetTokens?: number;
       targetInputTokens?: number;
       targetSummaryTokens?: number;
+      compactedThroughRecordId?: string;
       compactedThroughMessageId?: string;
       compactedMessageIds?: string[];
       retainedTailMessageIds?: string[];
+      compactedRecordIds?: string[];
+      retainedTailRecordIds?: string[];
     })
   | (SessionEntryMetadata & {
       type: "branch_summary";
       summary: unknown;
+      transfer?: SessionBranchSummaryTransferMetadata;
     })
   | (SessionEntryMetadata & {
       type: "custom";
@@ -618,12 +634,26 @@ function isSessionEntry(value: unknown): value is SessionEntry<unknown> {
     case "compaction":
       return "summary" in entry;
     case "branch_summary":
-      return "summary" in entry;
+      return "summary" in entry
+        && (entry.transfer === undefined || isBranchSummaryTransferMetadata(entry.transfer));
     case "custom":
       return typeof entry.customType === "string" && "data" in entry;
     default:
       return false;
   }
+}
+
+function isBranchSummaryTransferMetadata(value: unknown): value is SessionBranchSummaryTransferMetadata {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<SessionBranchSummaryTransferMetadata>;
+  return typeof candidate.sourceTipEntryId === "string"
+    && typeof candidate.targetEntryId === "string"
+    && typeof candidate.commonAncestorEntryId === "string"
+    && Array.isArray(candidate.coveredEntryIds)
+    && candidate.coveredEntryIds.every((id) => typeof id === "string")
+    && (candidate.previousTransferEntryIds === undefined
+      || (Array.isArray(candidate.previousTransferEntryIds)
+        && candidate.previousTransferEntryIds.every((id) => typeof id === "string")));
 }
 
 export function isSessionTreeState(value: unknown): value is SessionTreeState<unknown> {

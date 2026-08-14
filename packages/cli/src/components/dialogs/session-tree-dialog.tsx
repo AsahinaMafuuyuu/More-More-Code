@@ -4,6 +4,11 @@ import { useDialog } from "../../providers/dialog";
 import { useTheme } from "../../providers/theme";
 import type { ThemeColors } from "../../theme";
 import { DialogSearchList } from "../dialog-search-list";
+import {
+    BranchSummaryDecisionDialogContent,
+    showNavigationResultToast,
+} from "./branch-summary-decision-dialog";
+import { useToast } from "../../providers/toast";
 import type {
     SessionTreeCommandApi,
     SessionTreeCommandEntry,
@@ -32,13 +37,35 @@ function formatEntryTime(createdAt: number) {
 }
 
 export function SessionTreeDialogContent({ tree }: { tree: SessionTreeCommandApi }) {
-    const { close } = useDialog();
+    const dialog = useDialog();
+    const toast = useToast();
     const { colors } = useTheme();
 
     const handleSelect = useCallback((entry: SessionTreeCommandEntry) => {
-        tree.jump(entry.id);
-        close();
-    }, [close, tree]);
+        const intent = tree.inspectJump(entry.id);
+        if (intent.action === "ask") {
+            dialog.open({
+                title: "Carry Branch Knowledge",
+                children: (
+                    <BranchSummaryDecisionDialogContent
+                        tree={tree}
+                        targetEntryId={entry.id}
+                    />
+                ),
+            });
+            return;
+        }
+
+        void tree.jump(entry.id)
+            .then((result) => showNavigationResultToast(result, toast))
+            .catch((error) => {
+                toast.show({
+                    variant: "error",
+                    message: error instanceof Error ? error.message : String(error),
+                });
+            })
+            .finally(() => dialog.close());
+    }, [dialog, toast, tree]);
 
     return (
         <DialogSearchList

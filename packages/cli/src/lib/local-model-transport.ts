@@ -6,6 +6,7 @@ import {
     validateUIMessages,
     type ChatTransport,
     type LanguageModelUsage,
+    type ModelMessage,
 } from "ai";
 import {
     type ModeType,
@@ -14,6 +15,8 @@ import {
 } from "@more-more-code/shared";
 import {
     ContextManager,
+    resolveBranchSummaryTokenBudget,
+    type BranchSummaryNavigationAnalysis,
     type ContextCompactionTrigger,
     type ContextCompactor,
     type ContextProjection,
@@ -22,7 +25,11 @@ import {
     type ModelContextProfile,
 } from "@more-more-code/harness";
 import type { Message } from "./chat-types";
-import { createSemanticContextCompactor } from "./context-compactor";
+import {
+    createSemanticContextCompactor,
+    type BranchSummaryContextPayload,
+    type ContextCompactionPayload,
+} from "./context-compactor";
 import {
     projectToolResultWorkingSet,
     type ToolResultPruningStats,
@@ -41,6 +48,10 @@ import {
     createProviderCacheTelemetry,
     type ProviderCacheTelemetry,
 } from "./provider-runtime";
+import {
+    reduceBranchSummary,
+    type BranchSummaryReductionOutcome,
+} from "./branch-summary-reducer";
 
 export type ContextCompactionEvent = {
     summary: Message;
@@ -52,15 +63,26 @@ export type ContextCompactionEvent = {
     inputBudgetTokens: number;
     targetInputTokens: number;
     targetSummaryTokens: number;
+    compactedThroughRecordId?: string;
     compactedThroughMessageId?: string;
     compactedMessageIds: string[];
     retainedTailMessageIds: string[];
+    compactedRecordIds: string[];
+    retainedTailRecordIds: string[];
 };
 
 export type PersistedContextCheckpoint = {
     summary: Message;
     compactedMessageIds?: string[];
     retainedTailMessageIds?: string[];
+    compactedRecordIds?: string[];
+    retainedTailRecordIds?: string[];
+};
+
+export type BranchSummaryContextAnchor = {
+    entryId: string;
+    summary: string;
+    afterMessageId: string | null;
 };
 
 type LocalModelTransportOptions = {
@@ -68,6 +90,7 @@ type LocalModelTransportOptions = {
     onContextCompaction?: (event: ContextCompactionEvent) => void;
     getContextCheckpoint?: () => PersistedContextCheckpoint | null;
     getToolResultSourceEntryId?: (toolCallId: string) => string | undefined;
+    getBranchSummaryContext?: () => BranchSummaryContextAnchor[];
     onProviderTelemetry?: (telemetry: ProviderCacheTelemetry) => void;
 };
 
@@ -92,9 +115,14 @@ function buildContextRecords(
     messages: Message[],
     profile: ModelContextProfile,
     checkpoint: PersistedContextCheckpoint | null,
+    branchSummaries: readonly BranchSummaryContextAnchor[] = [],
 ) {
-    const compactedIds = new Set(checkpoint?.compactedMessageIds ?? []);
+    const compactedIds = new Set([
+        ...(checkpoint?.compactedRecordIds ?? []),
+        ...(checkpoint?.compactedMessageIds ?? []),
+    ]);
     const activeMessages = messages.filter((message) => !compactedIds.has(message.id));
+    const activeBranchSummaries = branchSummaries.filter((summary) => !compactedIds.has(summary.entryId));
     let turnIndex = -1;
     const turns: number[] = [];
 
@@ -105,7 +133,7 @@ function buildContextRecords(
 
     const lastTurn = Math.max(0, ...turns);
     const firstRequiredTurn = Math.max(0, lastTurn - profile.retainedTailTurns + 1);
-    const historyRecords = activeMessages.map((message, index): ContextRecord<Message> => {
+    const messageRecords = activeMessages.map((message, index): ContextRecord<ContextCompactionPayload> => {
         const turn = turns[index] ?? 0;
         const retained = turn >= firstRequiredTurn;
         return {
@@ -118,6 +146,51 @@ function buildContextRecords(
             category: retained ? "retained-turn" : "historical-conversation",
             stability: retained ? "retained" : "history",
         };
+    });
+
+    const activeMessageIds = new Set(activeMessages.map((message) => message.id));
+    const branchByAnchor = new Map<string | null, BranchSummaryContextAnchor[]>();
+    for (const summary of activeBranchSummaries) {
+        const anchor = summary.afterMessageId && activeMessageIds.has(summary.afterMessageId)
+            ? summary.afterMessageId
+            : null;
+        const values = branchByAnchor.get(anchor) ?? [];
+        values.push(summary);
+        branchByAnchor.set(anchor, values);
+    }
+
+    const createBranchRecord = (
+        summary: BranchSummaryContextAnchor,
+        retained: boolean,
+    ): ContextRecord<ContextCompactionPayload> => {
+        const payload: BranchSummaryContextPayload = {
+            type: "branch-summary",
+            entryId: summary.entryId,
+            summary: summary.summary,
+        };
+        return {
+            id: summary.entryId,
+            kind: "history",
+            payload,
+            estimatedTokens: profile.tokenCounter.countText(summary.summary),
+            groupId: `branch-summary:${summary.entryId}`,
+            required: retained,
+            category: retained ? "retained-turn" : "historical-conversation",
+            stability: retained ? "retained" : "history",
+        };
+    };
+
+    const historyRecords: ContextRecord<ContextCompactionPayload>[] = [];
+    for (const summary of branchByAnchor.get(null) ?? []) {
+        historyRecords.push(createBranchRecord(summary, activeMessages.length === 0));
+    }
+    messageRecords.forEach((record, index) => {
+        historyRecords.push(record);
+        const turn = turns[index] ?? 0;
+        const retained = turn >= firstRequiredTurn;
+        for (const summary of branchByAnchor.get(activeMessages[index]!.id) ?? []) {
+            historyRecords.push(createBranchRecord(summary, retained));
+        }
     });
 
     if (!checkpoint) return historyRecords;
@@ -141,11 +214,12 @@ export async function projectMessages(input: {
     systemPrompt: string;
     profile: ModelContextProfile;
     checkpoint: PersistedContextCheckpoint | null;
-    compactor: ContextCompactor<Message>;
+    compactor: ContextCompactor<ContextCompactionPayload>;
+    branchSummaries?: readonly BranchSummaryContextAnchor[];
     manual?: boolean;
     resolveToolResultSourceEntryId?: (toolCallId: string) => string | undefined;
 }) {
-    const manager = new ContextManager<Message>();
+    const manager = new ContextManager<ContextCompactionPayload>();
     const budget = {
         contextWindowTokens: input.profile.contextWindowTokens,
         reservedOutputTokens: input.profile.reservedOutputTokens,
@@ -162,11 +236,16 @@ export async function projectMessages(input: {
         inputBudgetTokens: effectiveInputBudgetTokens,
         resolveSourceEntryId: input.resolveToolResultSourceEntryId,
     });
-    const records = buildContextRecords(toolWorkingSet.messages, input.profile, input.checkpoint);
+    const records = buildContextRecords(
+        toolWorkingSet.messages,
+        input.profile,
+        input.checkpoint,
+        input.branchSummaries,
+    );
     const inputTokensBefore = records.reduce((total, record) => total + record.estimatedTokens, 0);
-    let compactedSource: readonly ContextRecord<Message>[] = [];
+    let compactedSource: readonly ContextRecord<ContextCompactionPayload>[] = [];
     let generatedSummaryId: string | null = null;
-    const trackingCompactor: ContextCompactor<Message> = {
+    const trackingCompactor: ContextCompactor<ContextCompactionPayload> = {
         async compact(compactionInput) {
             compactedSource = compactionInput.records;
             const summary = await input.compactor.compact(compactionInput);
@@ -194,7 +273,10 @@ export async function projectMessages(input: {
             trackingCompactor,
             policy,
             {
-                previousRetainedRecordIds: input.checkpoint?.retainedTailMessageIds ?? [],
+                previousRetainedRecordIds:
+                    input.checkpoint?.retainedTailRecordIds
+                    ?? input.checkpoint?.retainedTailMessageIds
+                    ?? [],
             },
         );
         return {
@@ -242,6 +324,43 @@ function resolveExecutionConfig(messages: Message[]): {
     };
 }
 
+function isBranchSummaryPayload(
+    payload: ContextCompactionPayload,
+): payload is BranchSummaryContextPayload {
+    return payload
+        && typeof payload === "object"
+        && "type" in payload
+        && payload.type === "branch-summary";
+}
+
+async function compileProjectedModelMessages(
+    records: readonly ContextRecord<ContextCompactionPayload>[],
+    tools: ToolContracts,
+) {
+    const output: ModelMessage[] = [];
+    let messageBuffer: Message[] = [];
+    const flush = async () => {
+        if (messageBuffer.length === 0) return;
+        output.push(...await convertToModelMessages(messageBuffer, { tools }));
+        messageBuffer = [];
+    };
+
+    for (const record of records) {
+        if (!isBranchSummaryPayload(record.payload)) {
+            messageBuffer.push(record.payload);
+            continue;
+        }
+
+        await flush();
+        output.push({
+            role: "system",
+            content: `Transferred branch knowledge (Session Entry ${record.payload.entryId}):\n${record.payload.summary}`,
+        });
+    }
+    await flush();
+    return output;
+}
+
 /** Executes one model step locally; context projection is owned by the CLI/Harness boundary. */
 export class LocalModelTransport implements ChatTransport<Message> {
     private lastProviderTelemetry: ProviderCacheTelemetry | null = null;
@@ -252,6 +371,44 @@ export class LocalModelTransport implements ChatTransport<Message> {
         return this.lastProviderTelemetry
             ? structuredClone(this.lastProviderTelemetry)
             : null;
+    }
+
+    async summarizeBranch(input: {
+        analysis: BranchSummaryNavigationAnalysis<Message>;
+        mode: ModeType;
+        model: SupportedChatModelId;
+        abortSignal?: AbortSignal;
+    }): Promise<BranchSummaryReductionOutcome> {
+        const environment = getAgentEnvironment();
+        const resolvedModel = resolveChatModel(input.model);
+        const contextProfile = resolveModelContextProfile(input.model);
+        const systemPrompt = buildSystemPrompt({ mode: input.mode, environment });
+        const effectiveInputBudgetTokens = Math.max(
+            0,
+            contextProfile.contextWindowTokens
+                - contextProfile.reservedOutputTokens
+                - contextProfile.safetyMarginTokens
+                - contextProfile.tokenCounter.countText(systemPrompt),
+        );
+        const targetTokens = resolveBranchSummaryTokenBudget(effectiveInputBudgetTokens);
+
+        return reduceBranchSummary({
+            analysis: input.analysis,
+            profile: contextProfile,
+            effectiveInputBudgetTokens,
+            targetTokens,
+            reduce: async ({ instructions, prompt, maxOutputTokens }) => {
+                const result = await generateText({
+                    model: resolvedModel.model,
+                    system: instructions,
+                    prompt,
+                    maxOutputTokens,
+                    providerOptions: resolvedModel.providerOptions,
+                    abortSignal: input.abortSignal,
+                });
+                return result.text;
+            },
+        });
     }
 
     async compactContext(input: {
@@ -294,6 +451,7 @@ export class LocalModelTransport implements ChatTransport<Message> {
             profile: contextProfile,
             checkpoint,
             compactor: contextCompactor,
+            branchSummaries: this.options.getBranchSummaryContext?.() ?? [],
             manual: true,
             resolveToolResultSourceEntryId: this.options.getToolResultSourceEntryId,
         });
@@ -374,10 +532,10 @@ export class LocalModelTransport implements ChatTransport<Message> {
             profile: contextProfile,
             checkpoint,
             compactor: contextCompactor,
+            branchSummaries: this.options.getBranchSummaryContext?.() ?? [],
             resolveToolResultSourceEntryId: this.options.getToolResultSourceEntryId,
         });
-        const projectedMessages = projection.records.map((record) => record.payload);
-        const modelMessages = await convertToModelMessages(projectedMessages, { tools });
+        const modelMessages = await compileProjectedModelMessages(projection.records, tools);
 
         this.emitMessageSnapshot(validatedMessages);
         this.emitContextCompaction({
@@ -436,8 +594,8 @@ export class LocalModelTransport implements ChatTransport<Message> {
     }
 
     private emitContextCompaction(input: {
-        projection: ContextProjection<Message>;
-        compactedSource: readonly ContextRecord<Message>[];
+        projection: ContextProjection<ContextCompactionPayload>;
+        compactedSource: readonly ContextRecord<ContextCompactionPayload>[];
         generatedSummaryId: string | null;
         checkpoint: PersistedContextCheckpoint | null;
     }) {
@@ -447,8 +605,24 @@ export class LocalModelTransport implements ChatTransport<Message> {
         if (!summaryRecord || input.compactedSource.length === 0 || !input.projection.compaction) {
             return false;
         }
+        if (isBranchSummaryPayload(summaryRecord.payload)) return false;
 
         const compaction = input.projection.compaction;
+        const compactedRecordIds = [
+            ...(input.checkpoint?.compactedRecordIds ?? input.checkpoint?.compactedMessageIds ?? []),
+            ...compaction.compactedRecordIds,
+        ].filter((id, index, ids) => ids.indexOf(id) === index);
+        const compactedPayloadById = new Map(
+            input.compactedSource.map((record) => [record.id, record.payload]),
+        );
+        const compactedMessageIds = [
+            ...(input.checkpoint?.compactedMessageIds ?? []),
+            ...compaction.compactedRecordIds.filter((id) => {
+                const payload = compactedPayloadById.get(id);
+                return payload !== undefined && !isBranchSummaryPayload(payload);
+            }),
+        ].filter((id, index, ids) => ids.indexOf(id) === index);
+        const retainedHistory = input.projection.records.filter((record) => record.kind === "history");
         this.options.onContextCompaction?.({
             summary: structuredClone(summaryRecord.payload),
             tokensBefore: input.compactedSource.reduce(
@@ -462,15 +636,19 @@ export class LocalModelTransport implements ChatTransport<Message> {
             targetInputTokens: compaction.targetInputTokens,
             targetSummaryTokens: compaction.targetSummaryTokens,
             ...(compaction.compactedThroughRecordId
+                ? { compactedThroughRecordId: compaction.compactedThroughRecordId }
+                : {}),
+            ...(compaction.compactedThroughRecordId
+                && compactedPayloadById.get(compaction.compactedThroughRecordId)
+                && !isBranchSummaryPayload(compactedPayloadById.get(compaction.compactedThroughRecordId)!)
                 ? { compactedThroughMessageId: compaction.compactedThroughRecordId }
                 : {}),
-            compactedMessageIds: [
-                ...(input.checkpoint?.compactedMessageIds ?? []),
-                ...compaction.compactedRecordIds,
-            ].filter((id, index, ids) => ids.indexOf(id) === index),
-            retainedTailMessageIds: input.projection.records
-                .filter((record) => record.kind === "history")
+            compactedMessageIds,
+            compactedRecordIds,
+            retainedTailMessageIds: retainedHistory
+                .filter((record) => !isBranchSummaryPayload(record.payload))
                 .map((record) => record.id),
+            retainedTailRecordIds: retainedHistory.map((record) => record.id),
         });
         return true;
     }

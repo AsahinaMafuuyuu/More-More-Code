@@ -16,5 +16,8 @@
     "mcp": {
       "servers": {}
     }
+  },
+  "session": {
+    "branchSummaryOnJump": "ask"
   }
 }

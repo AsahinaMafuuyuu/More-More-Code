@@ -42,6 +42,9 @@ function SettingsSummary({ environment }: { environment: AgentEnvironment }) {
             <text>
                 instructions {environment.instructions.length} · skills {environment.skills.list().length} · native tools {native?.tools.length ?? 0} · mcp servers {mcp.length}
             </text>
+            <text>
+                branch summary on jump: {environment.config.resolved.session.branchSummaryOnJump}
+            </text>
             <text attributes={TextAttributes.DIM}>
                 Project config overrides global config. Edit the files, then reload here.
             </text>

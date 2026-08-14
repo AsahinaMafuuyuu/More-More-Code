@@ -360,14 +360,13 @@ Expected behavior:
 - External blob/object storage for Tool Result payloads. V1 durable source remains the Session Entry.
 - Content/relevance scoring across arbitrary files beyond freshness and Tool Working Set policy.
 - Aggressive/manual compaction flags such as `/compact --all`; V1 exposes one safe `/compact` behavior.
-- Branch Summary semantic transfer implementation.
 - Exact tokenizer support for every provider/model family.
 
 ---
 
 # Next Plan: Stage 5.4 — Branch Knowledge Transfer & Lazy Branch Summary
 
-**Status:** Planned — 2026-08-14.
+**Status:** Delivered — 2026-08-14.
 
 ## Overview
 

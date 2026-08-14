@@ -160,4 +160,60 @@ describe("local model context reduction pipeline", () => {
     expect(result.projection.compaction?.compactedRecordIds).toEqual(["u-old", "a-old"]);
     expect(result.projection.compaction?.trigger).toBe("soft-limit");
   });
+
+  test("projects Branch Summary as independent historical Context without changing UI messages", async () => {
+    const state = { calls: 0 };
+    const messages = [
+      user("u1", "target branch message"),
+      { id: "a1", role: "assistant" as const, parts: [{ type: "text" as const, text: "target answer" }] },
+    ];
+    const result = await projectMessages({
+      messages,
+      systemPrompt: "system",
+      profile: profile(),
+      checkpoint: null,
+      branchSummaries: [{
+        entryId: "branch-summary-1",
+        summary: "Transferred decision: preserve append-only Session history.",
+        afterMessageId: "a1",
+      }],
+      compactor: countingCompactor(state),
+    });
+
+    const branchRecord = result.projection.records.find((record) => record.id === "branch-summary-1");
+    expect(branchRecord?.kind).toBe("history");
+    expect(branchRecord?.payload).toMatchObject({
+      type: "branch-summary",
+      entryId: "branch-summary-1",
+    });
+    expect(messages).toHaveLength(2);
+    expect(state.calls).toBe(0);
+  });
+
+  test("does not re-project Branch Summary knowledge already absorbed by a checkpoint", async () => {
+    const state = { calls: 0 };
+    const result = await projectMessages({
+      messages: [user("u2", "new turn")],
+      systemPrompt: "system",
+      profile: profile(),
+      checkpoint: {
+        summary: {
+          id: "checkpoint",
+          role: "assistant",
+          parts: [{ type: "text", text: "Checkpoint already contains branch knowledge." }],
+        },
+        compactedRecordIds: ["branch-summary-1"],
+        retainedTailRecordIds: ["u2"],
+      },
+      branchSummaries: [{
+        entryId: "branch-summary-1",
+        summary: "This must not be duplicated.",
+        afterMessageId: null,
+      }],
+      compactor: countingCompactor(state),
+    });
+
+    expect(result.projection.records.filter((record) => record.id === "branch-summary-1")).toHaveLength(0);
+    expect(result.projection.records.filter((record) => record.kind === "summary")).toHaveLength(1);
+  });
 });

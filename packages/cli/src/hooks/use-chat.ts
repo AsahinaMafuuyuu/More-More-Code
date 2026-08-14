@@ -38,6 +38,13 @@ import {
 } from "../lib/local-model-transport";
 import { persistSessionState } from "../lib/session-store";
 import type { ChatTools, Message } from "../lib/chat-types";
+import {
+    executeBranchNavigation,
+    resolveBranchNavigationIntent,
+    type BranchNavigationDecision,
+    type BranchNavigationIntent,
+} from "../lib/branch-navigation";
+import type { BranchSummaryReductionOutcome } from "../lib/branch-summary-reducer";
 
 export type { Message } from "../lib/chat-types";
 
@@ -50,6 +57,27 @@ type PromptSelection = {
     mode: ModeType;
     model: SupportedChatModelId;
 };
+
+export type SessionNavigationOutcome =
+    | {
+        status: "decision-required";
+        intent: BranchNavigationIntent<Message>;
+    }
+    | {
+        status: "cancelled";
+        intent: BranchNavigationIntent<Message>;
+    }
+    | {
+        status: "jumped";
+        intent: BranchNavigationIntent<Message>;
+        runtime: SessionRuntimeState;
+    }
+    | {
+        status: "carried" | "carry-failed";
+        intent: BranchNavigationIntent<Message>;
+        runtime: SessionRuntimeState;
+        reduction: BranchSummaryReductionOutcome;
+    };
 
 function toError(error: unknown) {
     return error instanceof Error ? error : new Error(String(error));
@@ -110,6 +138,30 @@ function cloneMessages(messages: readonly Message[]) {
     return structuredClone(messages) as Message[];
 }
 
+function branchSummaryText(summary: unknown) {
+    if (typeof summary === "string") return summary.trim();
+    if (summary && typeof summary === "object" && "parts" in summary) {
+        const parts = (summary as { parts?: unknown }).parts;
+        if (Array.isArray(parts)) {
+            const text = parts
+                .filter((part): part is { type: "text"; text: string } =>
+                    Boolean(part)
+                    && typeof part === "object"
+                    && (part as { type?: unknown }).type === "text"
+                    && typeof (part as { text?: unknown }).text === "string")
+                .map((part) => part.text)
+                .join("\n")
+                .trim();
+            if (text) return text;
+        }
+    }
+    try {
+        return JSON.stringify(summary).trim();
+    } catch {
+        return String(summary).trim();
+    }
+}
+
 function getInteractionPrompt(
     interaction: AgentInteraction,
     fallback: PromptSelection,
@@ -146,6 +198,7 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
     const sessionTreeRef = useRef(sessionTree);
     const persistQueueRef = useRef<Promise<void>>(Promise.resolve());
     const pendingModelStepRef = useRef<PendingModelStep | null>(null);
+    const branchNavigationBusyRef = useRef(false);
     const activeModelStepMetadataRef = useRef<SessionEntryMetadata>({});
     const contextCompactionHandlerRef = useRef<((event: ContextCompactionEvent) => void) | null>(null);
     const latestMessagesRef = useRef<Message[]>(
@@ -167,7 +220,37 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
                     summary: structuredClone(checkpoint.summary) as Message,
                     compactedMessageIds: checkpoint.compactedMessageIds,
                     retainedTailMessageIds: checkpoint.retainedTailMessageIds,
+                    compactedRecordIds: checkpoint.compactedRecordIds,
+                    retainedTailRecordIds: checkpoint.retainedTailRecordIds,
                 };
+            },
+            getBranchSummaryContext() {
+                const anchors: Array<{
+                    entryId: string;
+                    summary: string;
+                    afterMessageId: string | null;
+                }> = [];
+                let lastMessageId: string | null = null;
+                for (const entry of projectSessionEntryPath(sessionTreeRef.current)) {
+                    if (
+                        entry.type === "user_message"
+                        || entry.type === "assistant_message"
+                        || entry.type === "custom_message"
+                        || entry.type === "message_update"
+                    ) {
+                        lastMessageId = entry.messageId;
+                        continue;
+                    }
+                    if (entry.type !== "branch_summary") continue;
+                    const summary = branchSummaryText(entry.summary);
+                    if (!summary) continue;
+                    anchors.push({
+                        entryId: entry.id,
+                        summary,
+                        afterMessageId: lastMessageId,
+                    });
+                }
+                return anchors;
             },
             getToolResultSourceEntryId(toolCallId) {
                 return projectSessionEntryPath(sessionTreeRef.current)
@@ -262,11 +345,16 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
             inputBudgetTokens: event.inputBudgetTokens,
             targetInputTokens: event.targetInputTokens,
             targetSummaryTokens: event.targetSummaryTokens,
+            ...(event.compactedThroughRecordId
+                ? { compactedThroughRecordId: event.compactedThroughRecordId }
+                : {}),
             ...(event.compactedThroughMessageId
                 ? { compactedThroughMessageId: event.compactedThroughMessageId }
                 : {}),
             compactedMessageIds: event.compactedMessageIds,
             retainedTailMessageIds: event.retainedTailMessageIds,
+            compactedRecordIds: event.compactedRecordIds,
+            retainedTailRecordIds: event.retainedTailRecordIds,
             ...metadata,
         });
     };
@@ -335,12 +423,11 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         });
     }
 
-    const jumpToEntry = useCallback((entryId: string): SessionRuntimeState => {
+    const applyNavigationTreeState = useCallback((nextTree: SessionTreeState<Message>): SessionRuntimeState => {
         if (agentLoop.isBusy) {
             throw new Error("Cannot jump session entries while the agent runtime is busy");
         }
 
-        const nextTree = jumpToSessionEntry(sessionTreeRef.current, entryId);
         const messages = cloneMessages(projectSessionTreeMessages(nextTree));
         const runtime = projectSessionRuntimeState(nextTree);
 
@@ -350,15 +437,100 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         return runtime;
     }, [agentLoop, applyTreeState, chat]);
 
-    const jumpToParent = useCallback(() => {
-        const parent = getParentSessionEntry(sessionTreeRef.current);
-        if (!parent) return null;
-        return jumpToEntry(parent.id);
-    }, [jumpToEntry]);
+    const inspectNavigation = useCallback((entryId: string) => {
+        if (agentLoop.isBusy || pendingModelStepRef.current || branchNavigationBusyRef.current) {
+            throw new Error("Cannot navigate session entries while the agent runtime is busy");
+        }
+        return resolveBranchNavigationIntent({
+            state: sessionTreeRef.current,
+            targetEntryId: entryId,
+            policy: getAgentEnvironment().config.resolved.session.branchSummaryOnJump,
+        });
+    }, [agentLoop]);
 
-    const jumpToRoot = useCallback(() => {
-        return jumpToEntry(sessionTreeRef.current.rootEntryId);
-    }, [jumpToEntry]);
+    const navigateToEntry = useCallback(async (input: {
+        entryId: string;
+        selection: PromptSelection;
+        decision?: BranchNavigationDecision;
+    }): Promise<SessionNavigationOutcome> => {
+        if (agentLoop.isBusy || pendingModelStepRef.current) {
+            throw new Error("Cannot navigate session entries while the agent runtime is busy");
+        }
+        if (branchNavigationBusyRef.current) {
+            throw new Error("A session navigation operation is already in progress");
+        }
+        branchNavigationBusyRef.current = true;
+        try {
+            let runtime: SessionRuntimeState | null = null;
+            const result = await executeBranchNavigation<Message, BranchSummaryReductionOutcome>({
+                state: sessionTreeRef.current,
+                targetEntryId: input.entryId,
+                policy: getAgentEnvironment().config.resolved.session.branchSummaryOnJump,
+                ...(input.decision ? { decision: input.decision } : {}),
+                onTargetState(nextTree) {
+                    runtime = applyNavigationTreeState(nextTree);
+                },
+                async summarize(analysis) {
+                    setBusy(true);
+                    try {
+                        return await transport.summarizeBranch({
+                            analysis,
+                            mode: input.selection.mode,
+                            model: input.selection.model,
+                        });
+                    } finally {
+                        setBusy(false);
+                    }
+                },
+            });
+
+            if (result.status === "decision-required" || result.status === "cancelled") {
+                return { status: result.status, intent: result.intent };
+            }
+            if (!runtime) {
+                runtime = projectSessionRuntimeState(result.state);
+            }
+            if (result.status === "carried") {
+                applyTreeState(result.state);
+            }
+            if (result.status === "jumped") {
+                return { status: "jumped", intent: result.intent, runtime };
+            }
+            if ("reduction" in result) {
+                return {
+                    status: result.status,
+                    intent: result.intent,
+                    runtime,
+                    reduction: result.reduction,
+                };
+            }
+            throw new Error(`Unhandled branch navigation outcome: ${result.status}`);
+        } finally {
+            branchNavigationBusyRef.current = false;
+        }
+    }, [agentLoop, applyNavigationTreeState, applyTreeState, transport]);
+
+    const navigateToParent = useCallback((input: {
+        selection: PromptSelection;
+        decision?: BranchNavigationDecision;
+    }) => {
+        const parent = getParentSessionEntry(sessionTreeRef.current);
+        if (!parent) return Promise.resolve(null);
+        return navigateToEntry({
+            entryId: parent.id,
+            selection: input.selection,
+            ...(input.decision ? { decision: input.decision } : {}),
+        });
+    }, [navigateToEntry]);
+
+    const navigateToRoot = useCallback((input: {
+        selection: PromptSelection;
+        decision?: BranchNavigationDecision;
+    }) => navigateToEntry({
+        entryId: sessionTreeRef.current.rootEntryId,
+        selection: input.selection,
+        ...(input.decision ? { decision: input.decision } : {}),
+    }), [navigateToEntry]);
 
     return {
         messages: chat.messages,
@@ -367,10 +539,11 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         run,
         busy,
         sessionTree,
-        jumpToEntry,
-        jumpToNode: jumpToEntry,
-        jumpToParent,
-        jumpToRoot,
+        inspectNavigation,
+        navigateToEntry,
+        navigateToNode: navigateToEntry,
+        navigateToParent,
+        navigateToRoot,
         recordPromptSelection,
         recordConfigChange: (key: string, value: unknown, previousValue?: unknown) => {
             return appendEntry({

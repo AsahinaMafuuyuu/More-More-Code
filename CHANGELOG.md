@@ -27,6 +27,10 @@ All notable changes to MORE MORE CODE are recorded here.
 - Manual `/compact` command and `manual` compaction trigger using the existing safe semantic reducer/checkpoint pipeline with typed no-op and deterministic-fallback feedback.
 - Deterministic manual-compaction eligibility gates for minimum compactable history, checkpoint-relative new Turns, and conservative token-savings benefit, including `insufficient-history`, `recent-compaction`, and `insufficient-gain` no-op reasons.
 - ADR-0013 separating Tool Result Pruning, historical Compaction, and Branch Summary responsibilities.
+- Coverage-aware Branch Summary navigation analysis with LCA/source-only semantic deltas, exact provenance metadata, and incremental transfer deduplication.
+- Lazy Branch Summary navigation policy `ask | always | never` (`ask` default), with shared Carry / No Carry / Cancel semantics across `/tree`, `/jump`, `/parent`, and `/root`.
+- Dedicated bounded Branch Summary semantic reducer with Tool Result pre-pruning and deterministic fallback.
+- ADR-0014 documenting lazy branch knowledge transfer, provenance, navigation semantics, and Context/Compaction interop.
 
 ### Changed
 
@@ -38,6 +42,8 @@ All notable changes to MORE MORE CODE are recorded here.
 - Context Compaction now starts proactively at configured utilization thresholds instead of waiting for hard truncation; only optional historical groups are eligible, retained recent Turns remain atomic, and semantic-reducer failure falls back without making the primary Model Step depend on compaction-provider availability.
 - Model Context construction now prunes eligible warm/cold Tool Results before considering historical Compaction; fresh Tool continuation remains full when feasible and durable Session payloads are never rewritten by pruning.
 - Manual compaction can run below automatic soft/hard thresholds but now rejects too-small, too-recent, or low-benefit requests before reducer execution; repeat eligibility is derived from checkpoint progress rather than elapsed time and still preserves required/retained records, atomic Context groups, checkpoint replacement, active-branch isolation, and append-only Session history.
+- Active-path Branch Summary text now enters canonical historical Context independently from UI Message Projection; older summaries may be absorbed by normal Compaction, with generic record coverage preventing checkpoint-reuse duplication.
+- Session navigation no longer treats browsing as branching: No Carry appends nothing, Cancel leaves the source active, and successful Carry appends exactly one provenance-bearing `branch_summary` child under the target.
 - AgentLoop Tool Steps now route native capabilities through Tool Runtime and persist optional normalized status/source/timing metadata on `tool_result` Entries.
 - Native filesystem operations now receive the Tool Step workspace root and cooperative AbortSignal where supported.
 - Native command execution now uses the Runtime workspace root and completes interruption/timeout through Tool Runtime with normalized cancellation status.

@@ -35,6 +35,9 @@ const agentConfigFileSchema = z.object({
             servers: z.record(z.string(), mcpServerSchema).optional(),
         }).optional(),
     }).optional(),
+    session: z.object({
+        branchSummaryOnJump: z.enum(["ask", "always", "never"]).optional(),
+    }).optional(),
 });
 
 export type McpServerConfig = z.infer<typeof mcpServerSchema>;
@@ -56,6 +59,9 @@ export type ResolvedAgentConfig = {
         mcp: {
             servers: Record<string, McpServerConfig>;
         };
+    };
+    session: {
+        branchSummaryOnJump: "ask" | "always" | "never";
     };
 };
 
@@ -93,6 +99,9 @@ const DEFAULT_CONFIG: ResolvedAgentConfig = {
         mcp: {
             servers: {},
         },
+    },
+    session: {
+        branchSummaryOnJump: "ask",
     },
 };
 
@@ -205,6 +214,9 @@ export function mergeAgentConfig(
                 ...resolved.tools.mcp.servers,
                 ...config.tools.mcp.servers,
             };
+        }
+        if (config.session?.branchSummaryOnJump !== undefined) {
+            resolved.session.branchSummaryOnJump = config.session.branchSummaryOnJump;
         }
     };
 

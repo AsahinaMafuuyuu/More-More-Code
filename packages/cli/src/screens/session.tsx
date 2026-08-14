@@ -122,9 +122,8 @@ function SessionChat({
     run,
     busy,
     sessionTree,
-    jumpToNode,
-    jumpToParent,
-    jumpToRoot,
+    inspectNavigation,
+    navigateToNode,
     recordPromptSelection,
     compact,
   } = useChat(session.id, session.messages); // 使用自定义hook管理消息状态与会话树
@@ -162,6 +161,7 @@ function SessionChat({
     return {
       rootEntryId: sessionTree.rootEntryId,
       activeEntryId: sessionTree.activeEntryId,
+      parentEntryId: sessionTree.entries.find((entry) => entry.id === sessionTree.activeEntryId)?.parentId ?? null,
       entries: ordered.map(({ entry, depth }) => ({
         id: entry.id,
         parentId: entry.parentId,
@@ -172,25 +172,44 @@ function SessionChat({
         preview: getSessionEntryPreview(entry),
         active: entry.id === sessionTree.activeEntryId,
       })),
-      jump: (entryId) => {
-        restorePromptRuntime(jumpToNode(entryId));
+      inspectJump: (entryId) => {
+        const intent = inspectNavigation(entryId);
+        return {
+          action: intent.action,
+          policy: intent.policy,
+          sourceTipEntryId: intent.analysis.sourceTipEntryId,
+          targetEntryId: intent.analysis.targetEntryId,
+          commonAncestorEntryId: intent.analysis.commonAncestorEntryId,
+          coveredEntryIds: [...intent.analysis.coveredEntryIds],
+        };
       },
-      jumpParent: () => {
-        const runtime = jumpToParent();
-        if (!runtime) return false;
-        restorePromptRuntime(runtime);
-        return true;
-      },
-      jumpRoot: () => {
-        restorePromptRuntime(jumpToRoot());
+      jump: async (entryId, decision) => {
+        const result = await navigateToNode({
+          entryId,
+          selection: { mode, model },
+          ...(decision ? { decision } : {}),
+        });
+        if ("runtime" in result) restorePromptRuntime(result.runtime);
+        return {
+          status: result.status,
+          ...((result.status === "carried" || result.status === "carry-failed")
+            ? {
+                fallbackUsed: result.reduction.fallbackUsed,
+                ...(result.reduction.fallbackReason
+                  ? { fallbackReason: result.reduction.fallbackReason }
+                  : {}),
+              }
+            : {}),
+        };
       },
     };
   }, [
     sessionTree,
-    jumpToNode,
-    jumpToParent,
-    jumpToRoot,
+    inspectNavigation,
+    navigateToNode,
     restorePromptRuntime,
+    mode,
+    model,
   ]);
 
   const hasSubmittedInitialPromptRef = useRef(false); // 用于标记是否已经提交了初始提示

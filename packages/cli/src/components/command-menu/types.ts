@@ -17,13 +17,33 @@ export type SessionTreeCommandEntry = {
 /** @deprecated Session Tree v3 nodes are Session Entries. */
 export type SessionTreeCommandNode = SessionTreeCommandEntry;
 
+export type SessionTreeNavigationDecision = "carry" | "no-carry" | "cancel";
+
+export type SessionTreeNavigationIntent = {
+    action: "jump" | "ask" | "carry";
+    policy: "ask" | "always" | "never";
+    sourceTipEntryId: string;
+    targetEntryId: string;
+    commonAncestorEntryId: string;
+    coveredEntryIds: string[];
+};
+
+export type SessionTreeNavigationResult = {
+    status: "decision-required" | "cancelled" | "jumped" | "carried" | "carry-failed";
+    fallbackUsed?: boolean;
+    fallbackReason?: string;
+};
+
 export type SessionTreeCommandApi = {
     rootEntryId: string;
     activeEntryId: string;
+    parentEntryId: string | null;
     entries: SessionTreeCommandEntry[];
-    jump: (entryId: string) => void;
-    jumpParent: () => boolean;
-    jumpRoot: () => void;
+    inspectJump: (entryId: string) => SessionTreeNavigationIntent;
+    jump: (
+        entryId: string,
+        decision?: SessionTreeNavigationDecision,
+    ) => Promise<SessionTreeNavigationResult>;
 };
 
 export type CommandContext = {

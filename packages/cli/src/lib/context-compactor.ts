@@ -5,6 +5,14 @@ import {
 } from "@more-more-code/harness";
 import type { Message } from "./chat-types";
 
+export type BranchSummaryContextPayload = {
+    type: "branch-summary";
+    entryId: string;
+    summary: string;
+};
+
+export type ContextCompactionPayload = Message | BranchSummaryContextPayload;
+
 export const SEMANTIC_COMPACTION_INSTRUCTIONS = `You are the context state reducer for a coding agent.
 Produce a complete replacement state snapshot for future model calls. Do not write a chronological recap and do not merely append a delta to the previous snapshot.
 
@@ -85,13 +93,31 @@ function serializeMessage(message: Message) {
     return `${message.role.toUpperCase()}: ${body}`;
 }
 
-function serializeRecords(records: readonly ContextRecord<Message>[]) {
-    return records.map((record) => serializeMessage(record.payload)).join("\n\n");
+function isBranchSummaryContextPayload(
+    payload: ContextCompactionPayload,
+): payload is BranchSummaryContextPayload {
+    return payload
+        && typeof payload === "object"
+        && "type" in payload
+        && payload.type === "branch-summary"
+        && "summary" in payload
+        && typeof payload.summary === "string";
+}
+
+function serializePayload(payload: ContextCompactionPayload) {
+    if (isBranchSummaryContextPayload(payload)) {
+        return `BRANCH SUMMARY (${payload.entryId}): ${payload.summary}`;
+    }
+    return serializeMessage(payload);
+}
+
+function serializeRecords(records: readonly ContextRecord<ContextCompactionPayload>[]) {
+    return records.map((record) => serializePayload(record.payload)).join("\n\n");
 }
 
 export function buildSemanticCompactionPrompt(input: {
-    previousCheckpointRecords: readonly ContextRecord<Message>[];
-    newlyCompactedRecords: readonly ContextRecord<Message>[];
+    previousCheckpointRecords: readonly ContextRecord<ContextCompactionPayload>[];
+    newlyCompactedRecords: readonly ContextRecord<ContextCompactionPayload>[];
     trigger: string;
 }) {
     const previous = input.previousCheckpointRecords.length > 0
@@ -149,13 +175,13 @@ function fitSummaryMessage(input: {
     return best;
 }
 
-function summaryId(records: readonly ContextRecord<Message>[]) {
+function summaryId(records: readonly ContextRecord<ContextCompactionPayload>[]) {
     return `context-summary:${records[0]?.id ?? "start"}:${records.at(-1)?.id ?? "end"}`;
 }
 
 export function createDeterministicContextCompactor(
     profile: ModelContextProfile,
-): ContextCompactor<Message> {
+): ContextCompactor<ContextCompactionPayload> {
     return {
         compact({ records, targetTokens }) {
             if (records.length === 0 || targetTokens < 16) return null;
@@ -188,9 +214,9 @@ export type SemanticContextReducer = (input: {
 export function createSemanticContextCompactor(input: {
     profile: ModelContextProfile;
     reduce: SemanticContextReducer;
-    fallback?: ContextCompactor<Message>;
+    fallback?: ContextCompactor<ContextCompactionPayload>;
     onFallback?: (reason: "small-budget" | "empty-output" | "oversized-output" | "reducer-error") => void;
-}): ContextCompactor<Message> {
+}): ContextCompactor<ContextCompactionPayload> {
     const fallback = input.fallback ?? createDeterministicContextCompactor(input.profile);
 
     return {
