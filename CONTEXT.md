@@ -36,6 +36,14 @@ The bounded, provider-independent input view selected for a particular model inv
 
 A provider-independent classification of Context Records as stable, checkpoint, history, retained, or dynamic. It controls canonical ordering but does not encode provider-specific cache fields.
 
+## Tool Result Working Set
+
+The bounded model-facing projection of Tool Results created before historical Context Compaction. Complete Tool Result payloads remain durable Session facts; only cloned model input may use `full`, `truncated`, `summary`, or `reference` representations. The default budget is derived from the effective model input budget, with fresh/current results protected for immediate continuation and warm/cold results becoming progressively more eligible for pruning.
+
+## Tool Result Projection
+
+A bounded representation of one Tool Result for model input. It retains Tool Call identity/status, a pruning reason, original/projected token estimates, and a durable Session Entry reference when available. Shell, test/build, search/grep, file-read, and generic outputs use deterministic strategy-aware projections rather than one universal slice.
+
 ## Compaction Entry
 
 A durable record that a context compaction occurred, including the replacement snapshot, trigger reason, token-budget diagnostics, and the history range it represented. The latest Compaction Entry on the active branch acts as the persisted Context checkpoint for later Model Steps. A newer checkpoint reduces the previous effective checkpoint plus newly compacted history into one complete replacement snapshot; older checkpoints remain Session history but are superseded for model Context Projection.
@@ -46,7 +54,7 @@ The state-oriented payload stored by a Compaction Entry. It represents current g
 
 ## Compaction Policy
 
-The provider-independent Context policy that decides when and how much history to compact. The default application policy uses an 80% soft limit, 92% hard limit, and 70% post-compaction target over the effective input budget. Only optional historical Context groups are eligible; retained recent Turns and other required groups remain atomic and uncut.
+The provider-independent Context policy that decides when and how much history to compact. The default application policy uses an 80% soft limit, 92% hard limit, and 70% post-compaction target over the effective input budget. Only optional historical Context groups are eligible; retained recent Turns and other required groups remain atomic and uncut. Automatic triggers are `soft-limit`, `hard-limit`, or `overflow`; `/compact` uses `manual`, which bypasses automatic utilization thresholds but first passes a deterministic eligibility gate. V1 requires compactable history of at least `max(2048, 3% of input budget)`, at least 2 newly completed Turns after an existing checkpoint, estimated savings of at least `max(1024, 2% of input budget)`, and at least 30% estimated replacement-source savings. The repeat gate is checkpoint-progress based rather than time based; checkpoint-retained message IDs are excluded from the new-Turn count. Rejections return typed `nothing-compactable`, `insufficient-history`, `recent-compaction`, or `insufficient-gain` no-ops without invoking the reducer.
 
 ## Branch Summary
 

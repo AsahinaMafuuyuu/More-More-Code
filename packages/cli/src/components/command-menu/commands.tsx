@@ -107,6 +107,60 @@ export const COMMANDS: Command[] = [
         },
     },
     {
+        name: 'compact',
+        description: "Compact older context on the active session branch",
+        value: "/compact",
+        action: async (ctx) => {
+            if (!ctx.compact) {
+                ctx.toast.show({ variant: "error", message: "Context compaction is not available here" });
+                return;
+            }
+
+            try {
+                const result = await ctx.compact();
+                const usage = `${result.inputTokensBefore} → ${result.inputTokensAfter} / ${result.inputBudgetTokens} tokens`;
+                const pruning = result.toolResultPruning.prunedResults > 0
+                    ? `; pruned ${result.toolResultPruning.prunedResults} tool result(s)`
+                    : "";
+                const fallback = result.fallbackUsed
+                    ? `; deterministic fallback (${result.fallbackReason ?? "unknown"})`
+                    : "";
+
+                if (result.status === "noop") {
+                    const eligibility = result.eligibility;
+                    const reasonMessage = (() => {
+                        switch (result.reason) {
+                            case "insufficient-history":
+                                return `Manual compaction skipped: ${eligibility.compactableTokens} compactable tokens; requires at least ${eligibility.minCompactableTokens}`;
+                            case "recent-compaction":
+                                return `Manual compaction skipped: checkpoint is still recent (${eligibility.newTurnsSinceCheckpoint} new turn(s), ${eligibility.compactableTokens} compactable tokens; requires at least ${eligibility.minNewTurnsSinceCheckpoint} turn(s) and ${eligibility.minCompactableTokens} tokens)`;
+                            case "insufficient-gain":
+                                return `Manual compaction skipped: estimated savings ${eligibility.estimatedGainTokens} tokens (${Math.round(eligibility.estimatedGainRatio * 100)}%); requires at least ${eligibility.minEstimatedGainTokens} tokens and ${Math.round(eligibility.minEstimatedGainRatio * 100)}%`;
+                            case "compactor-unavailable":
+                                return "Manual compaction skipped: compactor did not produce a valid replacement checkpoint";
+                            default:
+                                return "Nothing safely compactable";
+                        }
+                    })();
+                    ctx.toast.show({
+                        message: `${reasonMessage} (${result.reason ?? "no-op"}); ${usage}${pruning}${fallback}`,
+                    });
+                    return;
+                }
+
+                ctx.toast.show({
+                    variant: "success",
+                    message: `Manual context compaction complete (trigger=manual); ${usage}${pruning}${fallback}`,
+                });
+            } catch (error) {
+                ctx.toast.show({
+                    variant: "error",
+                    message: `Context compaction failed: ${error instanceof Error ? error.message : String(error)}`,
+                });
+            }
+        },
+    },
+    {
         name: 'settings',
         description: "Inspect and configure global/project agent settings",
         value: "/settings",

@@ -125,6 +125,52 @@ describe("session entry tree v3", () => {
     ]);
   });
 
+  test("keeps manual compaction branch-local without altering sibling history", () => {
+    const options = deterministicOptions();
+    let state = createSessionTree<TestMessage>([], options);
+    state = appendSessionTreeMessages(state, [message("u1"), message("a1")], {}, options);
+    const branchPoint = state.activeEntryId;
+
+    state = appendSessionTreeMessages(
+      state,
+      [message("u1"), message("a1"), message("u-left"), message("a-left")],
+      {},
+      options,
+    );
+    state = appendSessionEntry(state, {
+      type: "compaction",
+      summary: "left checkpoint",
+      tokensBefore: 4_000,
+      trigger: "manual",
+      inputTokensBefore: 5_000,
+      inputTokensAfter: 2_000,
+      inputBudgetTokens: 10_000,
+      targetInputTokens: 7_000,
+      targetSummaryTokens: 1_000,
+      compactedMessageIds: ["u1", "a1"],
+      retainedTailMessageIds: ["u-left", "a-left"],
+    }, options);
+    const leftLeaf = state.activeEntryId;
+
+    state = jumpToSessionEntry(state, branchPoint);
+    state = appendSessionTreeMessages(
+      state,
+      [message("u1"), message("a1"), message("u-right"), message("a-right")],
+      {},
+      options,
+    );
+    const rightLeaf = state.activeEntryId;
+
+    expect(projectLatestSessionCompaction(state, leftLeaf)).toMatchObject({
+      trigger: "manual",
+      summary: "left checkpoint",
+    });
+    expect(projectLatestSessionCompaction(state, rightLeaf)).toBeNull();
+    expect(projectSessionTreeMessages(state, rightLeaf).map((entry) => entry.id)).toEqual([
+      "u1", "a1", "u-right", "a-right",
+    ]);
+  });
+
   test("records immutable message_update entries instead of mutating a prior message", () => {
     const options = deterministicOptions();
     let state = createSessionTree<TestMessage>([

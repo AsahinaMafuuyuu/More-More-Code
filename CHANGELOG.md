@@ -22,6 +22,11 @@ All notable changes to MORE MORE CODE are recorded here.
 - Budget-aware semantic Context Compaction with 80% soft / 92% hard triggers, a 70% post-compaction target, atomic safe cut points, and persisted compaction diagnostics.
 - Structured semantic state reducer for replacement checkpoints, with fixed goal/state/decision/constraint/artifact/failure/pending-work sections and bounded deterministic fallback.
 - ADR-0012 documenting proactive compaction policy, incremental state reduction, safe cut points, persistence metadata, and reducer/fallback boundaries.
+- Provider-independent Tool Result Working Set contracts with `full | truncated | summary | reference` projections, fresh/warm/cold lifecycle, budget-derived pruning policy, and explicit required-result over-budget signaling.
+- Deterministic CLI Tool Result pruning strategies for generic, shell, test/build, search/grep, and file-read outputs while preserving complete Session `tool_result` payloads.
+- Manual `/compact` command and `manual` compaction trigger using the existing safe semantic reducer/checkpoint pipeline with typed no-op and deterministic-fallback feedback.
+- Deterministic manual-compaction eligibility gates for minimum compactable history, checkpoint-relative new Turns, and conservative token-savings benefit, including `insufficient-history`, `recent-compaction`, and `insufficient-gain` no-op reasons.
+- ADR-0013 separating Tool Result Pruning, historical Compaction, and Branch Summary responsibilities.
 
 ### Changed
 
@@ -31,6 +36,8 @@ All notable changes to MORE MORE CODE are recorded here.
 - System-prefix construction is ordered as core prompt → global instructions → project instructions → Skill catalog, while model-visible Tool schemas remain deterministic through the ToolSet snapshot.
 - Persisted Session `compaction` entries are reused as Context checkpoints across later Model Steps and restored sessions; a newer checkpoint reduces the previous effective checkpoint plus newly compacted history into one complete replacement state snapshot, while older checkpoint Entries remain durable tree history.
 - Context Compaction now starts proactively at configured utilization thresholds instead of waiting for hard truncation; only optional historical groups are eligible, retained recent Turns remain atomic, and semantic-reducer failure falls back without making the primary Model Step depend on compaction-provider availability.
+- Model Context construction now prunes eligible warm/cold Tool Results before considering historical Compaction; fresh Tool continuation remains full when feasible and durable Session payloads are never rewritten by pruning.
+- Manual compaction can run below automatic soft/hard thresholds but now rejects too-small, too-recent, or low-benefit requests before reducer execution; repeat eligibility is derived from checkpoint progress rather than elapsed time and still preserves required/retained records, atomic Context groups, checkpoint replacement, active-branch isolation, and append-only Session history.
 - AgentLoop Tool Steps now route native capabilities through Tool Runtime and persist optional normalized status/source/timing metadata on `tool_result` Entries.
 - Native filesystem operations now receive the Tool Step workspace root and cooperative AbortSignal where supported.
 - Native command execution now uses the Runtime workspace root and completes interruption/timeout through Tool Runtime with normalized cancellation status.

@@ -16,6 +16,7 @@ import {
     getSessionEntry,
     jumpToSessionEntry,
     projectLatestSessionCompaction,
+    projectSessionEntryPath,
     projectSessionRuntimeState,
     projectSessionTreeMessages,
     restoreSessionTree,
@@ -167,6 +168,11 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
                     compactedMessageIds: checkpoint.compactedMessageIds,
                     retainedTailMessageIds: checkpoint.retainedTailMessageIds,
                 };
+            },
+            getToolResultSourceEntryId(toolCallId) {
+                return projectSessionEntryPath(sessionTreeRef.current)
+                    .findLast((entry) => entry.type === "tool_result" && entry.toolCallId === toolCallId)
+                    ?.id;
             },
         });
     }, []);
@@ -376,6 +382,22 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         },
         recordCustomEntry: (customType: string, data: unknown) => {
             return appendEntry({ type: "custom", customType, data });
+        },
+        compact: async (params: PromptSelection) => {
+            if (agentLoop.isBusy || pendingModelStepRef.current) {
+                throw new Error("Cannot compact context while the agent runtime is busy");
+            }
+
+            setBusy(true);
+            try {
+                return await transport.compactContext({
+                    messages: cloneMessages(latestMessagesRef.current),
+                    mode: params.mode,
+                    model: params.model,
+                });
+            } finally {
+                setBusy(false);
+            }
         },
         submit: async (params: {
             userText: string;

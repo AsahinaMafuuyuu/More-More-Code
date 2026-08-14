@@ -126,6 +126,7 @@ function SessionChat({
     jumpToParent,
     jumpToRoot,
     recordPromptSelection,
+    compact,
   } = useChat(session.id, session.messages); // 使用自定义hook管理消息状态与会话树
   const runActive = run?.status === "running";
   const settling = busy && !runActive;
@@ -259,6 +260,7 @@ function SessionChat({
       onModelChange={(nextModel) => {
         recordPromptSelection({ mode, model: nextModel });
       }}
+      onCompact={() => compact({ mode, model })}
     >
       {/* 渲染消息 */}
       {messages.map((msg) => (

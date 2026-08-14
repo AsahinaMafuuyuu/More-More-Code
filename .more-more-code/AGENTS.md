@@ -34,6 +34,9 @@ When working on Context or model-provider code:
 - Compaction is budget-aware and may trigger proactively at soft/hard utilization thresholds before actual overflow. Cut points must preserve complete Context groups/Turns and never split retained atomic interactions merely to hit a token count.
 - A newer compaction checkpoint reduces the previous effective checkpoint plus newly compacted history into one complete replacement state snapshot; older compaction entries remain durable Session history while model context starts from the latest effective checkpoint.
 - Harness owns provider-independent compaction policy/source selection/metadata; LLM semantic reduction belongs at the CLI/provider seam and must retain a bounded deterministic fallback so compaction failure does not automatically fail the primary Model Step.
+- Tool Result pruning is a model-facing working-set projection and must run before historical Compaction. Never mutate or delete the canonical Session `tool_result` payload to save Context tokens.
+- Preserve fresh/current Tool Results for immediate continuation when feasible; warm/cold results may use bounded `full | truncated | summary | reference` projections under a budget derived from the effective model input budget.
+- Manual `/compact` must reuse the normal compaction source-selection/reducer/checkpoint pipeline with `trigger=manual`; it may bypass automatic utilization thresholds but must first pass the provider-independent manual eligibility gates for minimum compactable history, checkpoint-relative new Turn progress, and estimated token savings. Do not implement repeat-compaction protection as a wall-clock cooldown. Manual compaction must not bypass required/retained records, atomic group boundaries, branch-local persistence, or append-only Session history.
 - Branch Summary is a separate branch knowledge-transfer mechanism and must not reuse Compaction trigger/state-snapshot semantics by default.
 - Session restore authority is `Session Tree + activeEntryId`; message/runtime/context state is derived as branch projections.
 - PLAN and BUILD may have different prompt-cache families because their model-visible Tool Sets differ.
@@ -46,12 +49,11 @@ When working on Context or model-provider code:
 - Workspace path validation is not OS-level Sandbox enforcement.
 - Session event and timestamp colors belong to semantic Theme tokens rather than component-specific colors.
 
-## DevTools file deletion
+## Git Version Control
 
-When development is performed through `@DevTools`, verify file-deletion capability before relying on deletion as part of the implementation workflow.
-
-- At the beginning of a development session that may require deleting files, test whether the available DevTools can actually delete files.
-- If DevTools cannot delete files, do not claim that obsolete files were removed.
-- Continue all non-destructive implementation work that can still be completed safely.
-- At the end of every affected turn, explicitly list every file that still needs to be deleted manually.
-- Do not omit pending file deletions from the final summary.
+- Each planned Stage must be developed on its own Git branch. Create/switch to a new Stage branch before beginning implementation for that Stage, and do not mix work from the next Stage into the previous Stage branch. Prefer descriptive names such as `stage/5.4-branch-summary`.
+- Changes that do not constitute a new Stage should remain on the current appropriate branch and be recorded as focused commits rather than creating unnecessary branches.
+- During a Stage, use additional focused commits when useful for coherent checkpoints, but keep all commits scoped to that Stage.
+- When a Stage is complete, ensure its implementation, tests, and required documentation are committed on that Stage branch before moving on to the next Stage.
+- Every commit must have a clear description: use a concise subject describing what changed, and when the change is non-trivial include a body that explains the important behavior/design decision and verification performed. Avoid vague messages such as `update`, `fix`, or `changes`.
+- Before committing or switching branches, inspect the working tree and preserve unrelated user changes. Never discard, overwrite, or silently absorb unrelated work into the Stage commit.

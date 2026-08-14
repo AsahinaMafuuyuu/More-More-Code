@@ -1,6 +1,7 @@
 import type { DialogContextValue } from "../../providers/dialog";
 import type { ToastContextValue } from "../../providers/toast";
 import type { ModeType, SupportedChatModelId } from "@more-more-code/shared";
+import type { ManualContextCompactionOutcome } from "../../lib/local-model-transport";
 
 export type SessionTreeCommandEntry = {
     id: string;
@@ -34,6 +35,7 @@ export type CommandContext = {
     setMode: (mode: ModeType) => void;
     setModel: (model: SupportedChatModelId) => void;
     sessionTree?: SessionTreeCommandApi;
+    compact?: () => Promise<ManualContextCompactionOutcome>;
 }
 
 export type Command = {

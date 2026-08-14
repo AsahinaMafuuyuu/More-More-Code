@@ -5,6 +5,7 @@ import { Spinner } from "./spinner";
 import { usePromptConfig } from "../providers/prompt-config";
 import type { SessionTreeCommandApi } from "./command-menu/types";
 import type { ModeType, SupportedChatModelId } from "@more-more-code/shared";
+import type { ManualContextCompactionOutcome } from "../lib/local-model-transport";
 
 type Props = {
     children?: ReactNode;
@@ -16,6 +17,7 @@ type Props = {
     sessionTree?: SessionTreeCommandApi;
     onModeChange?: (mode: ModeType) => void;
     onModelChange?: (model: SupportedChatModelId) => void;
+    onCompact?: () => Promise<ManualContextCompactionOutcome>;
 };
 
 export function SessionShell({ children,
@@ -27,6 +29,7 @@ export function SessionShell({ children,
     sessionTree,
     onModeChange,
     onModelChange,
+    onCompact,
 }
     : Props) {
     const { mode } = usePromptConfig()
@@ -57,6 +60,7 @@ export function SessionShell({ children,
                     sessionTree={sessionTree}
                     onModeChange={onModeChange}
                     onModelChange={onModelChange}
+                    onCompact={onCompact}
                 />
             </box>
 

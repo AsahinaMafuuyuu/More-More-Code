@@ -16,6 +16,12 @@ export type ModelContextProfile = {
   compactionSoftLimitRatio?: number;
   compactionHardLimitRatio?: number;
   postCompactionTargetRatio?: number;
+  /** Maximum share of effective input budget reserved for model-visible Tool Results. */
+  toolResultWorkingSetRatio?: number;
+  /** Individual warm/cold Tool Results above this share become pruning candidates. */
+  toolResultFullThresholdRatio?: number;
+  /** Minimum share used for a compact durable-reference Tool Result projection. */
+  toolResultReferenceRatio?: number;
   tokenCounter: TokenCounter;
 };
 

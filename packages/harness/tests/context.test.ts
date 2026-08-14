@@ -21,6 +21,15 @@ function record(
   };
 }
 
+const RELAXED_MANUAL_ELIGIBILITY = {
+  manualMinCompactableTokens: 0,
+  manualMinCompactableRatio: 0,
+  manualMinTurnsSinceCheckpoint: 0,
+  manualMinEstimatedGainTokens: 0,
+  manualMinEstimatedGainInputRatio: 0,
+  manualMinEstimatedGainRatio: 0,
+} as const;
+
 describe("canonical context compilation", () => {
   test("orders records from stable prefix to dynamic input deterministically", () => {
     const records: ContextRecord<string>[] = [
@@ -266,5 +275,249 @@ describe("ContextManager", () => {
     expect(projection.records.map((item) => item.id)).toEqual(["system", "new"]);
     expect(projection.estimatedInputTokens).toBe(11);
     expect(projection.overBudget).toBe(true);
+  });
+
+  test("manually compacts eligible history below automatic thresholds", async () => {
+    const manager = new ContextManager<string>();
+    const result = await manager.compactManually(
+      [
+        record("old-user", 4, false, "turn-1"),
+        record("old-assistant", 4, false, "turn-1"),
+        {
+          ...record("recent-user", 3, true, "turn-2"),
+          category: "retained-turn",
+        },
+        {
+          ...record("recent-assistant", 3, true, "turn-2"),
+          category: "retained-turn",
+        },
+      ],
+      { contextWindowTokens: 100, reservedOutputTokens: 0 },
+      {
+        compact({ records, trigger }) {
+          expect(trigger).toBe("manual");
+          expect(records.map((item) => item.id)).toEqual(["old-user", "old-assistant"]);
+          return {
+            id: "manual-summary",
+            kind: "summary",
+            payload: "manual summary",
+            estimatedTokens: 2,
+          };
+        },
+      },
+      { maxSummaryTokens: 8, ...RELAXED_MANUAL_ELIGIBILITY },
+    );
+
+    expect(result.status).toBe("compacted");
+    if (result.status !== "compacted") throw new Error("expected compaction");
+    expect(result.projection.compaction?.trigger).toBe("manual");
+    expect(result.projection.records.map((item) => item.id)).toEqual([
+      "manual-summary",
+      "recent-user",
+      "recent-assistant",
+    ]);
+  });
+
+  test("manual compaction chains the previous checkpoint into one replacement checkpoint", async () => {
+    const manager = new ContextManager<string>();
+    const result = await manager.compactManually(
+      [
+        { id: "checkpoint-old", kind: "summary", payload: "old", estimatedTokens: 2, required: true },
+        record("newly-old", 5, false, "turn-2"),
+        {
+          ...record("tail", 4, true, "turn-3"),
+          category: "retained-turn",
+        },
+      ],
+      { contextWindowTokens: 50, reservedOutputTokens: 0 },
+      {
+        compact({ previousCheckpointRecords, newlyCompactedRecords, records, trigger }) {
+          expect(trigger).toBe("manual");
+          expect(previousCheckpointRecords.map((item) => item.id)).toEqual(["checkpoint-old"]);
+          expect(newlyCompactedRecords.map((item) => item.id)).toEqual(["newly-old"]);
+          expect(records.map((item) => item.id)).toEqual(["checkpoint-old", "newly-old"]);
+          return {
+            id: "checkpoint-new",
+            kind: "summary",
+            payload: "new",
+            estimatedTokens: 3,
+          };
+        },
+      },
+      { maxSummaryTokens: 8, ...RELAXED_MANUAL_ELIGIBILITY },
+    );
+
+    expect(result.status).toBe("compacted");
+    if (result.status !== "compacted") throw new Error("expected compaction");
+    expect(result.projection.records.map((item) => item.id)).toEqual(["checkpoint-new", "tail"]);
+  });
+
+  test("manual compaction returns a typed no-op when only retained history exists", async () => {
+    const manager = new ContextManager<string>();
+    let calls = 0;
+    const result = await manager.compactManually(
+      [
+        {
+          ...record("current-user", 4, true, "turn-1"),
+          category: "retained-turn",
+        },
+        {
+          ...record("current-assistant", 4, true, "turn-1"),
+          category: "retained-turn",
+        },
+      ],
+      { contextWindowTokens: 100, reservedOutputTokens: 0 },
+      {
+        compact() {
+          calls += 1;
+          return null;
+        },
+      },
+    );
+
+    expect(result).toMatchObject({ status: "noop", reason: "nothing-compactable" });
+    expect(calls).toBe(0);
+  });
+
+  test("rejects manual compaction when eligible history is too small", async () => {
+    const manager = new ContextManager<string>();
+    let calls = 0;
+    const result = await manager.compactManually(
+      [
+        record("old-user", 1_200, false, "turn-1"),
+        record("old-assistant", 1_200, false, "turn-1"),
+        {
+          ...record("tail", 500, true, "turn-2"),
+          category: "retained-turn",
+        },
+      ],
+      { contextWindowTokens: 100_000, reservedOutputTokens: 0 },
+      {
+        compact() {
+          calls += 1;
+          return null;
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "noop",
+      reason: "insufficient-history",
+      eligibility: {
+        eligible: false,
+        compactableTokens: 2_400,
+        minCompactableTokens: 3_000,
+      },
+    });
+    expect(calls).toBe(0);
+  });
+
+  test("treats retained records from the previous checkpoint as pre-checkpoint turns", async () => {
+    const manager = new ContextManager<string>();
+    let calls = 0;
+    const result = await manager.compactManually(
+      [
+        { id: "checkpoint", kind: "summary", payload: "old", estimatedTokens: 1_000, required: true },
+        record("previous-tail", 4_000, false, "turn-3"),
+        {
+          ...record("new-turn", 1_000, true, "turn-4"),
+          category: "retained-turn",
+        },
+      ],
+      { contextWindowTokens: 100_000, reservedOutputTokens: 0 },
+      {
+        compact() {
+          calls += 1;
+          return null;
+        },
+      },
+      {},
+      { previousRetainedRecordIds: ["previous-tail"] },
+    );
+
+    expect(result).toMatchObject({
+      status: "noop",
+      reason: "recent-compaction",
+      eligibility: {
+        eligible: false,
+        compactableTokens: 4_000,
+        newTurnsSinceCheckpoint: 1,
+        minNewTurnsSinceCheckpoint: 2,
+      },
+    });
+    expect(calls).toBe(0);
+  });
+
+  test("rejects manual compaction when the conservative estimated gain is too small", async () => {
+    const manager = new ContextManager<string>();
+    let calls = 0;
+    const result = await manager.compactManually(
+      [
+        record("old-user", 2_000, false, "turn-1"),
+        record("old-assistant", 2_000, false, "turn-1"),
+        {
+          ...record("tail", 500, true, "turn-2"),
+          category: "retained-turn",
+        },
+      ],
+      { contextWindowTokens: 100_000, reservedOutputTokens: 0 },
+      {
+        compact() {
+          calls += 1;
+          return null;
+        },
+      },
+      { maxSummaryTokens: 3_500 },
+    );
+
+    expect(result).toMatchObject({
+      status: "noop",
+      reason: "insufficient-gain",
+      eligibility: {
+        eligible: false,
+        compactableTokens: 4_000,
+        estimatedGainTokens: 500,
+        minEstimatedGainTokens: 2_000,
+      },
+    });
+    expect(calls).toBe(0);
+  });
+
+  test("allows repeat manual compaction after enough new turns and estimated savings", async () => {
+    const manager = new ContextManager<string>();
+    const result = await manager.compactManually(
+      [
+        { id: "checkpoint", kind: "summary", payload: "old", estimatedTokens: 1_000, required: true },
+        record("previous-tail", 2_000, false, "turn-3"),
+        record("new-turn-1", 1_500, false, "turn-4"),
+        record("new-turn-2", 1_500, false, "turn-5"),
+        {
+          ...record("current-tail", 500, true, "turn-6"),
+          category: "retained-turn",
+        },
+      ],
+      { contextWindowTokens: 100_000, reservedOutputTokens: 0 },
+      {
+        compact({ trigger }) {
+          expect(trigger).toBe("manual");
+          return {
+            id: "checkpoint-next",
+            kind: "summary",
+            payload: "next",
+            estimatedTokens: 1_500,
+          };
+        },
+      },
+      { maxSummaryTokens: 2_048 },
+      { previousRetainedRecordIds: ["previous-tail"] },
+    );
+
+    expect(result.status).toBe("compacted");
+    if (result.status !== "compacted") throw new Error("expected compaction");
+    expect(result.eligibility).toMatchObject({
+      eligible: true,
+      compactableTokens: 5_000,
+      newTurnsSinceCheckpoint: 3,
+    });
   });
 });

@@ -16,11 +16,17 @@ import {
     ContextManager,
     type ContextCompactionTrigger,
     type ContextCompactor,
+    type ContextProjection,
     type ContextRecord,
+    type ManualContextCompactionEligibility,
     type ModelContextProfile,
 } from "@more-more-code/harness";
 import type { Message } from "./chat-types";
 import { createSemanticContextCompactor } from "./context-compactor";
+import {
+    projectToolResultWorkingSet,
+    type ToolResultPruningStats,
+} from "./tool-result-pruning";
 import { resolveChatModel } from "./models";
 import { resolveModelContextProfile } from "./model-context-profile";
 import {
@@ -61,7 +67,25 @@ type LocalModelTransportOptions = {
     onMessageSnapshot?: (messages: Message[]) => void;
     onContextCompaction?: (event: ContextCompactionEvent) => void;
     getContextCheckpoint?: () => PersistedContextCheckpoint | null;
+    getToolResultSourceEntryId?: (toolCallId: string) => string | undefined;
     onProviderTelemetry?: (telemetry: ProviderCacheTelemetry) => void;
+};
+
+export type ManualContextCompactionOutcome = {
+    status: "compacted" | "noop";
+    reason?:
+        | "nothing-compactable"
+        | "insufficient-history"
+        | "recent-compaction"
+        | "insufficient-gain"
+        | "compactor-unavailable";
+    eligibility: ManualContextCompactionEligibility;
+    fallbackUsed: boolean;
+    fallbackReason?: "small-budget" | "empty-output" | "oversized-output" | "reducer-error";
+    inputTokensBefore: number;
+    inputTokensAfter: number;
+    inputBudgetTokens: number;
+    toolResultPruning: ToolResultPruningStats;
 };
 
 function buildContextRecords(
@@ -112,49 +136,92 @@ function buildContextRecords(
     ];
 }
 
-async function projectMessages(
-    messages: Message[],
-    systemPrompt: string,
-    profile: ModelContextProfile,
-    checkpoint: PersistedContextCheckpoint | null,
-    compactor: ContextCompactor<Message>,
-) {
+export async function projectMessages(input: {
+    messages: Message[];
+    systemPrompt: string;
+    profile: ModelContextProfile;
+    checkpoint: PersistedContextCheckpoint | null;
+    compactor: ContextCompactor<Message>;
+    manual?: boolean;
+    resolveToolResultSourceEntryId?: (toolCallId: string) => string | undefined;
+}) {
     const manager = new ContextManager<Message>();
-    const records = buildContextRecords(messages, profile, checkpoint);
+    const budget = {
+        contextWindowTokens: input.profile.contextWindowTokens,
+        reservedOutputTokens: input.profile.reservedOutputTokens,
+        safetyMarginTokens:
+            input.profile.safetyMarginTokens + input.profile.tokenCounter.countText(input.systemPrompt),
+    };
+    const effectiveInputBudgetTokens = Math.max(
+        0,
+        budget.contextWindowTokens - budget.reservedOutputTokens - budget.safetyMarginTokens,
+    );
+    const toolWorkingSet = projectToolResultWorkingSet({
+        messages: input.messages,
+        profile: input.profile,
+        inputBudgetTokens: effectiveInputBudgetTokens,
+        resolveSourceEntryId: input.resolveToolResultSourceEntryId,
+    });
+    const records = buildContextRecords(toolWorkingSet.messages, input.profile, input.checkpoint);
+    const inputTokensBefore = records.reduce((total, record) => total + record.estimatedTokens, 0);
     let compactedSource: readonly ContextRecord<Message>[] = [];
     let generatedSummaryId: string | null = null;
+    const trackingCompactor: ContextCompactor<Message> = {
+        async compact(compactionInput) {
+            compactedSource = compactionInput.records;
+            const summary = await input.compactor.compact(compactionInput);
+            generatedSummaryId = summary?.id ?? null;
+            return summary;
+        },
+    };
+    const policy = {
+        maxSummaryTokens: input.profile.maxSummaryTokens,
+        ...(input.profile.compactionSoftLimitRatio != null
+            ? { softLimitRatio: input.profile.compactionSoftLimitRatio }
+            : {}),
+        ...(input.profile.compactionHardLimitRatio != null
+            ? { hardLimitRatio: input.profile.compactionHardLimitRatio }
+            : {}),
+        ...(input.profile.postCompactionTargetRatio != null
+            ? { targetUtilizationRatio: input.profile.postCompactionTargetRatio }
+            : {}),
+    };
+
+    if (input.manual) {
+        const manualResult = await manager.compactManually(
+            records,
+            budget,
+            trackingCompactor,
+            policy,
+            {
+                previousRetainedRecordIds: input.checkpoint?.retainedTailMessageIds ?? [],
+            },
+        );
+        return {
+            projection: manualResult.projection,
+            compactedSource,
+            generatedSummaryId,
+            toolResultPruning: toolWorkingSet.stats,
+            manualResult,
+            inputTokensBefore,
+        };
+    }
 
     const projection = await manager.projectWithCompaction(
         records,
-        {
-            contextWindowTokens: profile.contextWindowTokens,
-            reservedOutputTokens: profile.reservedOutputTokens,
-            safetyMarginTokens:
-                profile.safetyMarginTokens + profile.tokenCounter.countText(systemPrompt),
-        },
-        {
-            async compact(input) {
-                compactedSource = input.records;
-                const summary = await compactor.compact(input);
-                generatedSummaryId = summary?.id ?? null;
-                return summary;
-            },
-        },
-        {
-            maxSummaryTokens: profile.maxSummaryTokens,
-            ...(profile.compactionSoftLimitRatio != null
-                ? { softLimitRatio: profile.compactionSoftLimitRatio }
-                : {}),
-            ...(profile.compactionHardLimitRatio != null
-                ? { hardLimitRatio: profile.compactionHardLimitRatio }
-                : {}),
-            ...(profile.postCompactionTargetRatio != null
-                ? { targetUtilizationRatio: profile.postCompactionTargetRatio }
-                : {}),
-        },
+        budget,
+        trackingCompactor,
+        policy,
     );
 
-    return { projection, compactedSource, generatedSummaryId };
+    return {
+        projection,
+        compactedSource,
+        generatedSummaryId,
+        toolResultPruning: toolWorkingSet.stats,
+        manualResult: null,
+        inputTokensBefore,
+    };
 }
 
 function resolveExecutionConfig(messages: Message[]): {
@@ -185,6 +252,77 @@ export class LocalModelTransport implements ChatTransport<Message> {
         return this.lastProviderTelemetry
             ? structuredClone(this.lastProviderTelemetry)
             : null;
+    }
+
+    async compactContext(input: {
+        messages: Message[];
+        mode: ModeType;
+        model: SupportedChatModelId;
+        abortSignal?: AbortSignal;
+    }): Promise<ManualContextCompactionOutcome> {
+        const environment = getAgentEnvironment();
+        const tools = environment.tools.getModelTools(input.mode) as ToolContracts;
+        const resolvedModel = resolveChatModel(input.model);
+        const contextProfile = resolveModelContextProfile(input.model);
+        const validatedMessages = await validateUIMessages<Message>({
+            messages: input.messages,
+            tools,
+        });
+        const systemPrompt = buildSystemPrompt({ mode: input.mode, environment });
+        const checkpoint = this.options.getContextCheckpoint?.() ?? null;
+        let fallbackReason: ManualContextCompactionOutcome["fallbackReason"];
+        const contextCompactor = createSemanticContextCompactor({
+            profile: contextProfile,
+            reduce: async ({ instructions, prompt, maxOutputTokens }) => {
+                const result = await generateText({
+                    model: resolvedModel.model,
+                    system: instructions,
+                    prompt,
+                    maxOutputTokens,
+                    providerOptions: resolvedModel.providerOptions,
+                    abortSignal: input.abortSignal,
+                });
+                return result.text;
+            },
+            onFallback(reason) {
+                fallbackReason = reason;
+            },
+        });
+        const projected = await projectMessages({
+            messages: validatedMessages,
+            systemPrompt,
+            profile: contextProfile,
+            checkpoint,
+            compactor: contextCompactor,
+            manual: true,
+            resolveToolResultSourceEntryId: this.options.getToolResultSourceEntryId,
+        });
+        if (projected.manualResult?.status === "compacted") {
+            this.emitContextCompaction({
+                projection: projected.projection,
+                compactedSource: projected.compactedSource,
+                generatedSummaryId: projected.generatedSummaryId,
+                checkpoint,
+            });
+        }
+
+        if (!projected.manualResult) {
+            throw new Error("Manual context compaction did not return an eligibility result");
+        }
+
+        return {
+            status: projected.manualResult.status,
+            ...(projected.manualResult.status === "noop"
+                ? { reason: projected.manualResult.reason }
+                : {}),
+            eligibility: projected.manualResult.eligibility,
+            fallbackUsed: fallbackReason != null,
+            ...(fallbackReason ? { fallbackReason } : {}),
+            inputTokensBefore: projected.inputTokensBefore,
+            inputTokensAfter: projected.projection.estimatedInputTokens,
+            inputBudgetTokens: projected.projection.inputBudgetTokens,
+            toolResultPruning: projected.toolResultPruning,
+        };
     }
 
     async sendMessages({
@@ -230,46 +368,24 @@ export class LocalModelTransport implements ChatTransport<Message> {
                 return result.text;
             },
         });
-        const { projection, compactedSource, generatedSummaryId } = await projectMessages(
-            validatedMessages,
+        const { projection, compactedSource, generatedSummaryId } = await projectMessages({
+            messages: validatedMessages,
             systemPrompt,
-            contextProfile,
+            profile: contextProfile,
             checkpoint,
-            contextCompactor,
-        );
+            compactor: contextCompactor,
+            resolveToolResultSourceEntryId: this.options.getToolResultSourceEntryId,
+        });
         const projectedMessages = projection.records.map((record) => record.payload);
         const modelMessages = await convertToModelMessages(projectedMessages, { tools });
 
         this.emitMessageSnapshot(validatedMessages);
-        const summaryRecord = generatedSummaryId
-            ? projection.records.find((record) => record.id === generatedSummaryId)
-            : undefined;
-        if (summaryRecord && compactedSource.length > 0 && projection.compaction) {
-            const compaction = projection.compaction;
-            this.options.onContextCompaction?.({
-                summary: structuredClone(summaryRecord.payload),
-                tokensBefore: compactedSource.reduce(
-                    (total, record) => total + record.estimatedTokens,
-                    0,
-                ),
-                trigger: compaction.trigger,
-                inputTokensBefore: compaction.inputTokensBefore,
-                inputTokensAfter: compaction.inputTokensAfter,
-                inputBudgetTokens: compaction.inputBudgetTokens,
-                targetInputTokens: compaction.targetInputTokens,
-                targetSummaryTokens: compaction.targetSummaryTokens,
-                ...(compaction.compactedThroughRecordId
-                    ? { compactedThroughMessageId: compaction.compactedThroughRecordId }
-                    : {}),
-                compactedMessageIds: [
-                    ...(checkpoint?.compactedMessageIds ?? []),
-                    ...compaction.compactedRecordIds,
-                ].filter((id, index, ids) => ids.indexOf(id) === index),
-                retainedTailMessageIds: projection.records
-                    .filter((record) => record.kind === "history")
-                    .map((record) => record.id),
-            });
-        }
+        this.emitContextCompaction({
+            projection,
+            compactedSource,
+            generatedSummaryId,
+            checkpoint,
+        });
 
         let completedUsage: LanguageModelUsage | undefined;
         const result = streamText({
@@ -317,6 +433,46 @@ export class LocalModelTransport implements ChatTransport<Message> {
 
     async reconnectToStream() {
         return null;
+    }
+
+    private emitContextCompaction(input: {
+        projection: ContextProjection<Message>;
+        compactedSource: readonly ContextRecord<Message>[];
+        generatedSummaryId: string | null;
+        checkpoint: PersistedContextCheckpoint | null;
+    }) {
+        const summaryRecord = input.generatedSummaryId
+            ? input.projection.records.find((record) => record.id === input.generatedSummaryId)
+            : undefined;
+        if (!summaryRecord || input.compactedSource.length === 0 || !input.projection.compaction) {
+            return false;
+        }
+
+        const compaction = input.projection.compaction;
+        this.options.onContextCompaction?.({
+            summary: structuredClone(summaryRecord.payload),
+            tokensBefore: input.compactedSource.reduce(
+                (total, record) => total + record.estimatedTokens,
+                0,
+            ),
+            trigger: compaction.trigger,
+            inputTokensBefore: compaction.inputTokensBefore,
+            inputTokensAfter: compaction.inputTokensAfter,
+            inputBudgetTokens: compaction.inputBudgetTokens,
+            targetInputTokens: compaction.targetInputTokens,
+            targetSummaryTokens: compaction.targetSummaryTokens,
+            ...(compaction.compactedThroughRecordId
+                ? { compactedThroughMessageId: compaction.compactedThroughRecordId }
+                : {}),
+            compactedMessageIds: [
+                ...(input.checkpoint?.compactedMessageIds ?? []),
+                ...compaction.compactedRecordIds,
+            ].filter((id, index, ids) => ids.indexOf(id) === index),
+            retainedTailMessageIds: input.projection.records
+                .filter((record) => record.kind === "history")
+                .map((record) => record.id),
+        });
+        return true;
     }
 
     private emitMessageSnapshot(messages: Message[]) {

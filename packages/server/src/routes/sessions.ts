@@ -194,7 +194,7 @@ const sessionEntrySchema = z.discriminatedUnion("type", [
         type: z.literal("compaction"),
         summary: z.unknown(),
         tokensBefore: z.number().optional(),
-        trigger: z.enum(["soft-limit", "hard-limit", "overflow"]).optional(),
+        trigger: z.enum(["soft-limit", "hard-limit", "overflow", "manual"]).optional(),
         inputTokensBefore: z.number().optional(),
         inputTokensAfter: z.number().optional(),
         inputBudgetTokens: z.number().optional(),

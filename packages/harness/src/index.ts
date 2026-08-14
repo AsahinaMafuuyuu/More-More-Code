@@ -22,6 +22,7 @@ export {
   InMemoryExecutionEventStore,
 } from "./execution-store";
 export { createExactTokenCounter, createHeuristicTokenCounter } from "./token-budget";
+export { ToolResultWorkingSetManager } from "./tool-result-projection";
 export {
   SESSION_TREE_VERSION,
   appendSessionEntries,
@@ -85,12 +86,28 @@ export type {
   TokenCounter,
 } from "./token-budget";
 export type {
+  ToolResultFreshness,
+  ToolResultProjection,
+  ToolResultProjectionCandidate,
+  ToolResultProjectionMode,
+  ToolResultProjectionRequest,
+  ToolResultProjector,
+  ToolResultPruningReason,
+  ToolResultWorkingSetPolicy,
+  ToolResultWorkingSetProjection,
+} from "./tool-result-projection";
+export type {
   ContextBudget,
   ContextCompactionMetadata,
   ContextCompactionPolicy,
   ContextCompactionTrigger,
   ContextCompactor,
   ContextProjection,
+  ManualContextCompactionEligibility,
+  ManualContextCompactionEligibilityMetrics,
+  ManualContextCompactionNoopReason,
+  ManualContextCompactionResult,
+  ManualContextCompactionState,
   ContextRecord,
   ContextRecordCategory,
   ContextRecordKind,

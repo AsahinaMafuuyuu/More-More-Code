@@ -36,7 +36,7 @@ export type ContextBudget = {
   safetyMarginTokens?: number;
 };
 
-export type ContextCompactionTrigger = "soft-limit" | "hard-limit" | "overflow";
+export type ContextCompactionTrigger = "soft-limit" | "hard-limit" | "overflow" | "manual";
 
 export type ContextCompactionMetadata = {
   trigger: ContextCompactionTrigger;
@@ -64,6 +64,56 @@ export type ContextProjection<TPayload = unknown> = {
   compaction?: ContextCompactionMetadata;
 };
 
+export type ManualContextCompactionNoopReason =
+  | "nothing-compactable"
+  | "insufficient-history"
+  | "recent-compaction"
+  | "insufficient-gain"
+  | "compactor-unavailable";
+
+export type ManualContextCompactionEligibilityMetrics = {
+  inputBudgetTokens: number;
+  compactableTokens: number;
+  replacementSourceTokens: number;
+  estimatedSummaryTokens: number;
+  estimatedGainTokens: number;
+  estimatedGainRatio: number;
+  newTurnsSinceCheckpoint: number;
+  minCompactableTokens: number;
+  minEstimatedGainTokens: number;
+  minEstimatedGainRatio: number;
+  minNewTurnsSinceCheckpoint: number;
+  hasPreviousCheckpoint: boolean;
+};
+
+export type ManualContextCompactionEligibility =
+  | (ManualContextCompactionEligibilityMetrics & { eligible: true })
+  | (ManualContextCompactionEligibilityMetrics & {
+      eligible: false;
+      reason: Exclude<ManualContextCompactionNoopReason, "compactor-unavailable">;
+    });
+
+export type ManualContextCompactionState = {
+  /**
+   * Records intentionally retained by the previous checkpoint. They predate
+   * that checkpoint and must not be counted as newly completed Turns.
+   */
+  previousRetainedRecordIds?: readonly string[];
+};
+
+export type ManualContextCompactionResult<TPayload = unknown> =
+  | {
+      status: "compacted";
+      eligibility: ManualContextCompactionEligibility & { eligible: true };
+      projection: ContextProjection<TPayload>;
+    }
+  | {
+      status: "noop";
+      reason: ManualContextCompactionNoopReason;
+      eligibility: ManualContextCompactionEligibility;
+      projection: ContextProjection<TPayload>;
+    };
+
 export type ContextCompactionPolicy = {
   maxSummaryTokens?: number;
   /** Begin proactive compaction before the provider hard limit is reached. */
@@ -72,6 +122,18 @@ export type ContextCompactionPolicy = {
   hardLimitRatio?: number;
   /** Desired post-compaction utilization, leaving room for subsequent steps. */
   targetUtilizationRatio?: number;
+  /** Absolute floor for manually compactable history. Defaults to 2048 tokens. */
+  manualMinCompactableTokens?: number;
+  /** Input-budget-relative floor for manually compactable history. Defaults to 3%. */
+  manualMinCompactableRatio?: number;
+  /** New completed Turns required after an existing checkpoint. Defaults to 2. */
+  manualMinTurnsSinceCheckpoint?: number;
+  /** Absolute minimum estimated savings for manual compaction. Defaults to 1024 tokens. */
+  manualMinEstimatedGainTokens?: number;
+  /** Input-budget-relative minimum estimated savings. Defaults to 2%. */
+  manualMinEstimatedGainInputRatio?: number;
+  /** Minimum savings as a share of the replacement source. Defaults to 30%. */
+  manualMinEstimatedGainRatio?: number;
 };
 
 export type ContextCompactor<TPayload = unknown> = {
@@ -153,6 +215,12 @@ function assertNonNegativeInteger(value: number, name: string) {
 function assertRatio(value: number, name: string) {
   if (!Number.isFinite(value) || value <= 0 || value > 1) {
     throw new Error(`${name} must be greater than 0 and less than or equal to 1`);
+  }
+}
+
+function assertNonNegativeRatio(value: number, name: string) {
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new Error(`${name} must be greater than or equal to 0 and less than or equal to 1`);
   }
 }
 
@@ -284,6 +352,16 @@ export class ContextManager<TPayload = unknown> {
     compactor: ContextCompactor<TPayload>,
     options: ContextCompactionPolicy = {},
   ): Promise<ContextProjection<TPayload>> {
+    return this.projectWithCompactionInternal(records, budget, compactor, options, null);
+  }
+
+  private async projectWithCompactionInternal(
+    records: readonly ContextRecord<TPayload>[],
+    budget: ContextBudget,
+    compactor: ContextCompactor<TPayload>,
+    options: ContextCompactionPolicy,
+    forcedTrigger: ContextCompactionTrigger | null,
+  ): Promise<ContextProjection<TPayload>> {
     const canonicalRecords = compileContextRecords(records);
     const first = this.project(canonicalRecords, budget);
     const maxSummaryTokens = Math.max(0, Math.floor(options.maxSummaryTokens ?? 2_048));
@@ -306,15 +384,17 @@ export class ContextManager<TPayload = unknown> {
     const softLimitTokens = Math.floor(first.inputBudgetTokens * softLimitRatio);
     const hardLimitTokens = Math.floor(first.inputBudgetTokens * hardLimitRatio);
     const targetInputTokens = Math.floor(first.inputBudgetTokens * targetUtilizationRatio);
-    const trigger: ContextCompactionTrigger | null = first.truncated
+    const trigger: ContextCompactionTrigger | null = forcedTrigger ?? (
+      first.truncated
       || first.overBudget
       || inputTokensBefore > first.inputBudgetTokens
-      ? "overflow"
-      : inputTokensBefore > hardLimitTokens
-        ? "hard-limit"
-        : inputTokensBefore > softLimitTokens
-          ? "soft-limit"
-          : null;
+        ? "overflow"
+        : inputTokensBefore > hardLimitTokens
+          ? "hard-limit"
+          : inputTokensBefore > softLimitTokens
+            ? "soft-limit"
+            : null
+    );
     if (!trigger) return first;
 
     const groups = groupRecords(canonicalRecords);
@@ -338,15 +418,17 @@ export class ContextManager<TPayload = unknown> {
     const retainedGroupKeys = new Set<string>();
     let cutReached = false;
 
-    for (let index = compactableGroups.length - 1; index >= 0; index -= 1) {
-      const group = compactableGroups[index]!;
-      if (cutReached) continue;
-      if (group.estimatedTokens > remainingHistoryTokens) {
-        cutReached = true;
-        continue;
+    if (trigger !== "manual") {
+      for (let index = compactableGroups.length - 1; index >= 0; index -= 1) {
+        const group = compactableGroups[index]!;
+        if (cutReached) continue;
+        if (group.estimatedTokens > remainingHistoryTokens) {
+          cutReached = true;
+          continue;
+        }
+        retainedGroupKeys.add(group.key);
+        remainingHistoryTokens -= group.estimatedTokens;
       }
-      retainedGroupKeys.add(group.key);
-      remainingHistoryTokens -= group.estimatedTokens;
     }
 
     const compactedIndexes = new Set<number>();
@@ -416,5 +498,175 @@ export class ContextManager<TPayload = unknown> {
           .map((record) => record.id),
       },
     };
+  }
+
+  evaluateManualCompactionEligibility(
+    records: readonly ContextRecord<TPayload>[],
+    budget: ContextBudget,
+    options: ContextCompactionPolicy = {},
+    state: ManualContextCompactionState = {},
+  ): ManualContextCompactionEligibility {
+    const canonicalRecords = compileContextRecords(records);
+    const projection = this.project(canonicalRecords, budget);
+    const inputBudgetTokens = projection.inputBudgetTokens;
+
+    const manualMinCompactableTokens = Math.max(
+      0,
+      Math.floor(options.manualMinCompactableTokens ?? 2_048),
+    );
+    const manualMinCompactableRatio = options.manualMinCompactableRatio ?? 0.03;
+    const manualMinTurnsSinceCheckpoint = Math.max(
+      0,
+      Math.floor(options.manualMinTurnsSinceCheckpoint ?? 2),
+    );
+    const manualMinEstimatedGainTokens = Math.max(
+      0,
+      Math.floor(options.manualMinEstimatedGainTokens ?? 1_024),
+    );
+    const manualMinEstimatedGainInputRatio = options.manualMinEstimatedGainInputRatio ?? 0.02;
+    const manualMinEstimatedGainRatio = options.manualMinEstimatedGainRatio ?? 0.3;
+
+    assertNonNegativeInteger(manualMinCompactableTokens, "manualMinCompactableTokens");
+    assertNonNegativeInteger(manualMinTurnsSinceCheckpoint, "manualMinTurnsSinceCheckpoint");
+    assertNonNegativeInteger(manualMinEstimatedGainTokens, "manualMinEstimatedGainTokens");
+    assertNonNegativeRatio(manualMinCompactableRatio, "manualMinCompactableRatio");
+    assertNonNegativeRatio(
+      manualMinEstimatedGainInputRatio,
+      "manualMinEstimatedGainInputRatio",
+    );
+    assertNonNegativeRatio(manualMinEstimatedGainRatio, "manualMinEstimatedGainRatio");
+
+    const groups = groupRecords(canonicalRecords);
+    const compactableGroups = groups.filter((group) =>
+      group.records.every(({ record }) => isCompactableHistory(record)),
+    );
+    const compactableTokens = compactableGroups.reduce(
+      (total, group) => total + group.estimatedTokens,
+      0,
+    );
+    const compactableIndexes = new Set(
+      compactableGroups.flatMap((group) => group.records.map(({ index }) => index)),
+    );
+    const previousCheckpointRecords = canonicalRecords.filter((record) => record.kind === "summary");
+    const hasPreviousCheckpoint = previousCheckpointRecords.length > 0;
+    const previousCheckpointTokens = sumRecordTokens(previousCheckpointRecords);
+    const replacementSourceTokens = previousCheckpointTokens + compactableTokens;
+    const maxSummaryTokens = Math.max(0, Math.floor(options.maxSummaryTokens ?? 2_048));
+    const retainedTokens = canonicalRecords.reduce((total, record, index) => {
+      if (record.kind === "summary" || compactableIndexes.has(index)) return total;
+      return total + record.estimatedTokens;
+    }, 0);
+    const availableSummaryTokens = Math.max(0, inputBudgetTokens - retainedTokens);
+    const estimatedSummaryTokens = Math.min(
+      maxSummaryTokens,
+      replacementSourceTokens,
+      availableSummaryTokens,
+    );
+    const estimatedGainTokens = Math.max(0, replacementSourceTokens - estimatedSummaryTokens);
+    const estimatedGainRatio = replacementSourceTokens === 0
+      ? 0
+      : estimatedGainTokens / replacementSourceTokens;
+    const previousRetainedRecordIds = new Set(state.previousRetainedRecordIds ?? []);
+    const newTurnKeys = new Set<string>();
+    canonicalRecords.forEach((record, index) => {
+      if (record.kind !== "history" || previousRetainedRecordIds.has(record.id)) return;
+      newTurnKeys.add(record.groupId ?? `record:${index}`);
+    });
+    const newTurnsSinceCheckpoint = hasPreviousCheckpoint ? newTurnKeys.size : 0;
+    const minCompactableTokens = Math.max(
+      manualMinCompactableTokens,
+      Math.floor(inputBudgetTokens * manualMinCompactableRatio),
+    );
+    const minEstimatedGainTokens = Math.max(
+      manualMinEstimatedGainTokens,
+      Math.floor(inputBudgetTokens * manualMinEstimatedGainInputRatio),
+    );
+    const metrics: ManualContextCompactionEligibilityMetrics = {
+      inputBudgetTokens,
+      compactableTokens,
+      replacementSourceTokens,
+      estimatedSummaryTokens,
+      estimatedGainTokens,
+      estimatedGainRatio,
+      newTurnsSinceCheckpoint,
+      minCompactableTokens,
+      minEstimatedGainTokens,
+      minEstimatedGainRatio: manualMinEstimatedGainRatio,
+      minNewTurnsSinceCheckpoint: manualMinTurnsSinceCheckpoint,
+      hasPreviousCheckpoint,
+    };
+
+    if (compactableGroups.length === 0) {
+      if (hasPreviousCheckpoint) {
+        return { eligible: false, reason: "recent-compaction", ...metrics };
+      }
+      return { eligible: false, reason: "nothing-compactable", ...metrics };
+    }
+
+    if (hasPreviousCheckpoint && (
+      compactableTokens < minCompactableTokens
+      || newTurnsSinceCheckpoint < manualMinTurnsSinceCheckpoint
+    )) {
+      return { eligible: false, reason: "recent-compaction", ...metrics };
+    }
+
+    if (!hasPreviousCheckpoint && compactableTokens < minCompactableTokens) {
+      return { eligible: false, reason: "insufficient-history", ...metrics };
+    }
+
+    if (
+      estimatedGainTokens < minEstimatedGainTokens
+      || estimatedGainRatio < manualMinEstimatedGainRatio
+    ) {
+      return { eligible: false, reason: "insufficient-gain", ...metrics };
+    }
+
+    return { eligible: true, ...metrics };
+  }
+
+  /**
+   * Requests the existing compaction pipeline below automatic thresholds. The
+   * request must first pass manual eligibility gates and never relaxes atomic
+   * group, required-record, or checkpoint replacement rules.
+   */
+  async compactManually(
+    records: readonly ContextRecord<TPayload>[],
+    budget: ContextBudget,
+    compactor: ContextCompactor<TPayload>,
+    options: ContextCompactionPolicy = {},
+    state: ManualContextCompactionState = {},
+  ): Promise<ManualContextCompactionResult<TPayload>> {
+    const canonicalRecords = compileContextRecords(records);
+    const eligibility = this.evaluateManualCompactionEligibility(
+      canonicalRecords,
+      budget,
+      options,
+      state,
+    );
+    if (!eligibility.eligible) {
+      return {
+        status: "noop",
+        reason: eligibility.reason,
+        eligibility,
+        projection: this.project(canonicalRecords, budget),
+      };
+    }
+
+    const projection = await this.projectWithCompactionInternal(
+      canonicalRecords,
+      budget,
+      compactor,
+      options,
+      "manual",
+    );
+    if (!projection.compaction) {
+      return {
+        status: "noop",
+        reason: "compactor-unavailable",
+        eligibility,
+        projection,
+      };
+    }
+    return { status: "compacted", eligibility, projection };
   }
 }

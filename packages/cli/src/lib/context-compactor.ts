@@ -189,12 +189,14 @@ export function createSemanticContextCompactor(input: {
     profile: ModelContextProfile;
     reduce: SemanticContextReducer;
     fallback?: ContextCompactor<Message>;
+    onFallback?: (reason: "small-budget" | "empty-output" | "oversized-output" | "reducer-error") => void;
 }): ContextCompactor<Message> {
     const fallback = input.fallback ?? createDeterministicContextCompactor(input.profile);
 
     return {
         async compact(compactionInput) {
             if (compactionInput.records.length === 0 || compactionInput.targetTokens < 32) {
+                input.onFallback?.("small-budget");
                 return fallback.compact(compactionInput);
             }
 
@@ -204,7 +206,10 @@ export function createSemanticContextCompactor(input: {
                     prompt: buildSemanticCompactionPrompt(compactionInput),
                     maxOutputTokens: compactionInput.targetTokens,
                 });
-                if (!text.trim()) return fallback.compact(compactionInput);
+                if (!text.trim()) {
+                    input.onFallback?.("empty-output");
+                    return fallback.compact(compactionInput);
+                }
 
                 const fitted = fitSummaryMessage({
                     id: summaryId(compactionInput.records),
@@ -212,7 +217,10 @@ export function createSemanticContextCompactor(input: {
                     profile: input.profile,
                     targetTokens: compactionInput.targetTokens,
                 });
-                if (!fitted) return fallback.compact(compactionInput);
+                if (!fitted) {
+                    input.onFallback?.("oversized-output");
+                    return fallback.compact(compactionInput);
+                }
 
                 return {
                     id: fitted.message.id,
@@ -222,6 +230,7 @@ export function createSemanticContextCompactor(input: {
                     groupId: "compacted-prefix",
                 };
             } catch {
+                input.onFallback?.("reducer-error");
                 return fallback.compact(compactionInput);
             }
         },

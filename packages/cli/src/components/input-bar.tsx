@@ -18,6 +18,7 @@ import { useDialog } from "../providers/dialog";
 import { useTheme } from "../providers/theme";
 import { usePromptConfig } from "../providers/prompt-config";
 import type { ModeType, SupportedChatModelId } from "@more-more-code/shared";
+import type { ManualContextCompactionOutcome } from "../lib/local-model-transport";
 
 // 这些变量主要用于@提及功能的实现
 const MAX_VISIBLE_MENTIONS = 8; // 最大可见的提及数量
@@ -341,6 +342,7 @@ interface Props {
     sessionTree?: SessionTreeCommandApi,
     onModeChange?: (mode: ModeType) => void,
     onModelChange?: (model: SupportedChatModelId) => void,
+    onCompact?: () => Promise<ManualContextCompactionOutcome>,
 }
 
 export const TEXTAREA_KEY_BINDING: KeyBinding[] = [
@@ -370,6 +372,7 @@ export default function InputBar({
     sessionTree,
     onModeChange,
     onModelChange,
+    onCompact,
 }: Props) {
     const { mode, model, setMode, setModel } = usePromptConfig();
     const textareaRef = useRef<TextareaRenderable>(null);
@@ -540,11 +543,12 @@ export default function InputBar({
                 setMode: changeMode, // 设置模式并记录 Session state event
                 setModel: changeModel, // 设置模型并记录 Session state event
                 sessionTree,
+                compact: onCompact,
             }); // 执行命令的action
         } else {
             textarea.insertText(command.value + ' ') // 插入命令的value
         }
-    }, [renderer, toast, dialog, navigate, mode, changeMode, changeModel, sessionTree])
+    }, [renderer, toast, dialog, navigate, mode, changeMode, changeModel, sessionTree, onCompact])
 
     const handleCommandExecute = useCallback((index: number) => {
         // 当用户执行一个命令时，执行该命令的回调
