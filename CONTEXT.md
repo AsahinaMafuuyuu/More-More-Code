@@ -38,7 +38,19 @@ A provider-independent classification of Context Records as stable, checkpoint, 
 
 ## Compaction Entry
 
-A durable record that a context compaction occurred, including the resulting summary and the history range it represented. The latest Compaction Entry on the active branch acts as the persisted Context checkpoint for later Model Steps. A newer checkpoint summarizes the previous effective checkpoint plus newly compacted history; older checkpoints remain Session history but are superseded for model Context Projection.
+A durable record that a context compaction occurred, including the replacement snapshot, trigger reason, token-budget diagnostics, and the history range it represented. The latest Compaction Entry on the active branch acts as the persisted Context checkpoint for later Model Steps. A newer checkpoint reduces the previous effective checkpoint plus newly compacted history into one complete replacement snapshot; older checkpoints remain Session history but are superseded for model Context Projection.
+
+## Semantic Context Snapshot
+
+The state-oriented payload stored by a Compaction Entry. It represents current goal/state, decisions, constraints, artifacts, failures/lessons, and pending work rather than a chronological transcript. New snapshots preserve still-valid facts, remove superseded facts, and replace the previous snapshot as the effective checkpoint.
+
+## Compaction Policy
+
+The provider-independent Context policy that decides when and how much history to compact. The default application policy uses an 80% soft limit, 92% hard limit, and 70% post-compaction target over the effective input budget. Only optional historical Context groups are eligible; retained recent Turns and other required groups remain atomic and uncut.
+
+## Branch Summary
+
+A knowledge-transfer summary created when leaving or navigating between Session branches. It answers what useful information a departed branch discovered and is intentionally separate from Compaction, which reduces the active branch into a bounded current-state snapshot.
 
 ## ToolSet Fingerprint
 
@@ -74,7 +86,7 @@ The origin of executable tool capabilities. `native` is the built-in default sou
 
 ## Tool Runtime
 
-The local boundary between AgentLoop Tool Steps and concrete Tool Sources. It applies Tool Registry visibility/capabilities, permission decisions, timeout/cancellation propagation, source selection, and normalized status/timing outcomes. AgentLoop owns lifecycle orchestration; Tool Runtime owns these execution concerns.
+The local boundary between AgentLoop Tool Steps and concrete Tool Sources. It applies Tool Registry visibility/capabilities, permission decisions, timeout/cancellation propagation, source selection, and normalized status/timing outcomes. AgentLoop owns lifecycle orchestration; Tool Runtime owns these execution concerns. Native command execution consumes the Runtime workspace root and AbortSignal, and command-specific timeout values are resolved at this boundary rather than by a second native timer.
 
 ## Tool Capability
 

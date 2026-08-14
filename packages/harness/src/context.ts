@@ -36,6 +36,23 @@ export type ContextBudget = {
   safetyMarginTokens?: number;
 };
 
+export type ContextCompactionTrigger = "soft-limit" | "hard-limit" | "overflow";
+
+export type ContextCompactionMetadata = {
+  trigger: ContextCompactionTrigger;
+  inputTokensBefore: number;
+  inputTokensAfter: number;
+  inputBudgetTokens: number;
+  softLimitTokens: number;
+  hardLimitTokens: number;
+  targetInputTokens: number;
+  targetSummaryTokens: number;
+  previousCheckpointRecordIds: string[];
+  compactedRecordIds: string[];
+  compactedThroughRecordId: string | null;
+  retainedRecordIds: string[];
+};
+
 export type ContextProjection<TPayload = unknown> = {
   records: ContextRecord<TPayload>[];
   omittedRecords: ContextRecord<TPayload>[];
@@ -43,12 +60,27 @@ export type ContextProjection<TPayload = unknown> = {
   estimatedInputTokens: number;
   truncated: boolean;
   overBudget: boolean;
+  /** Present only when this projection created a replacement checkpoint. */
+  compaction?: ContextCompactionMetadata;
+};
+
+export type ContextCompactionPolicy = {
+  maxSummaryTokens?: number;
+  /** Begin proactive compaction before the provider hard limit is reached. */
+  softLimitRatio?: number;
+  /** Escalate proactive compaction when the input budget is nearly exhausted. */
+  hardLimitRatio?: number;
+  /** Desired post-compaction utilization, leaving room for subsequent steps. */
+  targetUtilizationRatio?: number;
 };
 
 export type ContextCompactor<TPayload = unknown> = {
   compact(input: {
     records: readonly ContextRecord<TPayload>[];
+    previousCheckpointRecords: readonly ContextRecord<TPayload>[];
+    newlyCompactedRecords: readonly ContextRecord<TPayload>[];
     targetTokens: number;
+    trigger: ContextCompactionTrigger;
   }): Promise<ContextRecord<TPayload> | null> | ContextRecord<TPayload> | null;
 };
 
@@ -116,6 +148,22 @@ function assertNonNegativeInteger(value: number, name: string) {
   if (!Number.isInteger(value) || value < 0) {
     throw new Error(`${name} must be a non-negative integer`);
   }
+}
+
+function assertRatio(value: number, name: string) {
+  if (!Number.isFinite(value) || value <= 0 || value > 1) {
+    throw new Error(`${name} must be greater than 0 and less than or equal to 1`);
+  }
+}
+
+function sumRecordTokens<TPayload>(records: readonly ContextRecord<TPayload>[]) {
+  return records.reduce((total, record) => total + record.estimatedTokens, 0);
+}
+
+function isCompactableHistory<TPayload>(record: ContextRecord<TPayload>) {
+  return !record.required
+    && record.kind === "history"
+    && inferContextCategory(record) === "historical-conversation";
 }
 
 function cloneRecord<TPayload>(record: ContextRecord<TPayload>): ContextRecord<TPayload> {
@@ -234,50 +282,102 @@ export class ContextManager<TPayload = unknown> {
     records: readonly ContextRecord<TPayload>[],
     budget: ContextBudget,
     compactor: ContextCompactor<TPayload>,
-    options: { maxSummaryTokens?: number } = {},
+    options: ContextCompactionPolicy = {},
   ): Promise<ContextProjection<TPayload>> {
     const canonicalRecords = compileContextRecords(records);
     const first = this.project(canonicalRecords, budget);
-    if (!first.truncated || first.omittedRecords.length === 0) return first;
+    const maxSummaryTokens = Math.max(0, Math.floor(options.maxSummaryTokens ?? 2_048));
+    if (maxSummaryTokens === 0 || first.inputBudgetTokens === 0) return first;
 
-    const maxSummaryTokens = Math.max(0, options.maxSummaryTokens ?? 2_048);
-    if (maxSummaryTokens === 0) return first;
+    const softLimitRatio = options.softLimitRatio ?? 0.8;
+    const hardLimitRatio = options.hardLimitRatio ?? 0.92;
+    const targetUtilizationRatio = options.targetUtilizationRatio ?? 0.7;
+    assertRatio(softLimitRatio, "softLimitRatio");
+    assertRatio(hardLimitRatio, "hardLimitRatio");
+    assertRatio(targetUtilizationRatio, "targetUtilizationRatio");
+    if (softLimitRatio > hardLimitRatio) {
+      throw new Error("softLimitRatio must be less than or equal to hardLimitRatio");
+    }
+    if (targetUtilizationRatio > softLimitRatio) {
+      throw new Error("targetUtilizationRatio must be less than or equal to softLimitRatio");
+    }
 
+    const inputTokensBefore = sumRecordTokens(canonicalRecords);
+    const softLimitTokens = Math.floor(first.inputBudgetTokens * softLimitRatio);
+    const hardLimitTokens = Math.floor(first.inputBudgetTokens * hardLimitRatio);
+    const targetInputTokens = Math.floor(first.inputBudgetTokens * targetUtilizationRatio);
+    const trigger: ContextCompactionTrigger | null = first.truncated
+      || first.overBudget
+      || inputTokensBefore > first.inputBudgetTokens
+      ? "overflow"
+      : inputTokensBefore > hardLimitTokens
+        ? "hard-limit"
+        : inputTokensBefore > softLimitTokens
+          ? "soft-limit"
+          : null;
+    if (!trigger) return first;
+
+    const groups = groupRecords(canonicalRecords);
+    const compactableGroups = groups.filter((group) =>
+      group.records.every(({ record }) => isCompactableHistory(record)),
+    );
+    if (compactableGroups.length === 0) return first;
+
+    const compactableIndexes = new Set(
+      compactableGroups.flatMap((group) => group.records.map(({ index }) => index)),
+    );
+    const fixedTokens = canonicalRecords.reduce((total, record, index) => {
+      if (record.kind === "summary" || compactableIndexes.has(index)) return total;
+      return total + record.estimatedTokens;
+    }, 0);
     const summaryReserve = Math.min(maxSummaryTokens, first.inputBudgetTokens);
-    const firstCheckpointTokens = first.records
-      .filter((record) => record.kind === "summary")
-      .reduce((total, record) => total + record.estimatedTokens, 0);
-    // A new checkpoint replaces the old one, so reserve only the additional
-    // room that the replacement may need instead of double-counting both.
-    const additionalSummaryReserve = Math.max(0, summaryReserve - firstCheckpointTokens);
-    const retentionProjection = this.project(canonicalRecords, {
-      ...budget,
-      safetyMarginTokens: (budget.safetyMarginTokens ?? 0) + additionalSummaryReserve,
-    });
-    const existingCheckpoints = retentionProjection.records.filter(
-      (record) => record.kind === "summary",
-    );
-    const existingCheckpointTokens = existingCheckpoints.reduce(
-      (total, record) => total + record.estimatedTokens,
+    let remainingHistoryTokens = Math.max(
       0,
+      targetInputTokens - summaryReserve - fixedTokens,
     );
-    const compactionSource = compileContextRecords([
-      ...existingCheckpoints,
-      ...retentionProjection.omittedRecords,
-    ]);
-    const retainedWithoutCheckpointTokens = Math.max(
-      0,
-      retentionProjection.estimatedInputTokens - existingCheckpointTokens,
+    const retainedGroupKeys = new Set<string>();
+    let cutReached = false;
+
+    for (let index = compactableGroups.length - 1; index >= 0; index -= 1) {
+      const group = compactableGroups[index]!;
+      if (cutReached) continue;
+      if (group.estimatedTokens > remainingHistoryTokens) {
+        cutReached = true;
+        continue;
+      }
+      retainedGroupKeys.add(group.key);
+      remainingHistoryTokens -= group.estimatedTokens;
+    }
+
+    const compactedIndexes = new Set<number>();
+    for (const group of compactableGroups) {
+      if (retainedGroupKeys.has(group.key)) continue;
+      group.records.forEach(({ index }) => compactedIndexes.add(index));
+    }
+    if (compactedIndexes.size === 0) return first;
+
+    const previousCheckpointRecords = canonicalRecords.filter((record) => record.kind === "summary");
+    const newlyCompactedRecords = canonicalRecords.filter((_, index) => compactedIndexes.has(index));
+    const retainedRecords = canonicalRecords.filter(
+      (record, index) => record.kind !== "summary" && !compactedIndexes.has(index),
     );
+    const retainedWithoutCheckpointTokens = sumRecordTokens(retainedRecords);
     const targetTokens = Math.min(
       summaryReserve,
       Math.max(0, first.inputBudgetTokens - retainedWithoutCheckpointTokens),
     );
-    if (targetTokens === 0 || compactionSource.length === 0) return first;
+    if (targetTokens === 0 || newlyCompactedRecords.length === 0) return first;
 
+    const compactionSource = compileContextRecords([
+      ...previousCheckpointRecords,
+      ...newlyCompactedRecords,
+    ]);
     const summary = await compactor.compact({
       records: compactionSource,
+      previousCheckpointRecords,
+      newlyCompactedRecords,
       targetTokens,
+      trigger,
     });
     if (!summary) return first;
     if (summary.kind !== "summary") {
@@ -287,18 +387,34 @@ export class ContextManager<TPayload = unknown> {
       throw new Error("Context compactor returned a summary larger than targetTokens");
     }
 
-    // A new checkpoint supersedes prior checkpoint(s) and omitted history only.
-    const retainedIds = new Set(
-      retentionProjection.records
-        .filter((record) => record.kind !== "summary")
-        .map((record) => record.id),
-    );
-    const retainedRecords = canonicalRecords.filter((record) => retainedIds.has(record.id));
     const compactedRecords = [
-      { ...summary, required: true, category: "compaction-checkpoint" as const, stability: "checkpoint" as const },
+      {
+        ...summary,
+        required: true,
+        category: "compaction-checkpoint" as const,
+        stability: "checkpoint" as const,
+      },
       ...retainedRecords,
     ];
-
-    return this.project(compactedRecords, budget);
+    const projected = this.project(compactedRecords, budget);
+    return {
+      ...projected,
+      compaction: {
+        trigger,
+        inputTokensBefore,
+        inputTokensAfter: projected.estimatedInputTokens,
+        inputBudgetTokens: first.inputBudgetTokens,
+        softLimitTokens,
+        hardLimitTokens,
+        targetInputTokens,
+        targetSummaryTokens: targetTokens,
+        previousCheckpointRecordIds: previousCheckpointRecords.map((record) => record.id),
+        compactedRecordIds: newlyCompactedRecords.map((record) => record.id),
+        compactedThroughRecordId: newlyCompactedRecords.at(-1)?.id ?? null,
+        retainedRecordIds: projected.records
+          .filter((record) => record.kind !== "summary")
+          .map((record) => record.id),
+      },
+    };
   }
 }

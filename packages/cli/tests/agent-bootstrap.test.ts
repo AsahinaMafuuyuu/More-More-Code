@@ -10,6 +10,7 @@ import {
     SYSTEM_PROMPT_VERSION,
 } from "../src/lib/system-prompt";
 import { createPromptPrefixIdentity } from "../src/lib/cache-identity";
+import { executeNativeTool, resolveNativeToolTimeoutMs } from "../src/lib/local-tools";
 import { ToolRuntime } from "../src/lib/tool-runtime";
 import { ToolRegistry } from "../src/lib/tool-registry";
 
@@ -238,6 +239,58 @@ describe("agent bootstrap", () => {
             context: { ...context, signal: new AbortController().signal },
         });
         expect(timedOut.status).toBe("timed_out");
+    });
+
+    test("cancels and times out an already-running native bash process through Tool Runtime", async () => {
+        const registry = new ToolRegistry(mergeAgentConfig({}, {}));
+        const workspaceRoot = await createTempRoot("more-more-code-shell-runtime-");
+        const runtime = new ToolRuntime({
+            registry,
+            executors: [{
+                source: "native",
+                execute(toolName, input, context) {
+                    return executeNativeTool(toolName, input, {
+                        workspaceRoot: context.workspaceRoot,
+                        signal: context.signal,
+                    });
+                },
+                resolveTimeoutMs(toolName, input) {
+                    return resolveNativeToolTimeoutMs(toolName, input);
+                },
+            }],
+        });
+        const baseContext = {
+            sessionId: "session-shell",
+            runId: "run-shell",
+            turnId: "turn-shell",
+            stepId: "step-shell",
+            workspaceRoot,
+            mode: "BUILD" as const,
+        };
+
+        const controller = new AbortController();
+        const cancelStartedAt = Date.now();
+        const pendingCancellation = runtime.run({
+            toolName: "bash",
+            input: { command: "sleep 5" },
+            context: { ...baseContext, signal: controller.signal },
+        });
+        await Bun.sleep(50);
+        controller.abort(new Error("interrupted"));
+        const cancelled = await pendingCancellation;
+
+        expect(cancelled.status).toBe("cancelled");
+        expect(Date.now() - cancelStartedAt).toBeLessThan(2_000);
+
+        const timeoutStartedAt = Date.now();
+        const timedOut = await runtime.run({
+            toolName: "bash",
+            input: { command: "sleep 5", timeout: 50 },
+            context: { ...baseContext, stepId: "step-timeout", signal: new AbortController().signal },
+        });
+
+        expect(timedOut.status).toBe("timed_out");
+        expect(Date.now() - timeoutStartedAt).toBeLessThan(2_000);
     });
 
     test("permission policy can deny or defer a registered tool", async () => {

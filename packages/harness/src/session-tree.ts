@@ -1,3 +1,5 @@
+import type { ContextCompactionTrigger } from "./context";
+
 export const SESSION_TREE_VERSION = 3 as const;
 
 export type SessionEntryType =
@@ -103,6 +105,13 @@ export type SessionCompactionEntry = SessionEntryBase & {
   type: "compaction";
   summary: unknown;
   tokensBefore?: number;
+  trigger?: ContextCompactionTrigger;
+  inputTokensBefore?: number;
+  inputTokensAfter?: number;
+  inputBudgetTokens?: number;
+  targetInputTokens?: number;
+  targetSummaryTokens?: number;
+  compactedThroughMessageId?: string;
   compactedMessageIds?: string[];
   retainedTailMessageIds?: string[];
 };
@@ -186,6 +195,13 @@ export type SessionEntryInput<TMessage = unknown> =
       type: "compaction";
       summary: unknown;
       tokensBefore?: number;
+      trigger?: ContextCompactionTrigger;
+      inputTokensBefore?: number;
+      inputTokensAfter?: number;
+      inputBudgetTokens?: number;
+      targetInputTokens?: number;
+      targetSummaryTokens?: number;
+      compactedThroughMessageId?: string;
       compactedMessageIds?: string[];
       retainedTailMessageIds?: string[];
     })

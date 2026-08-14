@@ -21,11 +21,6 @@ function resolveInsideWorkspace(workspaceRoot: string, path: string) {
     return { cwd, resolved };
 }
 
-// Compatibility for the existing shell implementation; non-shell tools use the explicit runtime workspace root.
-function resolveInsideCwd(path: string) {
-    return resolveInsideWorkspace(process.cwd(), path);
-}
-
 function truncate(value: string, limit: number) {
     return value.length > limit
         ? `${value.slice(0, limit)}\n... (truncated, ${value.length} total chars)`
@@ -40,6 +35,37 @@ type NativeToolExecutionContext = {
 function throwIfAborted(signal: AbortSignal) {
     if (!signal.aborted) return;
     throw signal.reason instanceof Error ? signal.reason : new Error("Tool execution was cancelled");
+}
+
+async function readProcessOutput(stream: ReadableStream<Uint8Array>, signal: AbortSignal) {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let output = "";
+    const cancelRead = () => {
+        void reader.cancel(signal.reason);
+    };
+
+    signal.addEventListener("abort", cancelRead, { once: true });
+    if (signal.aborted) cancelRead();
+
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            output += decoder.decode(value, { stream: true });
+        }
+        output += decoder.decode();
+        return output;
+    } finally {
+        signal.removeEventListener("abort", cancelRead);
+        reader.releaseLock();
+    }
+}
+
+export function resolveNativeToolTimeoutMs(toolName: string, input: unknown) {
+    if (toolName !== "bash") return undefined;
+    const parsed = toolInputSchemas.bash.safeParse(input);
+    return parsed.success ? parsed.data.timeout ?? DEFAULT_TIMEOUT : DEFAULT_TIMEOUT;
 }
 
 // Concrete native implementations. Visibility and policy belong to ToolRuntime.
@@ -250,23 +276,30 @@ export async function executeNativeTool(
         }
 
         case "bash": {
-            const { command, timeout = DEFAULT_TIMEOUT } = toolInputSchemas.bash.parse(input);
+            const { command } = toolInputSchemas.bash.parse(input);
             const proc = Bun.spawn(["bash", "-c", command], {
-                cwd: resolveInsideCwd(".").resolved,
+                cwd: resolveInsideWorkspace(context.workspaceRoot, ".").resolved,
                 stdout: "pipe",
                 stderr: "pipe",
                 env: { ...process.env, TERM: "dumb" },
             });
 
-            const timer = setTimeout(() => proc.kill(), timeout);
-
-            const [stdout, stderr] = await Promise.all([
-                new Response(proc.stdout).text(),
-                new Response(proc.stderr).text(),
-            ]);
-
-            const exitCode = await proc.exited;
-            clearTimeout(timer);
+            const cancel = () => proc.kill();
+            context.signal.addEventListener("abort", cancel, { once: true });
+            if (context.signal.aborted) cancel();
+            let stdout: string;
+            let stderr: string;
+            let exitCode: number;
+            try {
+                [stdout, stderr, exitCode] = await Promise.all([
+                    readProcessOutput(proc.stdout, context.signal),
+                    readProcessOutput(proc.stderr, context.signal),
+                    proc.exited,
+                ]);
+            } finally {
+                context.signal.removeEventListener("abort", cancel);
+            }
+            throwIfAborted(context.signal);
 
             return {
                 stdout: truncate(stdout, MAX_OUTPUT),

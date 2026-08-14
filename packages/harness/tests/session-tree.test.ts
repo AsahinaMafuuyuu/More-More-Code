@@ -6,6 +6,7 @@ import {
   getActiveSessionEntry,
   getParentSessionEntry,
   jumpToSessionEntry,
+  projectLatestSessionCompaction,
   projectSessionEntryPath,
   projectSessionRuntimeState,
   projectSessionTreeMessages,
@@ -58,6 +59,14 @@ describe("session entry tree v3", () => {
     state = appendSessionEntry(state, {
       type: "compaction",
       summary: "Earlier context summary",
+      tokensBefore: 9_000,
+      trigger: "soft-limit",
+      inputTokensBefore: 12_000,
+      inputTokensAfter: 7_000,
+      inputBudgetTokens: 14_000,
+      targetInputTokens: 9_800,
+      targetSummaryTokens: 2_000,
+      compactedThroughMessageId: "a0",
       retainedTailMessageIds: ["u0", "a0"],
     }, options);
 
@@ -75,6 +84,12 @@ describe("session entry tree v3", () => {
       message("a0"),
     ]);
     expect(projectSessionEntryPath(state).at(-1)?.type).toBe("compaction");
+    expect(projectLatestSessionCompaction(state)).toMatchObject({
+      trigger: "soft-limit",
+      inputTokensBefore: 12_000,
+      inputTokensAfter: 7_000,
+      compactedThroughMessageId: "a0",
+    });
   });
 
   test("jumping to an ancestor and appending creates an independent sibling branch", () => {

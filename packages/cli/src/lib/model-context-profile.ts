@@ -39,6 +39,12 @@ const providerCounters: Record<SupportedProvider, TokenCounter> = {
 
 type StaticProfile = Omit<ModelContextProfile, "tokenCounter">;
 
+const DEFAULT_COMPACTION_POLICY = {
+  compactionSoftLimitRatio: 0.8,
+  compactionHardLimitRatio: 0.92,
+  postCompactionTargetRatio: 0.7,
+} as const;
+
 // These are conservative application policies, not claims about a provider's
 // absolute maximum. Keeping them here makes model-specific budgeting explicit
 // and easy to override when an exact provider/model limit is configured.
@@ -120,6 +126,7 @@ export function resolveModelContextProfile(modelId: SupportedChatModelId): Model
   if (!definition) throw new Error(`Unsupported chat model: ${modelId}`);
   const policy = MODEL_CONTEXT_POLICIES[modelId];
   return {
+    ...DEFAULT_COMPACTION_POLICY,
     ...policy,
     tokenCounter: providerCounters[definition.provider],
   };

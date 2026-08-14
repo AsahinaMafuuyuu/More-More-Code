@@ -86,6 +86,9 @@ export type {
 } from "./token-budget";
 export type {
   ContextBudget,
+  ContextCompactionMetadata,
+  ContextCompactionPolicy,
+  ContextCompactionTrigger,
   ContextCompactor,
   ContextProjection,
   ContextRecord,

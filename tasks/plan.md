@@ -1,6 +1,6 @@
 # Implementation Plan: Stage 5.1 + Stage 6 — Session Semantics & Tool Runtime
 
-**Status:** Delivered — 2026-08-13. Stage 5.1 and Stage 6 core runtime are implemented and verified; immediate termination of an already-running native shell subprocess remains a documented Stage 6.1 follow-up because the current DevTools write policy blocked that specific subprocess binding change.
+**Status:** Delivered — 2026-08-13. Stage 5.1, Stage 6, and the Stage 6.1 native-shell cancellation follow-up are implemented and verified.
 
 ## Overview
 
@@ -65,6 +65,8 @@ Define provider-independent execution types for:
 - Native implementations no longer own mode policy.
 - Tool Runtime validates visibility through Tool Registry.
 - Native filesystem/shell tools receive the runtime AbortSignal.
+- Native `bash` execution uses the runtime workspace root and aborts its active shell process/output readers when the Run is interrupted.
+- Bash-specific timeout input is resolved by Tool Runtime rather than a second native timer.
 - Tool-level timeout and cancellation produce normalized statuses.
 
 ### Task 6: Wire AgentLoop tool steps through Tool Runtime
@@ -106,3 +108,80 @@ Cloud revision/conflict sync
 Subagent Runtime
 OpenAI server-side conversation as Session authority
 ```
+
+---
+
+# Follow-up Plan: Stage 5.2 — Semantic Context Compaction
+
+**Status:** Delivered — 2026-08-14. Policy, semantic reducer, persistence metadata, fallback, tests, and documentation are implemented and verified.
+
+## Overview
+
+Upgrade the existing overflow-only deterministic chronology compaction into a budget-aware, safe-boundary, persisted semantic-state compaction pipeline. Session history remains append-only and provider-independent; only the active Context Projection is replaced by the latest checkpoint plus raw retained history.
+
+## Architecture Decisions
+
+- Compaction is an incremental state reduction: `snapshot(N+1) = reduce(snapshot(N) + newly compacted history)`.
+- The reducer produces a complete replacement snapshot, not an appended delta or a summary-of-summary chronology.
+- Compaction may trigger before hard overflow using soft/hard utilization thresholds; after compaction the retained working set targets a lower utilization band to avoid thrashing.
+- Cut points operate on atomic Context groups/turns. Tool/message groups are never split to satisfy a token boundary.
+- The Harness owns generic budgeting, trigger policy, source selection, and compaction metadata; the CLI/provider boundary owns LLM semantic reduction.
+- If semantic reduction fails, the request falls back to the bounded deterministic compactor rather than losing the current model step.
+- Branch Summary remains a separate knowledge-transfer mechanism and is not implemented as Compaction.
+
+## Phase 1: Generic Compaction Policy
+
+### Task 1: Add soft/hard budget policy and safe source selection
+
+**Acceptance criteria:**
+- A projection below the soft threshold reuses its current checkpoint and performs no compaction.
+- A projection above the soft threshold can compact older optional complete groups before hard overflow.
+- Required/retained groups remain atomic and survive the cut; the target utilization leaves post-compaction headroom.
+
+**Verification:** focused Harness ContextManager tests.
+
+### Task 2: Enrich compaction results/checkpoint metadata
+
+**Acceptance criteria:**
+- Compaction reports trigger reason, token counts, compacted-through identity, and retained identities without mutating source history.
+- Existing checkpoint replacement semantics remain backward compatible.
+
+**Verification:** Harness + Session Tree tests.
+
+## Phase 2: Semantic State Reducer
+
+### Task 3: Add CLI semantic compactor
+
+**Acceptance criteria:**
+- The compactor receives the previous checkpoint plus newly compacted records.
+- It requests a fixed structured Markdown state snapshot containing current goal/state, decisions, constraints, artifacts, failures, and pending work.
+- The prompt explicitly removes superseded facts and produces a complete replacement snapshot.
+- Output is bounded by the summary token budget.
+
+**Verification:** focused unit tests for serialization/prompt/fallback plus CLI build.
+
+### Task 4: Preserve deterministic fallback
+
+**Acceptance criteria:**
+- Provider/reducer failure does not fail the primary model request when deterministic fallback can produce a valid bounded checkpoint.
+- Existing deterministic compaction remains available as a fallback implementation.
+
+## Phase 3: Persistence, Docs, Verification
+
+### Task 5: Persist richer checkpoint metadata
+
+Propagate compaction metadata through CLI Session Entry persistence and Server validation while retaining compatibility with older stored sessions.
+
+### Task 6: Document the algorithm and verify
+
+- Record an ADR for semantic compaction policy/reducer boundaries.
+- Update Context/current-state/CHANGELOG documentation.
+- Run Harness tests, focused CLI tests, CLI build/typecheck-equivalent checks, Server validation tests/typecheck where available, and `git diff --check`.
+
+## Deferred
+
+- Working-set relevance scoring beyond recent complete turns.
+- Tool-result pruning/reference storage.
+- Exact tokenizer packages for every provider/model family.
+- Branch-summary semantic transfer algorithm.
+- Provider-specific compaction model selection or dedicated low-cost summarizer configuration.

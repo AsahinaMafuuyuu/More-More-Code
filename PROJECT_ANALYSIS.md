@@ -292,8 +292,8 @@ CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为
 5. **Tool Step 的主动取消尚未完善**
    Model Step 可以被 abort，Harness 也会停止后续 Step，但已启动的本地 shell/tool 还需要 Tool Runtime 级 cancellation。
 
-6. **Context Manager 已具备 turn-aware budget 与 compaction，但当前 tokenizer 仍是显式估算器**
-   当前使用 model-specific `ModelContextProfile`、provider-calibrated `TokenCounter`、retained tail、完整 Turn 原子裁剪与 bounded deterministic summary。Harness 同时提供 exact tokenizer adapter 接口，但当前配置的模型家族尚未安装对应精确 tokenizer 实现，因此运行时会明确标记为 `estimated`。
+6. **Context Manager 已具备 proactive semantic compaction，但当前 tokenizer 仍是显式估算器**
+   当前使用 model-specific `ModelContextProfile`、provider-calibrated `TokenCounter`、retained tail、完整 Context group/Turn 原子 cut point，以及 80% soft / 92% hard / 70% post-compaction budget policy。真实 checkpoint 优先由 CLI LLM semantic reducer 将“上一 checkpoint + 新被压缩历史”归约为完整 replacement state snapshot，失败时回退 bounded deterministic compactor；Harness 同时提供 exact tokenizer adapter 接口，但当前配置的模型家族尚未安装对应精确 tokenizer 实现，因此运行时会明确标记为 `estimated`。
 
 7. **云同步暂时是 best-effort**
    同步失败不会让本地 Agent Run 失败，这是正确的故障域隔离；但目前只有日志，没有 retry queue、本地 WAL 或离线 Session Store。

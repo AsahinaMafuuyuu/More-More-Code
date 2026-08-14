@@ -31,7 +31,10 @@ When working on Context or model-provider code:
 - Keep Vercel AI SDK responsible for streaming and unified message/tool integration unless an explicit architectural decision supersedes this.
 - Do not use OpenAI `previous_response_id` as the canonical MORE-MORE-CODE Session history in this stage.
 - Prefer reusing persisted compaction checkpoints instead of regenerating summaries on every Model Step.
-- A newer compaction checkpoint summarizes the previous effective checkpoint plus newly compacted history; older compaction entries remain durable Session history while model context starts from the latest effective checkpoint.
+- Compaction is budget-aware and may trigger proactively at soft/hard utilization thresholds before actual overflow. Cut points must preserve complete Context groups/Turns and never split retained atomic interactions merely to hit a token count.
+- A newer compaction checkpoint reduces the previous effective checkpoint plus newly compacted history into one complete replacement state snapshot; older compaction entries remain durable Session history while model context starts from the latest effective checkpoint.
+- Harness owns provider-independent compaction policy/source selection/metadata; LLM semantic reduction belongs at the CLI/provider seam and must retain a bounded deterministic fallback so compaction failure does not automatically fail the primary Model Step.
+- Branch Summary is a separate branch knowledge-transfer mechanism and must not reuse Compaction trigger/state-snapshot semantics by default.
 - Session restore authority is `Session Tree + activeEntryId`; message/runtime/context state is derived as branch projections.
 - PLAN and BUILD may have different prompt-cache families because their model-visible Tool Sets differ.
 

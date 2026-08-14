@@ -19,6 +19,9 @@ All notable changes to MORE MORE CODE are recorded here.
 - Local Tool Runtime with Registry visibility enforcement, capability metadata, permission decisions, timeout/cancellation propagation, and normalized execution status/timing.
 - Semantic Session Tree theme tokens for message, tool, compaction, state-change, branch, error/custom, and timestamp presentation.
 - ADR-0011 documenting append-only Session, compaction supersession, restore authority, and Tool Runtime boundaries.
+- Budget-aware semantic Context Compaction with 80% soft / 92% hard triggers, a 70% post-compaction target, atomic safe cut points, and persisted compaction diagnostics.
+- Structured semantic state reducer for replacement checkpoints, with fixed goal/state/decision/constraint/artifact/failure/pending-work sections and bounded deterministic fallback.
+- ADR-0012 documenting proactive compaction policy, incremental state reduction, safe cut points, persistence metadata, and reducer/fallback boundaries.
 
 ### Changed
 
@@ -26,9 +29,11 @@ All notable changes to MORE MORE CODE are recorded here.
 - The local system prompt is now a concise coding-agent prompt that includes PLAN/BUILD rules, skill metadata, and the resolved instruction chain.
 - PLAN mode includes `loadSkill` alongside the existing read-only native tools.
 - System-prefix construction is ordered as core prompt → global instructions → project instructions → Skill catalog, while model-visible Tool schemas remain deterministic through the ToolSet snapshot.
-- Persisted Session `compaction` entries are reused as Context checkpoints across later Model Steps and restored sessions; a newer checkpoint summarizes the previous effective checkpoint plus newly compacted history, while older checkpoint Entries remain durable tree history.
+- Persisted Session `compaction` entries are reused as Context checkpoints across later Model Steps and restored sessions; a newer checkpoint reduces the previous effective checkpoint plus newly compacted history into one complete replacement state snapshot, while older checkpoint Entries remain durable tree history.
+- Context Compaction now starts proactively at configured utilization thresholds instead of waiting for hard truncation; only optional historical groups are eligible, retained recent Turns remain atomic, and semantic-reducer failure falls back without making the primary Model Step depend on compaction-provider availability.
 - AgentLoop Tool Steps now route native capabilities through Tool Runtime and persist optional normalized status/source/timing metadata on `tool_result` Entries.
 - Native filesystem operations now receive the Tool Step workspace root and cooperative AbortSignal where supported.
+- Native command execution now uses the Runtime workspace root and completes interruption/timeout through Tool Runtime with normalized cancellation status.
 - OpenAI model execution explicitly selects the Responses API through `openai.responses(...)` and derives `promptCacheKey` from the prompt-prefix fingerprint; `previousResponseId` remains outside canonical Session authority.
 - Provider cache read/write usage is retained as runtime diagnostics rather than semantic Session history.
 

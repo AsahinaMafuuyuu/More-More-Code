@@ -267,16 +267,11 @@ Escape      → interrupt Run
 
 steering 在当前 Turn 的 Model + Tools 全部结束后消费，并优先于自动 tool continuation；follow-up 只在 Run 原本将结束时消费。
 
-### 当前限制
+### 当前取消语义
 
-正在执行中的本地 Tool 还没有真正的 AbortSignal 级取消能力。
+Model Step 与 Tool Step 都已接入 Run 级 AbortSignal。Native command 执行由 Tool Runtime 传播取消信号；运行中的 shell 进程与输出读取会在 interrupt 后终止/取消，因此 Tool Step 不再需要等待原命令自然返回后才能结束。
 
-当前行为是：
-
-- Model Step 可以立即 abort；
-- Tool Step 执行期间收到 interrupt 后，会在 Tool Step 返回后停止后续 Step。
-
-未来应该由独立 Tool Runtime 支持 Tool-level cancellation。
+这仍不等于 OS-level process sandbox 或完整的 descendant-process supervision；更强的进程隔离继续属于后续 Sandbox / process policy。
 
 ---
 
@@ -401,7 +396,7 @@ BUILD 模式允许读写与 Shell 执行。
 文件型工具通过：
 
 ```text
-resolveInsideCwd()
+resolveInsideWorkspace(workspaceRoot, path)
 ```
 
 限制目标路径必须位于当前项目目录中。
@@ -956,34 +951,48 @@ ModelContextProfile
 ├── safetyMarginTokens
 ├── retainedTailTurns
 ├── maxSummaryTokens
+├── compactionSoftLimitRatio
+├── compactionHardLimitRatio
+├── postCompactionTargetRatio
 └── tokenCounter
 ```
 
 CLI 在 `model-context-profile.ts` 为每个模型显式解析 profile，并按 provider 选择 token counter。当前内置 counter 是 provider-calibrated heuristic estimator，并明确标记 `accuracy = estimated`；Harness 同时提供 `createExactTokenCounter()`，未来接入官方/第三方精确 tokenizer 时无需修改 ContextManager API。
 
-### 16.3 Compaction：已完成 bounded deterministic v1
+### 16.3 Compaction：已升级为 budget-aware semantic v2
 
-当完整历史超出安全输入预算时：
+Compaction 不再等到 provider 输入真正溢出才开始。当前默认应用策略按有效 input budget 计算：
 
 ```text
-Canonical History
-    ↓
-按完整 Turn 分组
-    ↓
-保留 retained tail
-    ↓
-裁掉完整旧 Turn
-    ↓
-ContextCompactor
-    ↓
-bounded summary + retained tail
-    ↓
-Model Context
+< 80%          正常复用当前 checkpoint
+80% ~ 92%      soft-limit，可主动 compaction
+92% ~ 100%     hard-limit，优先回收历史
+> 100%         overflow，必须尝试 compaction
+
+compaction 后目标：约 70%
 ```
 
-当前 compactor 为确定性文本 chronology：保留旧 user/assistant 文本与非文本 part 类型，并严格服从 `maxSummaryTokens`。它不是 LLM semantic summarizer，但已经实现 split-turn-safe compaction、retained tail 和“不改写原历史”的关键边界。实际发生 compaction 时，CLI 会在当前 Session branch 追加 `compaction` Entry，记录 summary、被压缩的 message IDs、retained tail IDs 与 Run/Turn/Step 关联；源 Session Entries 不会被删除。
+Harness 只允许 optional `historical-conversation` groups 进入 compaction source，并按 `groupId` 保证完整 Turn / 原子交互不会被 token cut point 拆开。Selector 从最近历史向前保留能落入 post-compaction working-set target 的完整 groups，把更旧的连续 prefix 交给 `ContextCompactor`。required records、retained tail、stable instructions 与 current/runtime continuation 不参与这种切分。
 
-Stage 5 进一步把这个 Entry 作为**持久化 Context checkpoint**：后续 Model Step 或会话恢复后，通过 active branch 的最新 `compaction` Entry 直接复用 summary，并跳过已经由该 checkpoint 表示的旧 messages。只有新历史再次真正超过预算时，ContextManager 才把“旧 checkpoint + 新被裁历史”重新压缩为替代 checkpoint；不会在每个 Model Step 重复生成等价 summary。
+Compaction 的语义现在是增量 state reduction，而不是 chronology truncation：
+
+```text
+previous effective checkpoint
+            +
+newly compacted complete history
+            ↓
+LLM semantic state reducer
+            ↓
+complete replacement snapshot
+            +
+raw retained recent turns
+```
+
+CLI reducer 使用固定 Markdown schema：`Current Goal / Current State / Decisions / Constraints / Artifacts / Failures and Lessons / Pending Work`。Prompt 明确要求保留仍然有效的事实、用后来的明确决策覆盖 superseded facts，并优先表达“现在什么是真的”而不是复述事件时间线。若 semantic reducer/provider 调用失败、返回空结果或无法在 summary budget 内形成 checkpoint，则自动回退到 bounded deterministic compactor，避免让次要的 context optimization 成为主 Model Step 的新可用性依赖。
+
+实际发生 compaction 时，CLI 在当前 Session branch 追加 `compaction` Entry，除 replacement snapshot、被压缩 message IDs 与 retained IDs 外，还记录 `soft-limit | hard-limit | overflow` trigger、input before/after、effective budget、post-compaction target、summary target 与 compacted-through message ID；源 Session Entries 以及旧 checkpoint 都不会删除。
+
+后续 Model Step 或会话恢复后，通过 active branch 最新 `compaction` Entry 直接复用 snapshot，并跳过已经由 checkpoint 表示的旧 messages。`compact(N+1)` 只读取 `compactN + 新被压缩历史`，不会重新总结完整 Session，也不会在每个 Model Step 重复生成等价 snapshot。Branch Summary 仍是跳转分支时的 knowledge-transfer 机制，与 active-context Compaction 保持独立。
 
 ### 16.4 Execution Event + Lifecycle Runtime：已完成进程内 v2
 
@@ -1047,7 +1056,7 @@ Cloud Snapshot           = 跨进程/设备恢复什么
 
 ### 16.5 Permission Engine
 
-尚未形成统一：
+当前已形成统一接口：
 
 ```text
 allow
@@ -1055,7 +1064,7 @@ deny
 ask
 ```
 
-权限决策机制。
+权限决策机制；交互式审批界面仍未实现。
 
 ### 16.6 Sandbox
 
@@ -1071,9 +1080,9 @@ ask
 
 ### 16.7 Tool Registry
 
-当前工具执行仍通过集中 switch 分发。
+Tool Registry / Tool Runtime 边界已经建立；native executor 内部仍通过集中 switch 分发具体实现。
 
-未来可以演进为：
+当前职责已经包含：
 
 ```text
 Tool Registry
@@ -1232,7 +1241,7 @@ Provider usage 会规范化成诊断 telemetry：input/output tokens、cache rea
 
 同时新增 `packages/cli/src/lib/tool-runtime.ts` 作为 AgentLoop 与具体 Tool Source 之间的本地运行时边界。Tool Registry 现在除了模型可见 contract snapshot 外还提供 capability metadata；Tool Runtime 统一处理 mode visibility、`allow | deny | ask` permission seam、AbortSignal/timeout propagation、source adapter 选择与 normalized execution result。`tool_result` Entry 增加可选 `status/source/startedAt/completedAt/durationMs` 字段，并保持旧 `output/error` 兼容。
 
-CLI `runToolStep` 已将 Harness 提供的 Run/Turn/Step `AbortSignal` 传入 Tool Runtime。filesystem read/write 与 grep 路径能够消费该 signal。当前 shell 路径仍保留旧的内部 timeout；本轮 DevTools 写入策略阻止修改该子进程的即时中断绑定，因此“active shell 在 AgentLoop abort 后立即终止”仍作为 Stage 6.1 收尾项，不应误报为已完成。
+CLI `runToolStep` 已将 Harness 提供的 Run/Turn/Step `AbortSignal` 传入 Tool Runtime。filesystem read/write、grep 与 bash 路径都能够消费该 signal。Stage 6.1 已补齐 native shell cancellation：bash 使用 Runtime workspace root，运行中的 shell 与输出读取会响应 interrupt；bash 的 command timeout 也通过 executor timeout resolver 交由 Tool Runtime 统一生成 normalized `timed_out` outcome，不再由 native implementation 维护第二套 timer。
 
 ---
 
@@ -1286,7 +1295,7 @@ Cloud persistence 应保持外围能力。
 
 ## 18. 当前阶段边界与后续候选
 
-Stage 4.1 Agent Bootstrap、Stage 4.2 Skill Registry、Stage 5 Context & Provider Runtime，以及 Stage 5.1 Session/Context 语义收口与 Stage 6 Tool Runtime 第一版均已完成主体实现。当前从启动到 Model Step / Tool Step 的链路已经形成：
+Stage 4.1 Agent Bootstrap、Stage 4.2 Skill Registry、Stage 5 Context & Provider Runtime、Stage 5.1 Session/Context 语义收口、Stage 6 Tool Runtime 第一版，以及 Stage 6.1 native shell cancellation 收尾均已完成。当前从启动到 Model Step / Tool Step 的链路已经形成：
 
 ```text
 CLI bootstrap
@@ -1306,7 +1315,7 @@ AgentLoop Tool Step
 Tool Runtime → Registry / Permission / Timeout / Source Adapter
 ```
 
-这一轮明确不继续实现 WAL，也暂不进入 Permission/Sandbox 重构。后续可以在现有边界上独立选择 MCP transport adapter、Tool cancellation、Permission/Sandbox、Local WAL、exact tokenizer 或 Subagent；其中任何一项都不应重新把职责塞入 `AgentLoop`、`ContextManager` 或 OpenAI-specific adapter。
+这一轮明确不继续实现 WAL，也暂不进入 Permission/Sandbox 重构。后续可以在现有边界上独立选择 MCP transport adapter、Permission/Sandbox、Local WAL、exact tokenizer 或 Subagent；其中任何一项都不应重新把职责塞入 `AgentLoop`、`ContextManager` 或 OpenAI-specific adapter。
 
 当前关键边界已经分离：
 
@@ -1357,5 +1366,6 @@ docs/decisions/
 - ADR-0009 记录 `.more-more-code` 两级 Agent Bootstrap、Instruction Chain、Skill progressive disclosure 与 native/MCP Tool Source 边界；
 - ADR-0010 记录 stable→dynamic Context ordering、Tool/Prompt prefix fingerprint、persisted compaction checkpoint reuse、Provider Adapter 与 OpenAI Responses/cache 边界；
 - ADR-0011 记录 append-only Session、compaction supersession、restore authority、semantic Theme tokens 与 Tool Runtime 边界。
+- ADR-0012 记录 soft/hard proactive compaction、atomic cut point、incremental semantic state reducer、deterministic fallback 与 richer checkpoint diagnostics。
 
 本文件属于近期工程状态快照，不替代正式 ADR。

@@ -13,6 +13,9 @@ export type ModelContextProfile = {
   safetyMarginTokens: number;
   retainedTailTurns: number;
   maxSummaryTokens: number;
+  compactionSoftLimitRatio?: number;
+  compactionHardLimitRatio?: number;
+  postCompactionTargetRatio?: number;
   tokenCounter: TokenCounter;
 };
 

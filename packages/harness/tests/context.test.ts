@@ -117,6 +117,91 @@ describe("ContextManager", () => {
     expect(projection.truncated).toBe(false);
   });
 
+  test("proactively compacts older complete turns at the soft limit and leaves headroom", async () => {
+    const manager = new ContextManager<string>();
+    const projection = await manager.projectWithCompaction(
+      [
+        record("u1", 4, false, "turn-1"),
+        record("a1", 4, false, "turn-1"),
+        record("u2", 3, false, "turn-2"),
+        record("a2", 3, false, "turn-2"),
+        record("u3", 2, true, "turn-3"),
+        record("a3", 2, true, "turn-3"),
+      ],
+      { contextWindowTokens: 20, reservedOutputTokens: 0 },
+      {
+        compact({ records, newlyCompactedRecords, trigger, targetTokens }) {
+          expect(trigger).toBe("soft-limit");
+          expect(records.map((item) => item.id)).toEqual(["u1", "a1"]);
+          expect(newlyCompactedRecords.map((item) => item.id)).toEqual(["u1", "a1"]);
+          expect(targetTokens).toBe(3);
+          return {
+            id: "summary-soft",
+            kind: "summary",
+            payload: "summary",
+            estimatedTokens: 3,
+          };
+        },
+      },
+      {
+        maxSummaryTokens: 3,
+        softLimitRatio: 0.8,
+        hardLimitRatio: 0.95,
+        targetUtilizationRatio: 0.7,
+      },
+    );
+
+    expect(projection.records.map((item) => item.id)).toEqual([
+      "summary-soft",
+      "u2",
+      "a2",
+      "u3",
+      "a3",
+    ]);
+    expect(projection.truncated).toBe(false);
+    expect(projection.compaction).toMatchObject({
+      trigger: "soft-limit",
+      inputTokensBefore: 18,
+      inputTokensAfter: 13,
+      compactedRecordIds: ["u1", "a1"],
+      compactedThroughRecordId: "a1",
+    });
+  });
+
+  test("classifies proactive compaction above the hard threshold separately from overflow", async () => {
+    const manager = new ContextManager<string>();
+    let observedTrigger = "";
+    const projection = await manager.projectWithCompaction(
+      [
+        record("old", 8, false, "turn-1"),
+        record("middle", 6, false, "turn-2"),
+        record("tail", 4, true, "turn-3"),
+      ],
+      { contextWindowTokens: 20, reservedOutputTokens: 0 },
+      {
+        compact({ trigger }) {
+          observedTrigger = trigger;
+          return {
+            id: "summary-hard",
+            kind: "summary",
+            payload: "summary",
+            estimatedTokens: 2,
+          };
+        },
+      },
+      {
+        maxSummaryTokens: 2,
+        softLimitRatio: 0.75,
+        hardLimitRatio: 0.85,
+        targetUtilizationRatio: 0.65,
+      },
+    );
+
+    expect(observedTrigger).toBe("hard-limit");
+    expect(projection.compaction?.trigger).toBe("hard-limit");
+    expect(projection.overBudget).toBe(false);
+  });
+
   test("reuses a persisted checkpoint when no new compaction is required", async () => {
     const manager = new ContextManager<string>();
     let compactCalls = 0;

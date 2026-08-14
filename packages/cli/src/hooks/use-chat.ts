@@ -27,7 +27,7 @@ import {
     type SessionRuntimeState,
     type SessionTreeState,
 } from "@more-more-code/harness";
-import { executeNativeTool } from "../lib/local-tools";
+import { executeNativeTool, resolveNativeToolTimeoutMs } from "../lib/local-tools";
 import { getAgentEnvironment } from "../lib/agent-environment";
 import { ToolRuntime, type ToolExecutionResult } from "../lib/tool-runtime";
 import { createAgentUserMessage } from "../lib/agent-chat-message";
@@ -80,6 +80,9 @@ function createLocalToolRuntime() {
                         workspaceRoot: context.workspaceRoot,
                         signal: context.signal,
                     });
+                },
+                resolveTimeoutMs(toolName, input) {
+                    return resolveNativeToolTimeoutMs(toolName, input);
                 },
             }],
         }),
@@ -247,6 +250,15 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
             type: "compaction",
             summary: event.summary,
             tokensBefore: event.tokensBefore,
+            trigger: event.trigger,
+            inputTokensBefore: event.inputTokensBefore,
+            inputTokensAfter: event.inputTokensAfter,
+            inputBudgetTokens: event.inputBudgetTokens,
+            targetInputTokens: event.targetInputTokens,
+            targetSummaryTokens: event.targetSummaryTokens,
+            ...(event.compactedThroughMessageId
+                ? { compactedThroughMessageId: event.compactedThroughMessageId }
+                : {}),
             compactedMessageIds: event.compactedMessageIds,
             retainedTailMessageIds: event.retainedTailMessageIds,
             ...metadata,
