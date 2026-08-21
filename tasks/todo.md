@@ -189,3 +189,46 @@
 - [ ] In-place editing/rewriting of existing Branch Summary Entries
 - [ ] Dedicated branch IDs instead of path-derived branches
 - [ ] Cloud collaborative branch merge semantics
+
+
+# Stage 6.0 — Security Foundation
+
+**Status:** Planned — 2026-08-15.
+
+## Persistence & Recovery
+
+- [ ] Add EventStore abstraction.
+- [ ] Add Prisma SQLite implementation.
+- [ ] Define unified RuntimeEvent schema.
+- [ ] Persist execution, tool, security, and context events.
+- [ ] Add memory projection cache over persistent events.
+- [ ] Implement snapshot creation strategy.
+- [ ] Implement crash recovery and session resume.
+
+## Permission & Enforcement
+
+- [ ] Add Permission Engine with allow/deny/ask decisions.
+- [ ] Persist permission decisions as security events.
+- [ ] Add Capability based permission model.
+- [ ] Add rule constraints for commands, paths, and scopes.
+- [ ] Enforce permissions inside Tool Runtime.
+
+## Policy Management
+
+- [ ] Add default security policy.
+- [ ] Add user policy overrides.
+- [ ] Generate effective policy during runtime.
+
+## Audit & Validation
+
+- [ ] Add security audit timeline.
+- [ ] Add replay verification for security decisions.
+- [ ] Add recovery scenario tests.
+- [ ] Add dangerous tool operation tests.
+
+## Deferred
+
+- [ ] PostgreSQL cloud adapter.
+- [ ] Sandbox runtime.
+- [ ] Multi-agent framework.
+- [ ] Full OpenTelemetry integration.

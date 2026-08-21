@@ -595,3 +595,75 @@ Expose Carry / No Carry / Cancel when `ask` applies and add the `ask | always | 
 - Editing or rewriting existing Branch Summary Entries in place; transfers remain append-only.
 - Dedicated branch IDs; V1 continues to derive branches from Session Entry paths.
 - Remote/cloud collaborative branch merge semantics.
+
+
+# Stage 6.0 — Security Foundation
+
+**Status:** Planned — 2026-08-15.
+
+## Overview
+
+Upgrade Agent Runtime from executable automation into a secure, auditable, recoverable local-first runtime.
+
+Core decisions:
+- Local persistence uses Prisma + SQLite.
+- SQLite is the source of truth; Memory Projection Cache remains the execution hot path.
+- Runtime accesses storage through EventStore abstraction, not direct ORM calls.
+- Future cloud persistence uses a PostgreSQL adapter without changing runtime contracts.
+
+
+
+# Stage 6.0 Security Foundation
+
+**Status:** Planned — 2026-08-15.
+
+## Goal
+
+Upgrade Agent Runtime into a secure, auditable, recoverable local-first runtime.
+
+## Architecture Decisions
+
+### Persistence
+- Use Prisma ORM with SQLite for local runtime persistence.
+- SQLite is the source of truth.
+- Memory Projection Cache remains the hot execution path.
+- Runtime accesses persistence only through EventStore abstraction.
+- Reserve PostgreSQL adapter for future cloud persistence.
+
+### Event Store
+- Introduce unified RuntimeEvent model.
+- Event categories include execution, tool, security, context, and system.
+- Permission decisions are persisted as events for audit and replay.
+
+### Recovery
+- Introduce snapshot based recovery.
+- Use hybrid snapshot trigger: event count threshold or time threshold.
+- Restore by loading latest snapshot and replaying following events.
+
+### Security Boundary
+- Harness owns permission decisions.
+- Tool Runtime owns final enforcement.
+- Capability model is the primary security model.
+- Rule matching provides additional constraints.
+- Do not introduce OPA/Rego in this stage.
+
+### Policy Storage
+- Default policy is code-defined.
+- User overrides are persisted separately.
+- Effective policy is generated from both sources.
+
+## Implementation Order
+
+1. EventStore interface and Prisma SQLite adapter.
+2. Runtime event persistence and projection cache.
+3. Snapshot creation and recovery.
+4. Permission Engine foundation.
+5. Capability model and enforcement.
+6. Security audit events and replay support.
+
+## Deferred
+
+- PostgreSQL cloud synchronization.
+- Sandbox/container runtime.
+- Multi-agent execution.
+- Full OpenTelemetry integration.

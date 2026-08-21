@@ -173,3 +173,17 @@ export type {
   AgentTurnCause,
   AgentTurnStatus,
 } from "./types";
+export type { RuntimeEvent, RuntimeEventType, EventStore, RuntimeSnapshot } from "./event-store";
+export type { RuntimeSnapshotStore } from './recovery';
+export { recoverRuntime } from './recovery';
+export {
+  DefaultPermissionPolicy,
+  canExecute,
+} from './permission';
+export type {
+  Capability,
+  PermissionDecision,
+  PermissionPolicy,
+  PermissionRequest,
+  SecurityEvent,
+} from './permission';

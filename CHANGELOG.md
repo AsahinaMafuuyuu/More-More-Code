@@ -109,3 +109,5 @@ All notable changes to MORE MORE CODE are recorded here.
 
 - Existing linear message snapshots and Session Tree v1 snapshots are upgraded to Session Tree v2 when restored by the CLI.
 - No Prisma schema migration is required for this release because versioned session state remains stored in the existing JSON field.
+### Stage 6.0 Security Foundation
+- Added SQLite RuntimeEvent persistence, RuntimeSnapshot recovery, EventStore abstraction, recovery replay, permission foundation, and ADR-0015.
