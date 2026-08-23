@@ -59,6 +59,7 @@ All notable changes to MORE MORE CODE are recorded here.
 - Linux Bubblewrap launch-plan adapter with read-only host root, writable workspace, masked home/private temp, process namespaces, and optional network isolation.
 - Sandbox status in `/settings`, including explicit direct fallback/unavailable reasons rather than treating unsupported hosts as isolated.
 - ADR-0022 documenting Process Sandbox semantics, Linux Bubblewrap isolation, safe environment policy, and the unresolved Windows native isolation boundary.
+- ADR-0023 accepting the next local-first architecture: local Provider/Credential configuration, four built-in providers plus Custom OpenAI-compatible endpoints, Local Session authority, and an optional cloud limited to multi-device sync/backup plus commercial entitlements.
 
 ### Changed
 
@@ -88,6 +89,7 @@ All notable changes to MORE MORE CODE are recorded here.
 - Approval request/resolution observer failures are fail-closed: broker interaction cannot start before a durable request fact, and executor invocation cannot start before a durable approval-allow fact.
 - Native `bash` and `grep` subprocesses now share the `ProcessSandbox` seam; `local-tools.ts` no longer creates child processes directly, while existing Bash descendant cancellation remains intact for direct/MSYS execution.
 - Native `grep` now resolves Git-for-Windows' `usr/bin/grep.exe` when GNU grep is available inside Git Bash but not exposed on the Windows process PATH, eliminating the previous `ENOENT` path on that setup.
+- The post-Stage-6.3 roadmap is reordered to Stage 6.4 Provider Runtime, Stage 6.5 Local Session Authority, Stage 6.6 Cloud Session Sync/Commercial Entitlements, then Stage 6.7 Windows Native Sandbox. This is an accepted architecture/plan update, not a claim that Stages 6.4-6.7 are implemented.
 
 ### Deferred
 

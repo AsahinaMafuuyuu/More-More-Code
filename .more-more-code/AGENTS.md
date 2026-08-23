@@ -31,6 +31,13 @@ When working on Context or model-provider code:
 - Keep Vercel AI SDK responsible for streaming and unified message/tool integration unless an explicit architectural decision supersedes this.
 - Do not use OpenAI `previous_response_id` as the canonical MORE-MORE-CODE Session history in this stage.
 - Prefer reusing persisted compaction checkpoints instead of regenerating summaries on every Model Step.
+- Treat Provider identity, Provider implementation kind, model identity, and authentication strategy as separate concepts. Do not reintroduce a closed provider/model switch as the long-term public configuration surface.
+- The accepted built-in Provider set is OpenAI, Anthropic, Google, and DeepSeek. Mistral is not part of the Stage 6.4+ built-in provider surface.
+- Custom Provider V1 means an OpenAI-compatible endpoint with a stable user-defined `providerId`; multiple custom providers must be able to coexist.
+- Provider account configuration is user-global local state. Project `.more-more-code/config.json` may select a provider/model but must not own provider credentials.
+- Keep raw API keys/OAuth tokens out of repository/project config and out of process-backed Tool environments. Provider secrets belong behind the Credential Store/Auth seam.
+- OpenAI Codex OAuth is a distinct, initially experimental auth strategy. Do not scrape or copy private Codex token files and do not assume an undocumented Codex token is a generic OpenAI API bearer credential.
+- Do not add Anthropic OAuth in the initial provider design. Google OAuth and other provider-specific login flows require later explicit research/decisions.
 - Compaction is budget-aware and may trigger proactively at soft/hard utilization thresholds before actual overflow. Cut points must preserve complete Context groups/Turns and never split retained atomic interactions merely to hit a token count.
 - A newer compaction checkpoint reduces the previous effective checkpoint plus newly compacted history into one complete replacement state snapshot; older compaction entries remain durable Session history while model context starts from the latest effective checkpoint.
 - Harness owns provider-independent compaction policy/source selection/metadata; LLM semantic reduction belongs at the CLI/provider seam and must retain a bounded deterministic fallback so compaction failure does not automatically fail the primary Model Step.
@@ -56,6 +63,11 @@ When working on Context or model-provider code:
 ## Persistence Boundaries
 
 - Keep the cloud Session Store and local Runtime Store separate. `packages/database` is the PostgreSQL/Server boundary; `packages/runtime-store` is the SQLite/local-runtime boundary.
+- ADR-0023 defines the target Session authority as local. Until Stage 6.5 lands, the current Server-backed Session create/read/snapshot flow is transitional and must not be mistaken for the target architecture.
+- A future Local Session Store owns semantic Session creation/list/get/append persistence. It remains distinct from the Local Runtime Store even if both are SQLite-backed.
+- The Server is optional cloud product infrastructure: account/subscription entitlements plus multi-device Session sync/backup. Do not place Provider credentials, Model Steps, AgentLoop, Tools, Context, Runtime Events, or Sandbox execution behind it.
+- Multi-device Session sync must evolve away from whole-tree last-write-wins replacement toward append-oriented, idempotent revision/cursor semantics. Device UI/navigation state such as `activeEntryId` stays local by default.
+- Subscription/entitlement checks must not be inserted into every Model Step or Tool Step. Temporary cloud unavailability must not disable the local coding runtime.
 - Each store owns its own Prisma schema, generated client, datasource configuration, dependencies, and migrations. Do not replace or merge one schema while implementing the other.
 - Session Tree is the semantic conversation authority. Runtime Events are execution/security/recovery facts and must not rewrite Session Entries.
 - Runtime Event and snapshot reads must be explicitly scoped by `sessionId`; SQLite-assigned event offsets are replay cursors, not per-Run execution sequence numbers.

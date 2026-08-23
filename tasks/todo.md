@@ -328,3 +328,110 @@
 - [ ] Shell-AST-aware command authorization.
 - [ ] MCP transport/auth/remote Tool execution and sandboxing.
 - [ ] Cloud synchronization of approval/runtime events.
+
+---
+
+# Stage 6.4 — Provider Runtime & Local Model Configuration
+
+**Status:** Planned — ADR-0023 accepted 2026-08-23.
+
+## Provider Domain & Registry
+
+- [ ] Replace closed provider identity with `ProviderId` + `ProviderKind`.
+- [ ] Keep built-in provider kinds exactly OpenAI / Anthropic / Google / DeepSeek.
+- [ ] Remove Mistral from shared model/provider catalog, resolver assumptions, docs, and UI.
+- [ ] Add `custom` provider kind with multiple stable user-defined provider IDs.
+- [ ] Add strict versioned user-global `~/.more-more-code/providers.json` persistence.
+- [ ] Keep provider account/endpoint config out of project `.more-more-code/config.json`; allow project config only to reference/select a provider/model.
+- [ ] Reject duplicate provider IDs, invalid URLs, unknown fields, and invalid protocol/auth combinations.
+
+## Credentials & Authentication
+
+- [ ] Add deep `CredentialStore` interface and production-safe local adapter strategy.
+- [ ] Ensure JSON provider/project config stores credential references only, never plaintext secrets.
+- [ ] Add API-key auth for OpenAI, Anthropic, Google, and DeepSeek.
+- [ ] Add API Key / Bearer / None auth for custom OpenAI-compatible providers.
+- [ ] Add OpenAI `codex-oauth` as a distinct experimental auth strategy/broker seam.
+- [ ] Do not read/copy private `~/.codex` access/refresh token files or treat undocumented Codex tokens as generic OpenAI API credentials.
+- [ ] Do not add Anthropic OAuth in this Stage.
+- [ ] Keep Google OAuth / Vertex ADC and other OAuth providers explicitly deferred for later research.
+- [ ] Verify credentials cannot leak to Runtime Events, Session Entries, logs, Provider Registry serialization, or safe subprocess environments.
+
+## Provider Adapters & Models
+
+- [ ] Resolve all four built-in providers through configured Provider Registry/auth state.
+- [ ] Add Custom Provider V1 using an OpenAI-compatible adapter with configurable `baseURL`.
+- [ ] Introduce canonical `{ providerId, modelId }` `ModelRef` semantics.
+- [ ] Convert recommended/built-in model catalog into defaults/metadata rather than the only allowed models.
+- [ ] Define deterministic Context profile/token-budget fallback for configured models absent from the recommended catalog.
+- [ ] Add backward-compatible migration for legacy Session `model` values.
+
+## UX & Delivery
+
+- [ ] Add `/providers` inspect/add/edit/remove/login/logout/status UX as supported by each auth strategy.
+- [ ] Refactor `/models` around configured providers and dynamic model refs.
+- [ ] Surface Codex OAuth experimental/unavailable states explicitly; never silently downgrade auth.
+- [ ] Update README / CONTEXT / PROJECT_ANALYSIS / current-state docs / CHANGELOG / ADR-0023 implementation status.
+- [ ] Run focused provider/config/credential/migration tests and full Shared/Harness/CLI verification.
+- [ ] Run secret-leak security review and `git diff --check` before Stage 6.4 delivery.
+
+## Deferred from Stage 6.4
+
+- [ ] Anthropic OAuth.
+- [ ] Google OAuth / Gemini Code Assist login / Vertex ADC.
+- [ ] Arbitrary custom protocols beyond OpenAI-compatible.
+- [ ] External-Agent mode for Codex / Claude Code / Gemini CLI.
+- [ ] Server-side model proxy or provider credential storage.
+
+---
+
+# Stage 6.5 — Local Session Authority & Server Optionalization
+
+## Local Session Store
+
+- [ ] Define a LocalSessionStore deep interface and independent local persistence schema.
+- [ ] Persist append-only Session Entries/branch topology locally without merging them into Runtime Event storage.
+- [ ] Move Session create/list/get/open to LocalSessionStore.
+- [ ] Make new/existing Session flows work with Server/API_URL unavailable.
+- [ ] Replace whole-tree cloud persistence as the local authority with durable local append/update transactions.
+- [ ] Define `activeEntryId` and other navigation state as device-local unless an explicit semantic sync field is introduced.
+
+## Migration & Optional Cloud
+
+- [ ] Import legacy linear/v1/v2/v3 cloud Session state into local storage idempotently.
+- [ ] Preserve stable Entry IDs and prevent duplicate import.
+- [ ] Remove mandatory cloud login/Server dependency from the core coding-agent workflow.
+- [ ] Keep optional cloud failures outside local Run and local Session durability failure domains.
+- [ ] Add offline/restart/branching/migration integration tests.
+- [ ] Update ADR-0023/current-state docs to mark Local Session Store as delivered authority.
+
+---
+
+# Stage 6.6 — Cloud Session Sync & Commercial Entitlements
+
+## Multi-device Session Sync
+
+- [ ] Replace whole-state last-write-wins design with append-oriented Session Entry sync contracts.
+- [ ] Add revision/cursor/idempotency semantics and ownership validation.
+- [ ] Preserve concurrent branches created independently on two devices.
+- [ ] Add Server persistence/migrations for the accepted sync protocol.
+- [ ] Add client offline queue, retry, push/pull cursors, and duplicate-safe merge.
+- [ ] Keep device UI/navigation/transient Runtime state out of cloud semantic sync by default.
+- [ ] Add two-device/offline/reconnect/retry/conflict simulation coverage.
+
+## Commercial Account Boundary
+
+- [ ] Restrict Server commercial responsibilities to account/subscription/entitlement features plus optional sync/backup.
+- [ ] Add locally cached bounded entitlement state for cloud-only product features.
+- [ ] Ensure transient entitlement Server failure cannot disable local Provider/Model/Tool execution.
+- [ ] Keep Provider credentials and direct provider usage outside MORE-MORE-CODE Server/billing proxy paths.
+- [ ] Update Server/API/database docs and ADR-0023 delivery status.
+
+---
+
+# Stage 6.7 — Windows Native Sandbox
+
+- [ ] Design and implement a Windows native ProcessSandbox provider using AppContainer/restricted-token/Job-object or an equivalently defensible isolation mechanism.
+- [ ] Define explicit filesystem/network/process guarantees and fail-closed behavior.
+- [ ] Add real Windows E2E isolation tests and Linux Bubblewrap E2E CI coverage.
+- [ ] Keep direct fallback explicitly unisolated and preserve Stage 6.3 Permission/Approval/ToolRuntime/ProcessSandbox seam separation.

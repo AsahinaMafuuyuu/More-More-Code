@@ -4,7 +4,7 @@
 
 ## 1. 项目定位
 
-More More Code 是一个 local-first 的终端 Coding Agent 原型。CLI 是真正的应用与 Agent Runtime：负责 TUI、Harness、模型调用、Tool Loop、本地工作区操作和消息编排；Hono Server 不参与模型执行，只承担云端 Session 持久化、恢复数据和必要的账户服务。
+More More Code 是一个 local-first 的终端 Coding Agent 原型。CLI 是真正的应用与 Agent Runtime：负责 TUI、Harness、模型调用、Tool Loop、本地工作区操作和消息编排；Hono Server 不参与模型执行。Stage 6.3 当前代码仍使用 Server 做 Session 创建/读取/快照持久化，但 ADR-0023 已接受下一阶段目标：Session authority 迁到本地，Server 降级为可选的多设备 Session Sync/Backup 与商业账户/订阅/Entitlement 服务。
 
 项目当前的核心闭环为：
 
@@ -13,8 +13,8 @@ More More Code 是一个 local-first 的终端 Coding Agent 原型。CLI 是真�
 3. 模型产生 Tool Call 时，CLI 在同一 Turn 内执行对应 Tool Steps；
 4. Tool 结果需要继续推理时，Harness 创建新的 `tool-continuation` Turn；
 5. Run 活跃期间，Enter 可排队 steering、Alt+Enter 可排队 follow-up，均只在 Turn-safe boundary 消费；
-6. Run 完成后，UIMessage/Session Tree state 通过 Session Store 同步到 Server / PostgreSQL；
-7. 再次进入会话时，从云端快照恢复消息历史后继续由本地 Runtime 执行。
+6. 当前过渡实现中，Run/Session 语义变化会 best-effort 把 Session Tree state 同步到 Server / PostgreSQL；
+7. 当前再次进入会话可从云端快照恢复；Stage 6.5 将把 create/list/get/append authority 迁到 Local Session Store，Stage 6.6 再把 Server 改为可选多设备增量同步。
 
 ## 2. 技术栈与仓库结构
 
@@ -24,8 +24,8 @@ More More Code 是一个 local-first 的终端 Coding Agent 原型。CLI 是真�
 | --- | --- | --- |
 | `packages/cli` | React 19、OpenTUI、AI SDK、Provider SDK、Hono RPC Client | 本地应用层：UI、模型调用、消息编排、本地工具执行、云会话同步 |
 | `packages/harness` | TypeScript | Agent Loop、Execution Events/Event Store、Run / Turn / Step Lifecycle/Projection、steering/follow-up、Context/Session Runtime |
-| `packages/server` | Bun、Hono、Sentry | 云服务层：会话持久化、会话恢复数据、认证及外围账户 API |
-| `packages/database` | Prisma 7、PostgreSQL、`@prisma/adapter-pg` | 云 Session Store 数据模型、Prisma Client、数据库连接 |
+| `packages/server` | Bun、Hono、Sentry | 当前：云 Session 快照/认证；目标：可选 Session Sync + 商业订阅/Entitlement |
+| `packages/database` | Prisma 7、PostgreSQL、`@prisma/adapter-pg` | 当前云 Session Store；Stage 6.6 将演进为 sync/account cloud persistence |
 | `packages/runtime-store` | Prisma 7、SQLite、`@prisma/adapter-libsql` | 本地 Runtime Event / Snapshot 持久化与恢复 adapter；兼容 Bun 运行时 |
 | `packages/shared` | TypeScript、Zod | 模型清单、价格信息、消息结构及流式事件协议 |
 
@@ -72,6 +72,8 @@ PostgreSQL
 Harness 包位于 CLI 的执行路径中，负责显式驱动 Run → Turn → Step。Turn 定义为一次 Model response 加该 response 请求的全部 Tool Steps；后续 tool-result 推理会创建新的 Turn。AgentLoop 将 coarse-grained Run / Turn / Step 事实写成 append-only Execution Events，`AgentRun` 等状态通过 replay projection 得到，同时通过 awaited lifecycle stream 对外发送 `run_start/end`、`turn_start/end`、`step_start/update/end`。模型 Provider、System Prompt 与 `streamText()` 同样位于 CLI。Server 不参与 Agent Run，只接收会话快照用于云端恢复。
 
 Stage 6.0 将持久化边界拆为两个独立 Prisma store：`packages/database` 继续使用 PostgreSQL 服务云 Session；`packages/runtime-store` 使用 SQLite 保存本地 Runtime Event 与 Runtime Snapshot。二者拥有独立 schema/client/migration。Session Tree 是语义会话权威，Runtime Event 则为执行、安全、上下文和恢复事实；本地 store 不进入云同步关键路径。
+
+ADR-0023 又进一步区分了“Session 语义权威”和“Cloud Sync”：当前 Stage 6.3 的 Session Tree 语义模型本身是 authoritative，但物理创建/读取/快照落盘仍依赖 Cloud Session Store。Stage 6.5 将新增独立 Local Session Store，使本地持久化成为 Session semantic authority；它与 `packages/runtime-store` 仍保持不同 schema/职责。Stage 6.6 才在其上实现 append-oriented、revision/cursor-aware 的多设备同步。
 
 ## 4. 核心数据结构
 
@@ -200,17 +202,9 @@ Run 活跃期间，普通 Enter 将输入排入 steering queue；Alt+Enter 排�
 
 ### 5.6 多模型抽象
 
-共享包维护模型 ID、厂商和输入/输出 Token 单价。当前清单涉及：
+当前 shared 包仍维护固定模型 ID、厂商和输入/输出 Token 单价，CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例；实际 resolver 只真正实现了 OpenAI、Anthropic 和 DeepSeek，默认模型为 `deepseek-v4-flash`。这属于 Stage 6.3 的过渡实现。
 
-- OpenAI；
-- Anthropic；
-- Mistral；
-- Google；
-- DeepSeek。
-
-CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为 `deepseek-v4-flash`。
-
-需要注意：当前解析器只真正实现了 OpenAI、Anthropic 和 DeepSeek。Mistral、Google 虽出现在共享模型清单中并能通过请求校验，但实际调用时会进入“不支持 Provider”的异常分支。
+ADR-0023 已接受 Stage 6.4 的新模型：built-in ProviderKind 固定为 OpenAI、Anthropic、Google、DeepSeek，Mistral 从内置支持面移除；另增加可存在多个实例的 Custom OpenAI-compatible Provider。Provider identity 与 kind 分离，模型引用迁移为 `{ providerId, modelId }`，固定模型目录降级为推荐/价格/Context metadata，而不再是唯一 allowlist。Provider account/endpoint config 存本地用户全局配置，secret 则由独立 CredentialStore/Auth seam 管理。
 
 ### 5.7 可观测性
 
@@ -281,11 +275,11 @@ CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为
 
 以下内容是基于当前代码确认的主要边界：
 
-1. **Provider 依赖刚从 Server 迁到 CLI**
-   `packages/cli/package.json` 已声明 Provider SDK，但当前工作区需要重新执行一次 `bun install` 才会重建 workspace node_modules 链接。
+1. **Provider 依赖已迁到 CLI，但 Provider account/model 配置仍是过渡态**
+   当前模型执行已经不经过 Server，但 Provider/model 仍由 shared 固定清单 + CLI resolver 驱动，凭证主要依赖 ambient environment。ADR-0023 已接受 Stage 6.4：用户全局 Provider Registry、`ProviderId`/`ProviderKind`、动态 `ModelRef`、CredentialStore 与 Auth Strategy。
 
-2. **模型清单与实际 Provider 支持仍不完全一致**
-   当前本地 resolver 实现 OpenAI、Anthropic 和 DeepSeek；其他模型应在清单或 resolver 层统一处理。
+2. **模型清单与实际 Provider 支持仍不完全一致，且将在 Stage 6.4 重构**
+   当前本地 resolver 实现 OpenAI、Anthropic 和 DeepSeek；Stage 6.4 的正式内置 Provider 面固定为 OpenAI、Anthropic、Google、DeepSeek，移除 Mistral，并增加可配置多个实例的 Custom OpenAI-compatible Provider。模型身份从闭合 TypeScript union 迁移为 `{ providerId, modelId }`。
 
 3. **云 Session 已升级为 Session Entry Tree v3，但同步仍是 last-write-wins**
    v3 直接持久化 append-only `entries[]`；message、tool、runtime-state change、compaction 与 branch summary 都是可分支的 Session Entries，旧 linear/v1/v2 状态在 CLI 恢复时兼容升级。`POST /sessions/:id/state` 仍没有 revision / optimistic concurrency / conflict resolution。
@@ -299,11 +293,11 @@ CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为
 6. **Context reduction 已形成 Tool Working Set + Branch Summary + semantic Compaction 三种独立语义，但 tokenizer 仍是显式估算器**
    Tool Result Working Set 先对过大的 warm/cold shell、test/build、search/grep、file-read、generic 输出做 model-facing `truncated/summary/reference` 投影，canonical `tool_result` 不变。Branch Summary 则在跨路径导航确实会丢失 source-only 语义知识时按 `ask | always | never` 做 lazy transfer；Carry 使用独立 bounded reducer（上限 `min(4096, 4% input budget)`），并以 provenance/coverage 去重，No Carry/Cancel 均不制造 Session branch。Active-path Branch Summary 作为 historical Context record 参与普通 Compaction；checkpoint 使用 generic record IDs 防止已吸收知识重复投影。历史 Compaction 仍按 80% soft / 92% hard / 70% target 和完整 group/Turn cut point运行，`/compact` 复用同一 checkpoint pipeline并执行安全 eligibility gate。Harness 同时提供 exact tokenizer adapter 接口，但当前模型家族仍使用明确标记为 `estimated` 的计数器。
 
-7. **云同步暂时是 best-effort**
-   同步失败不会让本地 Agent Run 失败，这是正确的故障域隔离；本地 Runtime Event 已持久化，但语义 Session 云同步仍只有日志，没有 retry queue、revision conflict resolution 或离线同步队列。
+7. **当前 Session 仍是 Cloud-backed snapshot persistence，不是真正完整 local-first**
+   同步失败不会让本地 Agent Run 失败，这是正确的故障域隔离；但 `NewSession`、Session list/open 和 restore 仍依赖 Server。Stage 6.5 将 Local Session Store 设为物理持久化 authority，Stage 6.6 再增加 offline queue、revision/cursor、idempotent push/pull 与 conflict-safe merge。
 
-8. **Server 仍保留 auth / billing 外围路由**
-   它们不参与 Agent Runtime。如果最终要求 Server 严格只做 Session Storage，可进一步把 billing 拆为独立账户服务。
+8. **Server 的目标职责已经收窄为 Optional Cloud**
+   ADR-0023 明确 Server 最终只保留多设备 Session Sync/Backup 与 MORE-MORE-CODE 自身商业账户/订阅/Entitlement。Provider credentials、Model Step、AgentLoop、Tool、Context、Runtime Event、Sandbox 不进入 Server；订阅检查也不得成为每次 Model Step 的关键路径。
 
 9. **测试覆盖仍需扩展**
    已有 AgentLoop、ExecutionEventStore/Projection、Runtime Store migration/restart、write-ahead/redaction/recovery、LocalModelTransport Context lifecycle、Tool Runtime 和 Session Tree 回归测试，但还缺真实 Cloud Session Sync、完整 CLI 键盘/节点跳转 UI 与真实多轮 Tool Loop 的端到端集成测试。
@@ -313,7 +307,7 @@ CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为
 
 ## 9. 项目现阶段总结
 
-项目现在的核心性质已经从“Client + 远程 AI Chat Server”转为“**Local Coding Agent Runtime + Cloud Session Store**”。CLI 是 authoritative execution runtime；Server 只是云数据边界，不参与 Run / Turn / Step 的推进。
+项目现在的核心性质已经从“Client + 远程 AI Chat Server”转为“**Local Coding Agent Runtime + transitional Cloud Session Store**”。CLI 已经是 authoritative execution runtime；ADR-0023 接受的最终产品边界进一步变为“**Local Coding Agent + Local Session/Provider Authority + Optional Cloud Sync/Subscription**”。
 
 现阶段最核心的已完成能力是：
 
@@ -334,4 +328,4 @@ CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为
 - ProcessSandbox 深模块、strict sandbox config、safe child environment、Linux Bubblewrap launch plan，以及 `bash/grep` 统一 subprocess seam；
 - AgentLoop / lifecycle interaction / ExecutionEventStore / Execution Projection / ContextManager / Session Tree 确定性测试基础。
 
-Stage 6.2 已补齐原先 `ask -> approval_required` 的产品死路；Stage 6.3 又把 process creation 收口到可替换的 Sandbox seam，并在 Linux/Bubblewrap 上提供真实的 workspace-write/process/network 隔离能力。下一安全优先级应补齐 **Windows native isolation adapter**（AppContainer/restricted token + Job Object 或等价方案）和跨平台 provider 集成验证，然后再扩大 MCP transport/auth/remote Tool trust boundary。持久化 allow-for-session/project 仍应单独设计，不应混入一次性审批；shell-AST-aware authorization、Cloud revision/conflict sync 与 exact tokenizer 也保持独立演进。
+Stage 6.2 已补齐原先 `ask -> approval_required` 的产品死路；Stage 6.3 又把 process creation 收口到可替换的 Sandbox seam，并在 Linux/Bubblewrap 上提供真实的 workspace-write/process/network 隔离能力。经 ADR-0023 调整后，下一阶段不再优先做 Windows Sandbox，而是按产品依赖顺序推进：**Stage 6.4 Provider Runtime & Local Model Configuration → Stage 6.5 Local Session Authority & Server Optionalization → Stage 6.6 Cloud Session Sync & Commercial Entitlements → Stage 6.7 Windows Native Sandbox**。MCP transport/auth/remote Tool trust boundary、持久化 allow-for-session/project、shell-AST-aware authorization、exact tokenizer 继续独立演进。

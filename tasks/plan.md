@@ -1401,3 +1401,389 @@ Agent Config sandbox contract
 - Shell-AST-aware authorization.
 - MCP transport/auth/remote Tool sandboxing.
 - Cloud synchronization of Runtime Events.
+
+---
+
+# Stage 6.4 — Provider Runtime & Local Model Configuration
+
+**Status:** Planned — architecture accepted 2026-08-23 in ADR-0023. This Stage now precedes Windows native Sandbox work.
+
+## Overview
+
+Replace the current hard-coded provider/model assumptions with a local Provider Registry, dynamic `ModelRef`, explicit authentication strategies, and a local Credential Store seam. The initial built-in provider set is exactly OpenAI, Anthropic, Google, and DeepSeek. Custom Provider V1 is OpenAI-compatible only. OpenAI supports API Key plus an initially experimental Codex OAuth seam; Anthropic/Google/DeepSeek start with API Key only.
+
+This Stage does **not** make the Server responsible for model traffic or provider secrets. Provider configuration is user-global local state and model execution remains owned by the CLI/Harness.
+
+## Architecture Decisions
+
+- Separate `ProviderId` from `ProviderKind`; multiple user-defined custom providers can coexist.
+- Replace closed `SupportedChatModelId` authority with `{ providerId, modelId }` `ModelRef` semantics.
+- Built-in/recommended model catalogs are defaults/UX hints, not the only permitted models.
+- Provider configuration and authentication are separate seams.
+- User-global provider configuration is stored locally; project config may select a provider/model but must not contain credentials.
+- Raw provider secrets remain outside JSON config behind `CredentialStore`.
+- Custom Provider V1 is OpenAI-compatible and may use API Key/Bearer/None auth.
+- Codex OAuth is a distinct experimental OpenAI auth strategy; it must not scrape private token files or assume undocumented token semantics.
+- Anthropic OAuth is intentionally not designed. Google OAuth/Vertex/ADC are later research items.
+
+## Dependency Graph
+
+```text
+Provider domain model
+  -> Provider Registry + config persistence
+      -> Credential Store + auth strategies
+          -> Built-in provider adapters
+          -> Custom OpenAI-compatible adapter
+              -> dynamic ModelRef / Context profile integration
+                  -> /providers + /models UX
+                      -> migration + full regression
+```
+
+## Phase 1: Provider Domain & Registry
+
+### Task 1: Replace closed provider identity with ProviderId / ProviderKind
+
+**Description:** Introduce the provider domain model required by ADR-0023 and remove Mistral from the accepted built-in provider surface. Keep current Session/Context compatibility while creating an explicit migration path away from the closed `SupportedProvider` and `SupportedChatModelId` assumptions.
+
+**Acceptance criteria:**
+- Built-in provider kinds are exactly `openai | anthropic | google | deepseek`.
+- `custom` is a provider kind, not a singleton provider identity; arbitrary stable `ProviderId` values can coexist.
+- Mistral is removed from the built-in catalog/types/UI and no stale resolver/config path exposes it as supported.
+
+**Verification:** shared + CLI focused type/tests for provider identity and catalog compatibility.
+
+**Dependencies:** None.
+
+**Files likely touched:**
+- `packages/shared/src/models.ts`
+- `packages/cli/src/lib/models.ts`
+- `packages/cli/src/lib/provider-runtime.ts`
+- model-related tests/UI.
+
+**Estimated scope:** Medium.
+
+### Task 2: Add user-global Provider Registry and strict persisted config
+
+**Description:** Add a deep Provider Registry module backed by user-global local configuration, planned as `~/.more-more-code/providers.json`. Registry persistence owns non-secret provider configuration only and uses strict versioned validation/migration.
+
+**Acceptance criteria:**
+- Provider config is user-global and independent from project `.more-more-code/config.json`.
+- Multiple custom providers can be added/edited/removed by stable ID.
+- Unknown/invalid fields, duplicate IDs, invalid base URLs, and unsupported protocol/auth combinations fail deterministically rather than being silently ignored.
+
+**Verification:** disposable-home tests for first-run creation, load/save/reload, invalid config, duplicate IDs, and migration/version rejection.
+
+**Dependencies:** Task 1.
+
+**Files likely touched:**
+- new CLI provider registry/config module(s)
+- CLI bootstrap/environment integration
+- focused provider config tests.
+
+**Estimated scope:** Medium.
+
+## Checkpoint: Provider Registry
+
+- Four built-in provider kinds plus multiple custom provider IDs are represented without model execution changes leaking into Harness.
+- `providers.json` stores no raw secret values.
+- Existing project Agent Config remains valid and cannot become a credential store.
+
+## Phase 2: Credential & Authentication Seams
+
+### Task 3: Add CredentialStore and API-key authentication
+
+**Description:** Introduce the local secret-storage interface used by provider auth resolution. Prefer an OS-native adapter where practical; if a production-quality OS adapter cannot be delivered in one slice, add an explicitly scoped encrypted/local adapter behind the same interface without weakening the JSON-config rule.
+
+**Acceptance criteria:**
+- Provider config stores only credential references, never plaintext API keys.
+- OpenAI, Anthropic, Google, DeepSeek, and custom providers can resolve API-key/Bearer credentials through one auth seam.
+- Credential values are never included in Provider Registry diagnostics, Runtime Events, Session Entries, logs, or ProcessSandbox safe child environments.
+
+**Verification:** credential round-trip/redaction tests plus negative checks for config/event/log serialization.
+
+**Dependencies:** Task 2.
+
+**Files likely touched:**
+- new CredentialStore module/adapters
+- provider auth resolver
+- provider/config tests.
+
+**Estimated scope:** Medium.
+
+### Task 4: Add OpenAI Codex OAuth strategy behind an experimental broker seam
+
+**Description:** Model `codex-oauth` as a distinct OpenAI authentication strategy. Integrate only through a supported Codex account/login surface that can be wrapped without making Codex the AgentLoop. If the current official integration contract is insufficient for native ModelProvider execution, ship the seam/status UX without an unsafe token-copy fallback and keep the strategy explicitly unavailable/experimental until the contract can be satisfied.
+
+**Acceptance criteria:**
+- `codex-oauth` is not represented as an ordinary API-key string.
+- No implementation reads/copies private `~/.codex` token files or persists Codex access/refresh tokens into MORE-MORE-CODE provider config.
+- Unsupported/unavailable OAuth execution fails explicitly and suggests API-key auth rather than silently switching credentials.
+
+**Verification:** auth-state tests with mocked broker/account responses; source review for direct token-file access; no network-dependent test required for deterministic suite.
+
+**Dependencies:** Task 3.
+
+**Files likely touched:**
+- OpenAI auth adapter/broker
+- Provider Registry auth state
+- provider settings UX/tests.
+
+**Estimated scope:** Medium.
+
+## Phase 3: Provider Adapters & Dynamic Models
+
+### Task 5: Implement the four built-in adapters and Custom OpenAI-compatible adapter
+
+**Description:** Make Provider Registry resolve provider configuration/auth into Vercel AI SDK models while preserving the existing provider-independent Context and provider-specific request compiler seam.
+
+**Acceptance criteria:**
+- OpenAI, Anthropic, Google, and DeepSeek resolve through configured provider accounts instead of ambient-only globals.
+- Custom OpenAI-compatible providers support configurable `baseURL`, auth strategy, and configured model IDs without adding branches to AgentLoop/ContextManager.
+- Invalid/missing credentials and unsupported provider protocol combinations fail before Model Step network side effects.
+
+**Verification:** provider adapter contract tests with mocked/fake endpoints/configuration plus existing provider-runtime/cache tests.
+
+**Dependencies:** Tasks 2-4.
+
+**Files likely touched:**
+- provider adapters/registry
+- `packages/cli/src/lib/models.ts`
+- `packages/cli/src/lib/provider-runtime.ts`
+- `packages/cli/src/lib/local-model-transport.ts`
+- provider tests.
+
+**Estimated scope:** Medium.
+
+### Task 6: Migrate model selection to dynamic ModelRef
+
+**Description:** Replace canonical runtime reliance on compile-time `SupportedChatModelId` with `{ providerId, modelId }`. Keep recommended model metadata/pricing/context defaults available without turning that catalog back into an allowlist.
+
+**Acceptance criteria:**
+- Session runtime/config/model-change semantics can represent arbitrary configured custom-provider model IDs.
+- Context profile resolution has deterministic fallback/default behavior for unknown-but-configured models.
+- Existing stored Sessions that contain only legacy model IDs restore through a deterministic migration/lookup path.
+
+**Verification:** Session restore/model-change migration tests, Context profile tests, custom-provider model selection tests.
+
+**Dependencies:** Task 5.
+
+**Files likely touched:**
+- shared model/session types
+- Harness Session runtime projection types where required
+- CLI prompt config/model dialogs
+- Context profile/model resolution tests.
+
+**Estimated scope:** Medium.
+
+## Checkpoint: Provider Runtime
+
+- Harness remains provider-independent.
+- Four built-in providers and at least two simultaneous custom Provider IDs can resolve model references through the same runtime seam.
+- Legacy Session model metadata restores without destructive rewrite.
+
+## Phase 4: UX, Documentation & Delivery
+
+### Task 7: Add Provider management UX and complete Stage 6.4 delivery
+
+**Description:** Add `/providers` management/status UX and refactor `/models` to list models by configured provider account. Document local provider config, auth strategies, secret handling, Custom Provider V1, Codex OAuth experimental semantics, and migration behavior.
+
+**Acceptance criteria:**
+- User can inspect built-in/custom provider status and add/edit/remove custom provider definitions without manually editing JSON.
+- `/models` is driven by configured Provider Registry/model references rather than the old fixed catalog alone.
+- Documentation and `/settings`/help clearly distinguish provider configuration, credential storage, project model selection, and OAuth experimental state.
+
+**Verification:** CLI interaction/unit tests where feasible; full CLI/Harness/shared suites, typechecks/build, `git diff --check`, security review for secret leakage.
+
+**Dependencies:** Tasks 1-6.
+
+**Files likely touched:**
+- command menu/dialog/provider/model UI
+- README / CONTEXT / PROJECT_ANALYSIS / current-state docs / CHANGELOG
+- ADR-0023 implementation-status update.
+
+**Estimated scope:** Medium.
+
+## Stage 6.4 Final Verification
+
+- Shared/Harness/CLI tests and typechecks pass.
+- CLI build succeeds.
+- Provider configuration tests use disposable homes and leave no real credentials behind.
+- No plaintext provider credential appears in `providers.json`, project config, Session state, Runtime Events, logs, or child-process safe environment.
+- Custom-provider and legacy Session migration tests pass.
+- `git diff --check` passes.
+
+## Explicitly Deferred from Stage 6.4
+
+- Anthropic OAuth.
+- Google OAuth / Gemini Code Assist login / Vertex ADC.
+- Arbitrary custom provider protocols beyond OpenAI-compatible.
+- External-Agent backend mode for Codex/Claude Code/Gemini CLI.
+- Server-side model proxy or centralized provider credentials.
+
+---
+
+# Stage 6.5 — Local Session Authority & Server Optionalization
+
+**Status:** Planned — depends on Stage 6.4.
+
+## Overview
+
+Make the local CLI authoritative for semantic Session lifecycle so MORE-MORE-CODE can create/list/open/continue Sessions with the Server unavailable. The existing cloud `POST /sessions`, `GET /sessions/:id`, and whole-state persistence calls become optional synchronization concerns rather than Session prerequisites.
+
+The Local Session Store is separate from the Local Runtime Store even when both use SQLite: Session Entries are durable conversation semantics/branch topology; Runtime Events are execution/security/recovery facts.
+
+## Phase 1: Local Session Store Foundation
+
+### Task 1: Define the LocalSessionStore interface and persistence schema
+
+**Acceptance criteria:**
+- Deep interface supports local create/get/list plus append-oriented semantic Session persistence.
+- Schema preserves Session Entry identity/parent topology and versioned migration semantics.
+- Runtime Event/Snapshot schema is not merged into the Session Store.
+
+**Verification:** disposable-database persistence/restart/migration tests.
+
+**Dependencies:** Stage 6.4 complete.
+
+### Task 2: Make local Session creation/list/open independent of apiClient
+
+**Acceptance criteria:**
+- `NewSession`, Session list, and Session open work with no Server/API URL available.
+- Local Session IDs/titles/timestamps and Session Tree restore are authoritative.
+- Cloud/account login is not required to use the coding agent.
+
+**Verification:** offline/local-only CLI integration tests.
+
+**Dependencies:** Task 1.
+
+## Phase 2: Append Persistence & Migration
+
+### Task 3: Replace whole-tree best-effort persistence with local append/update transactions
+
+**Acceptance criteria:**
+- New semantic Entries are durably local before they are considered available for later local restore.
+- Append-after-history preserves branch topology without rewriting sibling history.
+- Device UI/navigation state such as `activeEntryId` has an explicitly local persistence policy rather than being conflated with cloud semantic state.
+
+**Verification:** branching/restart/crash-adjacent persistence tests.
+
+**Dependencies:** Task 2.
+
+### Task 4: Import existing cloud/legacy Sessions into local authority
+
+**Acceptance criteria:**
+- Existing linear/v1/v2/v3 cloud state can be imported into the Local Session Store idempotently.
+- Import never duplicates already-known semantic Entry IDs.
+- Migration failure does not silently destroy the remote or local copy.
+
+**Verification:** fixture-based import/idempotency tests.
+
+**Dependencies:** Task 3.
+
+## Phase 3: Server Optionalization & Delivery
+
+### Task 5: Remove mandatory Session Server dependency and document offline guarantees
+
+**Acceptance criteria:**
+- Core CLI startup/session/model/tool workflow has no mandatory Server call.
+- Cloud sync hooks are optional and failures cannot terminate the local Run/Session write path.
+- README/current-state/ADR-0023 accurately state that Local Session Store is semantic authority.
+
+**Verification:** local-only end-to-end flow, Server-offline regression, package tests/typechecks/builds, `git diff --check`.
+
+**Dependencies:** Tasks 1-4.
+
+## Explicitly Deferred from Stage 6.5
+
+- Multi-device cloud merge protocol itself (Stage 6.6).
+- Cloud Runtime Event synchronization.
+- Team/collaborative live editing.
+
+---
+
+# Stage 6.6 — Cloud Session Sync & Commercial Entitlements
+
+**Status:** Planned — depends on Stage 6.5 local Session authority.
+
+## Overview
+
+Refactor the Server into optional cloud-product infrastructure: account/subscription entitlements plus multi-device Session synchronization/backup. Replace current whole-state last-write-wins semantics with append-oriented, idempotent synchronization that preserves independent branches created on different devices.
+
+## Phase 1: Sync Protocol
+
+### Task 1: Define append-oriented Session sync contracts
+
+**Acceptance criteria:**
+- Protocol identifies Session/Entry IDs, parent topology, revision/cursor and idempotency semantics.
+- Re-sending the same Entry is safe and does not duplicate history.
+- Two devices appending different children from the same ancestor preserve both branches.
+
+**Verification:** pure protocol/merge property tests.
+
+**Dependencies:** Stage 6.5 complete.
+
+### Task 2: Implement Server persistence for sync entries/cursors
+
+**Acceptance criteria:**
+- Server validates account ownership and append-only Entry shape.
+- Sync storage cannot overwrite an unrelated branch through whole-state replacement.
+- Schema/migration path is explicit and backward migration/import is documented.
+
+**Verification:** database/server integration tests and Prisma validation/migration checks.
+
+**Dependencies:** Task 1.
+
+## Phase 2: Client Sync Engine
+
+### Task 3: Add offline queue, push/pull cursors, and conflict-safe merge
+
+**Acceptance criteria:**
+- Local writes succeed while offline and queue for later sync.
+- Retry is idempotent after network/process interruption.
+- Pull merges unseen Entries without replacing local branches or local device UI state.
+
+**Verification:** two-device simulation, offline/reconnect/retry tests, duplicate-delivery tests.
+
+**Dependencies:** Task 2.
+
+### Task 4: Define shareable vs device-local Session state
+
+**Acceptance criteria:**
+- Semantic Entries and approved shareable metadata sync.
+- `activeEntryId`, expanded nodes, scroll position, transient runtime/approval state do not sync by default.
+- Any cross-device "latest semantic position" is an explicit semantic field, not reuse of device navigation state.
+
+**Verification:** serialization/merge tests and documentation review.
+
+**Dependencies:** Task 3.
+
+## Phase 3: Commercial Entitlements & Delivery
+
+### Task 5: Keep subscription/entitlements outside Agent critical path
+
+**Acceptance criteria:**
+- Server account/billing maps to explicit cloud feature entitlements such as sync/backup.
+- Entitlements can be cached with bounded validity; transient Server failure does not disable local model/tool execution.
+- Provider credentials/model usage remain user-to-provider and are not proxied through MORE-MORE-CODE billing.
+
+**Verification:** entitlement cache/offline tests, Server/CLI integration tests, security/privacy review.
+
+**Dependencies:** Tasks 1-4.
+
+## Explicitly Deferred from Stage 6.6
+
+- Team collaborative editing and shared live presence.
+- Server-owned provider billing/model proxy.
+- Runtime Event/approval event cloud synchronization.
+
+---
+
+# Stage 6.7 — Windows Native Sandbox
+
+**Status:** Planned — reordered from the former Stage 6.4 recommendation after ADR-0023.
+
+## Overview
+
+Resume the Stage 6.3 ProcessSandbox security roadmap after Provider Runtime, Local Session authority, and optional Cloud Sync are established. Design a Windows native isolation adapter using AppContainer/restricted-token/Job-object or an equivalently defensible mechanism, with explicit filesystem/network/process guarantees and cross-platform E2E verification.
+
+The existing Stage 6.3 requirements remain unchanged: direct fallback is not OS isolation, hard restrictions fail closed, and Permission/Approval/ToolRuntime/ProcessSandbox remain separate seams.

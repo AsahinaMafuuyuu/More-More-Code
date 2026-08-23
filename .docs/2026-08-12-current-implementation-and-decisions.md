@@ -864,7 +864,12 @@ worker-configuration.d.ts
 Server 定位：
 
 ```text
-Cloud Session Store
+Current transition:
+Cloud Session Store + Auth/Billing
+
+Accepted target (ADR-0023):
+Optional Multi-device Session Sync / Backup
+Account / Subscription / Entitlements
 ```
 
 不是：
@@ -873,6 +878,8 @@ Cloud Session Store
 Agent Runtime Server
 LLM Gateway
 Tool Coordinator
+Provider Credential Store
+Canonical Local Session Authority
 ```
 
 ### Decision 3：Model Provider 调用属于 CLI
@@ -1281,6 +1288,36 @@ Linux provider 使用可发现的 Bubblewrap：host root 只读 bind，canonical
 
 当前 Windows 开发环境没有 Bubblewrap/nsjail/firejail 类型 provider，Stage 6.3 不把 safe environment、cwd 或 canonical path 包装成伪 Sandbox：`auto` 只在没有硬约束时报告 unisolated direct fallback，`required` 则拒绝 spawn。后续 Windows AppContainer/restricted-token/Job-object adapter 可直接实现同一 seam，而不改 AgentLoop/ToolRuntime/native Tool 调用面。`/settings` 已显示实际 Sandbox provider 和 fallback/unavailable 原因。
 
+### 16.16 Local Provider / Session Authority & Optional Cloud：ADR-0023（Accepted / Planned）
+
+2026-08-23 已接受 ADR-0023，但该架构迁移尚未作为实现交付完成。当前代码状态必须和目标状态明确区分：
+
+- **已经成立：** Model Step、AgentLoop、Tools、Context、Permission、Approval、ProcessSandbox、Runtime Store 都在本地 CLI；Server 不执行模型。
+- **仍是过渡态：** Session create/list/get/whole-tree snapshot 仍由 Server/PostgreSQL 提供；Provider/model 仍存在 fixed catalog + resolver 假设；Provider secret 主要来自 ambient environment。
+- **目标：** Local Session Store 成为语义 Session 的物理持久化 authority；Provider Registry/Credential Store/Auth Strategy 全部本地化；Server 只作为可选 Session Sync/Backup + account/subscription/entitlement cloud。
+
+Provider V1 的 accepted surface 固定为：
+
+```text
+Built-in ProviderKind
+  openai
+  anthropic
+  google
+  deepseek
+
+Custom
+  OpenAI-compatible endpoint
+  multiple user-defined ProviderId values
+```
+
+Mistral 从 Stage 6.4+ built-in provider surface 移除。模型选择不再长期绑定 closed `SupportedChatModelId`，而迁移为 `{ providerId, modelId }` `ModelRef`。推荐模型目录仍可提供定价、Context profile 和 UX default，但不再承担全局 allowlist 角色。
+
+Auth 与 Provider configuration 分离。首发为：OpenAI `api-key | codex-oauth(experimental)`；Anthropic/Google/DeepSeek `api-key`；Custom OpenAI-compatible `api-key | bearer | none`。Anthropic OAuth 明确不设计；Google OAuth/Vertex ADC 后续研究。Codex OAuth 不允许通过复制 `~/.codex` 私有 token 文件实现，也不能把 undocumented token 当作稳定通用 OpenAI API credential。
+
+Provider account/endpoint config 计划存放在 user-global `~/.more-more-code/providers.json`；project `.more-more-code/config.json` 最多引用 provider/model default，不保存账户 secret。Credential 由独立 `CredentialStore` deep module 管理，目标适配 OS-native secret store。
+
+Session 持久化路线也相应变化：Stage 6.5 先让 local create/list/get/append 完全脱离 Server；Stage 6.6 再将 Cloud Sync 从 whole-tree last-write-wins 改为 append-oriented + idempotency + revision/cursor merge。`activeEntryId`、expanded nodes、scroll position 等 device UI/navigation state 默认不作为跨设备 semantic sync 数据。
+
 ---
 
 ## 17. 当前需要特别避免的架构回退
@@ -1361,7 +1398,7 @@ ProcessSandbox → provider / safe env / workspace-write constraint
 Redacted Runtime Events → SQLite snapshot + replay
 ```
 
-Stage 6.3 已把 native process creation 收口到 ProcessSandbox，并在 Linux/Bubblewrap 可用时提供 workspace-write/process/network isolation；当前最重要的安全缺口转为 Windows native isolation adapter 与真实跨平台 provider 集成测试。之后再扩大 MCP remote Tool trust boundary 更稳妥。Cloud Runtime Event sync、allow-for-session/project、shell-AST-aware authorization、exact tokenizer 或产品级 Subagent runtime 仍可独立推进；其中任何一项都不应重新把职责塞入 `AgentLoop`、`ContextManager` 或 OpenAI-specific adapter。
+Stage 6.3 已把 native process creation 收口到 ProcessSandbox，并在 Linux/Bubblewrap 可用时提供 workspace-write/process/network isolation。ADR-0023 已重新排序后续依赖：Stage 6.4 先完成 Provider Runtime/Local Auth foundation；Stage 6.5 建立 Local Session authority 并移除 Server 必选依赖；Stage 6.6 再做 multi-device Session Sync + commercial entitlements；原本建议优先的 Windows native isolation 移到 Stage 6.7。MCP remote Tool trust、Cloud Runtime Event sync、allow-for-session/project、shell-AST-aware authorization、exact tokenizer 或产品级 Subagent runtime 仍可独立推进；其中任何一项都不应重新把职责塞回 `AgentLoop`、`ContextManager` 或 Server model proxy。
 
 当前关键边界已经分离：
 
@@ -1376,10 +1413,14 @@ Process Sandbox          = native subprocess provider / environment / writable w
 Message / UI Projection  = 当前 branch 显示哪些聊天/树信息
 Runtime State Projection = 当前 branch 恢复哪些 model / mode / config
 Agent Environment        = 当前进程加载了哪些 global/project instructions、skills 与 tool sources
-Cloud Snapshot / WAL     = 用于跨进程/设备恢复什么（WAL 当前明确延后）
+Provider Registry        = user-global provider identity/kind/non-secret endpoint/model configuration（Stage 6.4）
+Credential Store         = local provider secret storage / auth credential resolution（Stage 6.4）
+Local Session Store      = semantic Session local persistence authority（Stage 6.5）
+Cloud Session Sync       = optional append-oriented multi-device Session synchronization（Stage 6.6）
+Cloud Entitlements       = optional account/subscription feature capability, not Agent runtime authorization（Stage 6.6）
 ```
 
-下一阶段应根据安全层、MCP 或持久化的重构方案单独立项，而不是继续扩大 `AgentLoop`。
+下一阶段按 ADR-0023 与 `tasks/plan.md` 执行 Stage 6.4 Provider Runtime，而不是继续扩大 `AgentLoop` 或先把 Server 扩回模型执行路径。
 
 ---
 
@@ -1410,7 +1451,8 @@ docs/decisions/
 ├── 0019-effective-permission-policy-and-redacted-lifecycle.md
 ├── 0020-derived-security-audit-and-lifecycle-replay.md
 ├── 0021-interactive-tool-approval-transactions.md
-└── 0022-sandbox-execution-seam-and-linux-bubblewrap.md
+├── 0022-sandbox-execution-seam-and-linux-bubblewrap.md
+└── 0023-local-session-authority-provider-runtime-and-optional-cloud.md
 ```
 
 其中：
@@ -1434,5 +1476,6 @@ docs/decisions/
 - ADR-0020 记录 derived security audit timeline、lifecycle consistency replay 与 application policy / OS Sandbox 边界。
 - ADR-0021 记录 Tool-call approval transaction、PermissionPolicy/ApprovalBroker 职责分离、same-Step resume 与 redacted schema-v3 approval lifecycle。
 - ADR-0022 记录 native subprocess ProcessSandbox seam、strict fallback semantics、safe child environment、Linux Bubblewrap profile 与 Windows native isolation 缺口。
+- ADR-0023 接受 Local Session authority、四个 built-in Provider + Custom OpenAI-compatible、Credential/Auth seam、Codex OAuth experimental 策略，以及 Optional Cloud Sync/Subscription 的产品边界；它只 supersede ADR-0003 的 cloud Session authority 部分，保留 ADR-0003 的 client-owned Agent/model execution 决策。
 
 本文件属于近期工程状态快照，不替代正式 ADR。

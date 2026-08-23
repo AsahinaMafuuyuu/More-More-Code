@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted for the separation of semantic Session persistence from Runtime Event persistence. ADR-0023 supersedes the long-term Cloud Session authority assumption and adds a future Local Session Store.
 
 ## Date
 
@@ -31,6 +31,8 @@ Keep the cloud Session Store and local Runtime Store as separate workspace packa
 - Recovery loads the latest valid snapshot for one session and replays subsequent events through an explicit projection reducer. Recovery reports incomplete execution; it does not automatically repeat an external model or tool side effect.
 
 ADR-0016 supersedes ADR-0015 only where ADR-0015 placed local SQLite models in the shared cloud database package or implied that one Prisma client could serve both stores. The decision to use SQLite for local Runtime Events and capability-oriented permission events remains in force.
+
+> **2026-08-23 update:** ADR-0023 does not merge Session Entries into `packages/runtime-store`. Instead, Stage 6.5 introduces a separate locally authoritative Session persistence module, while `packages/runtime-store` remains the independent execution/security/recovery store. `packages/database` then evolves in Stage 6.6 from Cloud Session authority into optional sync/account persistence.
 
 ## Alternatives Considered
 

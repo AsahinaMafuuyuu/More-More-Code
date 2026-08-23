@@ -19,6 +19,8 @@
 - ⚡ **流式响应** — SSE 实时流式输出，支持思维链（reasoning）展示
 - ⌨️ **命令菜单** — 输入 `/` 快速切换模型、模式、主题、浏览历史会话
 
+> **架构迁移说明（ADR-0023，已接受，尚未全部实现）：** 后续 Stage 6.4-6.6 会把 MORE-MORE-CODE 收口为完整 local-first 应用。模型 Provider、凭证和 Session authority 都迁到本地；Server 降级为可选的商业订阅/Entitlement 与多设备 Session Sync/Backup。当前 Stage 6.3 代码已经是本地 Model/Tool Runtime，但 Session 创建/读取/快照仍暂时依赖 Server，Provider/Model 配置也仍处于硬编码过渡态。
+
 ---
 
 ## 🏗️ 项目架构
@@ -80,6 +82,25 @@ Model Step → CLI LocalModelTransport → LLM Provider（本地进程发起）
 
 当 Run 原本将结束时，follow-up 队列会启动新的 Turn(cause=follow-up)。ExecutionEventStore 保存 coarse-grained Run/Turn/Step 执行事实；`subscribe()` 另外发出 `run_start/end`、`turn_start/end`、`step_start/update/end` 生命周期事件供 UI/扩展交互。Context Manager 会在每个 Model Step 前按预算生成 Context Projection。会话由 CLI 维护为可跳转、可分叉的 **Session Entry Tree v3**：user/assistant message、tool call/result、error、model/mode/config change、compaction 与 custom event 都可以成为持久化 Entry；UI、Context 和 Runtime State 分别从 active branch 做 projection。Session state 通过 Session Store 同步到 Server；Server 不参与 Agent Loop、模型调用或工具执行。
 ```
+
+ADR-0023 接受的目标架构进一步收口为：
+
+```text
+CLI / Harness
+  ├── Local Session Store        ← Session semantic authority（Stage 6.5）
+  ├── Local Runtime Store        ← execution/security/recovery facts
+  ├── Provider Registry          ← OpenAI / Anthropic / Google / DeepSeek / Custom
+  ├── Credential Store           ← secrets stay local
+  └── Model Provider APIs
+
+          optional
+             ↓
+MORE-MORE-CODE Cloud
+  ├── Account / Subscription / Entitlements
+  └── Multi-device Session Sync / Backup
+```
+
+Cloud 不再是 Model Step、Tool Step、Provider credential 或本地 Session 创建/继续的必要依赖。Stage 6.5 完成前，当前 Server-backed Session flow 仍是过渡实现。
 
 ---
 
@@ -169,9 +190,10 @@ DATABASE_URL=postgresql://user:password@localhost:5432/moremorcode
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
 DEEPSEEK_API_KEY=sk-...
-MISTRAL_API_KEY=...
 GOOGLE_GENERATIVE_AI_API_KEY=...
 ```
+
+> 上述环境变量是当前过渡实现。Stage 6.4 将 Provider account/endpoint 配置迁移到用户全局 `~/.more-more-code/providers.json`，JSON 只保存非敏感配置和 credential reference；API Key/OAuth secret 由独立 `CredentialStore` 保存，不进入项目 `.more-more-code/config.json`。OpenAI 首发规划 `API Key | Codex OAuth (experimental)`，Anthropic/Google/DeepSeek 首发为 API Key；Anthropic OAuth 不在首发设计中。
 
 ### 3. 初始化数据库
 
@@ -236,22 +258,31 @@ bun dev:cli
 
 ---
 
-## 🤖 AI 模型支持
+## 🤖 AI Provider 与模型
 
-| 提供商 | 模型 ID | 特性 | 输入价格 ($/百万token) | 输出价格 ($/百万token) |
-|--------|---------|------|----------------------|----------------------|
-| **OpenAI** | `gpt-5.5` | 标准版 | $5.00 | $30.00 |
-| | `gpt-5.4-mini` | 轻量快速 | $0.75 | $4.50 |
-| **Anthropic** | `claude-sonnet-5` | 平衡性能 | $2.00 | $10.00 |
-| | `claude-haiku-4-5` | 快速轻量 | $1.00 | $5.00 |
-| **DeepSeek** | `deepseek-v4-flash` 🏆 **默认** | 快速高性价比 | $0.14 | $0.28 |
-| | `deepseek-v4-pro` | 深度推理（带思考机制） | $0.435 | $0.87 |
-| **Mistral** | `mistral-medium-latest` | 中型模型 | $1.50 | $7.50 |
-| | `mistral-small-latest` | 小型轻量 | $0.15 | $0.60 |
-| **Google** | `gemini-2.5-flash` | 多模态 | $0.30 | $2.50 |
-| | `gemini-2.5-flash-lite` | 极致性价比 | $0.10 | $0.40 |
+当前 Stage 6.3 代码处于 Provider 迁移过渡态：实际 resolver 已实现 OpenAI、Anthropic、DeepSeek，shared 固定模型清单仍包含尚未完整接通的条目。ADR-0023 已接受 Stage 6.4 的正式 Provider 设计，后续不再把固定模型清单作为唯一 allowlist。
 
-> 💡 通过 `/models` 命令或在输入框中随时切换模型。
+Stage 6.4 的内置 Provider **固定为四个**：
+
+| Provider | 首发 Auth | 说明 |
+|---|---|---|
+| **OpenAI** | API Key；Codex OAuth（experimental） | OAuth 通过独立 auth broker/seam，不复制私有 Codex token 文件 |
+| **Anthropic** | API Key | 首发明确不设计 Anthropic OAuth |
+| **Google** | API Key | Google OAuth / Vertex ADC 后续单独研究 |
+| **DeepSeek** | API Key | 本地直连 Provider |
+
+另外提供 **Custom Provider V1**：用户可自行添加多个稳定 `providerId` 的 OpenAI-compatible endpoint，配置 `baseURL`、模型 ID 与 `API Key | Bearer | None` auth。Mistral 不再属于 Stage 6.4+ 内置 Provider 面。
+
+模型选择将迁移为动态：
+
+```ts
+type ModelRef = {
+  providerId: string;
+  modelId: string;
+};
+```
+
+内置/推荐模型目录只提供默认值、价格/Context metadata 与 UX 建议，而不是限制用户只能使用源码中硬编码的模型 ID。
 
 ---
 

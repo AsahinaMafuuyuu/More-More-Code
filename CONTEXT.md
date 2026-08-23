@@ -72,6 +72,22 @@ A deterministic identity of the stable model prefix, derived from provider/model
 
 The boundary that translates canonical model input and prefix identity into provider-specific execution configuration and diagnostics. OpenAI-specific Responses/cache behavior belongs here rather than in Session or Context semantics.
 
+## Provider Registry
+
+The accepted Stage 6.4+ user-global catalog of configured model providers. Provider identity (`ProviderId`) is separate from implementation kind (`openai | anthropic | google | deepseek | custom`) so multiple custom endpoints can coexist. The built-in provider set is OpenAI, Anthropic, Google, and DeepSeek; Mistral is intentionally removed. Custom Provider V1 is limited to OpenAI-compatible endpoints. The Registry resolves non-secret provider configuration and model references but does not own raw credentials.
+
+## Model Reference
+
+A provider-independent selection value shaped as `{ providerId, modelId }`. Built-in/recommended model catalogs are UX defaults rather than the canonical allowlist. Session and Context semantics may persist/reference a Model Reference without requiring every possible provider model ID to exist in a compile-time TypeScript union.
+
+## Provider Authentication Strategy
+
+The provider-specific credential acquisition seam used by Provider Runtime. Initial strategies are OpenAI API key or experimental Codex OAuth, API key for Anthropic/Google/DeepSeek, and API key/Bearer/None for custom OpenAI-compatible endpoints. Anthropic OAuth is explicitly outside the initial design; Google OAuth and other provider login mechanisms require later research. Codex OAuth must not be implemented by scraping private token files or assuming undocumented tokens are stable generic OpenAI API credentials.
+
+## Credential Store
+
+The local secret-storage deep module referenced by Provider configuration. `providers.json` and project config contain credential references, not plaintext API keys or refresh/access tokens. Production adapters should prefer OS-native secret storage; any interim encrypted local adapter must remain behind the same interface. Provider secrets are never cloud-synchronized by the MORE-MORE-CODE Server.
+
 ## Execution Event
 
 A runtime lifecycle fact about Run, Turn, or Step execution. Execution Events describe how the runtime executed; Session Entries describe the durable semantic history of the Session. They are related but distinct histories.
@@ -90,7 +106,19 @@ A session-scoped checkpoint of a Runtime projection at a specific durable event 
 
 ## Cloud Session Store
 
-The PostgreSQL persistence boundary implemented by `packages/database` and consumed by `packages/server`. It stores account-scoped Session Tree state for cloud retrieval and remains outside the local Agent execution critical path.
+The current PostgreSQL persistence boundary implemented by `packages/database` and consumed by `packages/server`. As of Stage 6.3 it still stores account-scoped Session Tree snapshots for cloud retrieval, but ADR-0023 marks this authority model as transitional. Stage 6.6 evolves the cloud layer into optional multi-device synchronization/backup over locally authoritative Sessions instead of whole-tree last-write-wins ownership.
+
+## Local Session Store
+
+The planned Stage 6.5 semantic Session authority. It owns local Session creation/list/get and append-only Session Entry persistence so the CLI can run fully without Server availability or a MORE-MORE-CODE account. It is intentionally separate from the Local Runtime Store: Session Entries are durable conversation semantics and branch topology, while Runtime Events are execution/security/recovery facts.
+
+## Cloud Session Sync
+
+The planned optional synchronization module between the Local Session Store and MORE-MORE-CODE Cloud. Its target protocol is append-oriented, idempotent, and revision/cursor-aware so independent device branches can coexist. Semantic Session Entries and shareable metadata may sync; device-local navigation/presentation state such as `activeEntryId`, expanded nodes, and scroll position remains local by default.
+
+## Cloud Entitlement
+
+The optional account/subscription capability record returned by MORE-MORE-CODE Cloud for commercial features such as multi-device synchronization or backup. Entitlements may be cached locally and must not become a per-Model-Step authorization dependency for the core local Agent Runtime.
 
 ## Local Runtime Store
 

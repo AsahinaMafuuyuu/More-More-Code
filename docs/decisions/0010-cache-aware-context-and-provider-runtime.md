@@ -4,6 +4,8 @@
 
 Accepted
 
+Provider request-compilation/cache boundaries remain valid. Provider identity/model catalog/authentication configuration is further refined by ADR-0023.
+
 ## Date
 
 2026-08-13
