@@ -8,6 +8,19 @@ Accepted
 
 2026-08-23
 
+## Implementation Status
+
+Stage 6.4 (Provider Runtime & Local Model Configuration) was delivered on 2026-08-23:
+
+- `ProviderId` / `ProviderKind` and canonical `{ providerId, modelId }` `ModelRef` are implemented;
+- the user-global strict Provider Registry is persisted at `~/.more-more-code/providers.json` with exactly four built-in provider kinds plus multiple custom OpenAI-compatible provider IDs;
+- raw API-key/Bearer values are separated behind `CredentialStore`; the initial adapter is an AES-256-GCM encrypted local file with read-only environment-variable compatibility;
+- OpenAI, Anthropic, Google, DeepSeek, and Custom OpenAI-compatible model adapters resolve through Registry/Auth state;
+- `/providers` manages provider definitions/auth state and `/models` lists configured model references dynamically;
+- OpenAI Codex OAuth is represented by an experimental broker seam but remains explicitly unavailable until a supported native provider-execution contract exists; no private Codex token files are read or copied.
+
+The broader ADR remains only partially implemented: Local Session authority is Stage 6.5, optional cloud sync/commercial separation is Stage 6.6, and therefore the Cloud Session Store remains transitional today.
+
 ## Context
 
 ADR-0003 moved model/tool execution out of the Server and into the local CLI, but the current application still depends on the Server for Session creation, listing, retrieval, and whole-tree snapshot persistence. Provider selection is also still represented by a hard-coded model catalog plus a provider switch, and credentials are primarily discovered through ambient environment variables.

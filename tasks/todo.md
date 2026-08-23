@@ -333,47 +333,47 @@
 
 # Stage 6.4 — Provider Runtime & Local Model Configuration
 
-**Status:** Planned — ADR-0023 accepted 2026-08-23.
+**Status:** Completed — delivered 2026-08-23.
 
 ## Provider Domain & Registry
 
-- [ ] Replace closed provider identity with `ProviderId` + `ProviderKind`.
-- [ ] Keep built-in provider kinds exactly OpenAI / Anthropic / Google / DeepSeek.
-- [ ] Remove Mistral from shared model/provider catalog, resolver assumptions, docs, and UI.
-- [ ] Add `custom` provider kind with multiple stable user-defined provider IDs.
-- [ ] Add strict versioned user-global `~/.more-more-code/providers.json` persistence.
-- [ ] Keep provider account/endpoint config out of project `.more-more-code/config.json`; allow project config only to reference/select a provider/model.
-- [ ] Reject duplicate provider IDs, invalid URLs, unknown fields, and invalid protocol/auth combinations.
+- [x] Replace closed provider identity with `ProviderId` + `ProviderKind`.
+- [x] Keep built-in provider kinds exactly OpenAI / Anthropic / Google / DeepSeek.
+- [x] Remove Mistral from shared model/provider catalog, resolver assumptions, docs, and UI.
+- [x] Add `custom` provider kind with multiple stable user-defined provider IDs.
+- [x] Add strict versioned user-global `~/.more-more-code/providers.json` persistence.
+- [x] Keep provider account/endpoint config out of project `.more-more-code/config.json`; allow project config only to reference/select a provider/model.
+- [x] Reject duplicate provider IDs, invalid URLs, unknown fields, and invalid protocol/auth combinations.
 
 ## Credentials & Authentication
 
-- [ ] Add deep `CredentialStore` interface and production-safe local adapter strategy.
-- [ ] Ensure JSON provider/project config stores credential references only, never plaintext secrets.
-- [ ] Add API-key auth for OpenAI, Anthropic, Google, and DeepSeek.
-- [ ] Add API Key / Bearer / None auth for custom OpenAI-compatible providers.
-- [ ] Add OpenAI `codex-oauth` as a distinct experimental auth strategy/broker seam.
-- [ ] Do not read/copy private `~/.codex` access/refresh token files or treat undocumented Codex tokens as generic OpenAI API credentials.
-- [ ] Do not add Anthropic OAuth in this Stage.
-- [ ] Keep Google OAuth / Vertex ADC and other OAuth providers explicitly deferred for later research.
-- [ ] Verify credentials cannot leak to Runtime Events, Session Entries, logs, Provider Registry serialization, or safe subprocess environments.
+- [x] Add deep `CredentialStore` interface and scoped encrypted local adapter strategy behind the seam; OS-native secret storage remains a hardening follow-up.
+- [x] Ensure JSON provider/project config stores credential references/model refs only, never plaintext provider secrets.
+- [x] Add API-key auth for OpenAI, Anthropic, Google, and DeepSeek.
+- [x] Add API Key / Bearer / None auth for custom OpenAI-compatible providers.
+- [x] Add OpenAI `codex-oauth` as a distinct experimental auth strategy/broker seam.
+- [x] Do not read/copy private `~/.codex` access/refresh token files or treat undocumented Codex tokens as generic OpenAI API credentials.
+- [x] Do not add Anthropic OAuth in this Stage.
+- [x] Keep Google OAuth / Vertex ADC and other OAuth providers explicitly deferred for later research.
+- [x] Verify credentials cannot leak to Runtime Events, Session Entries, logs, Provider Registry serialization, or safe subprocess environments.
 
 ## Provider Adapters & Models
 
-- [ ] Resolve all four built-in providers through configured Provider Registry/auth state.
-- [ ] Add Custom Provider V1 using an OpenAI-compatible adapter with configurable `baseURL`.
-- [ ] Introduce canonical `{ providerId, modelId }` `ModelRef` semantics.
-- [ ] Convert recommended/built-in model catalog into defaults/metadata rather than the only allowed models.
-- [ ] Define deterministic Context profile/token-budget fallback for configured models absent from the recommended catalog.
-- [ ] Add backward-compatible migration for legacy Session `model` values.
+- [x] Resolve all four built-in providers through configured Provider Registry/auth state.
+- [x] Add Custom Provider V1 using an OpenAI-compatible adapter with configurable `baseURL`.
+- [x] Introduce canonical `{ providerId, modelId }` `ModelRef` semantics.
+- [x] Convert recommended/built-in model catalog into defaults/metadata rather than the only allowed models.
+- [x] Define deterministic Context profile/token-budget fallback for configured models absent from the recommended catalog.
+- [x] Add backward-compatible migration for legacy Session `model` values.
 
 ## UX & Delivery
 
-- [ ] Add `/providers` inspect/add/edit/remove/login/logout/status UX as supported by each auth strategy.
-- [ ] Refactor `/models` around configured providers and dynamic model refs.
-- [ ] Surface Codex OAuth experimental/unavailable states explicitly; never silently downgrade auth.
-- [ ] Update README / CONTEXT / PROJECT_ANALYSIS / current-state docs / CHANGELOG / ADR-0023 implementation status.
-- [ ] Run focused provider/config/credential/migration tests and full Shared/Harness/CLI verification.
-- [ ] Run secret-leak security review and `git diff --check` before Stage 6.4 delivery.
+- [x] Add `/providers` inspect/add/edit/remove/credential/status UX as supported by each auth strategy; unavailable Codex OAuth exposes status rather than unsafe login emulation.
+- [x] Refactor `/models` around configured providers and dynamic model refs.
+- [x] Surface Codex OAuth experimental/unavailable states explicitly; never silently downgrade auth.
+- [x] Update README / CONTEXT / PROJECT_ANALYSIS / current-state docs / CHANGELOG / ADR-0023 implementation status.
+- [x] Run focused provider/config/credential/migration tests and full Shared/Harness/CLI verification.
+- [x] Run secret-leak security review and `git diff --check` before Stage 6.4 delivery.
 
 ## Deferred from Stage 6.4
 

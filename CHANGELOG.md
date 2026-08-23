@@ -60,6 +60,11 @@ All notable changes to MORE MORE CODE are recorded here.
 - Sandbox status in `/settings`, including explicit direct fallback/unavailable reasons rather than treating unsupported hosts as isolated.
 - ADR-0022 documenting Process Sandbox semantics, Linux Bubblewrap isolation, safe environment policy, and the unresolved Windows native isolation boundary.
 - ADR-0023 accepting the next local-first architecture: local Provider/Credential configuration, four built-in providers plus Custom OpenAI-compatible endpoints, Local Session authority, and an optional cloud limited to multi-device sync/backup plus commercial entitlements.
+- User-global strict `ProviderRegistry` at `~/.more-more-code/providers.json`, with exactly OpenAI/Anthropic/Google/DeepSeek built-ins, multiple stable Custom OpenAI-compatible provider IDs, dynamic configured model lists, and no raw provider secrets in registry serialization.
+- Canonical `{ providerId, modelId }` `ModelRef` runtime selection with deterministic migration of legacy recommended model IDs and conservative Context/token-budget fallback for configured models absent from the recommended catalog.
+- Deep `CredentialStore` and provider-auth seams with AES-256-GCM local encrypted storage, read-only environment credential compatibility, API-key/Bearer/None strategies, and an explicitly unavailable experimental Codex OAuth broker that never reads private Codex token files.
+- `/providers` provider/status/config/credential UX and dynamic `/models` selection driven by configured Provider Registry entries.
+- Provider Registry/Credential/ModelRef regression coverage for disposable homes, invalid config, multiple custom endpoints, encrypted secret round-trip, migration, auth failure, and unknown-model Context fallback.
 
 ### Changed
 
@@ -89,7 +94,9 @@ All notable changes to MORE MORE CODE are recorded here.
 - Approval request/resolution observer failures are fail-closed: broker interaction cannot start before a durable request fact, and executor invocation cannot start before a durable approval-allow fact.
 - Native `bash` and `grep` subprocesses now share the `ProcessSandbox` seam; `local-tools.ts` no longer creates child processes directly, while existing Bash descendant cancellation remains intact for direct/MSYS execution.
 - Native `grep` now resolves Git-for-Windows' `usr/bin/grep.exe` when GNU grep is available inside Git Bash but not exposed on the Windows process PATH, eliminating the previous `ENOENT` path on that setup.
-- The post-Stage-6.3 roadmap is reordered to Stage 6.4 Provider Runtime, Stage 6.5 Local Session Authority, Stage 6.6 Cloud Session Sync/Commercial Entitlements, then Stage 6.7 Windows Native Sandbox. This is an accepted architecture/plan update, not a claim that Stages 6.4-6.7 are implemented.
+- The post-Stage-6.3 roadmap is reordered to Provider Runtime → Local Session Authority → Cloud Session Sync/Commercial Entitlements → Windows Native Sandbox. Stage 6.4 Provider Runtime is now implemented; Stages 6.5-6.7 remain planned.
+- Provider execution no longer treats the shared recommended model catalog as the runtime allowlist: configured Provider Registry accounts now create AI SDK models through one resolver seam, including Google through its OpenAI-compatible Gemini endpoint and Custom V1 through configurable OpenAI-compatible base URLs.
+- Project/global Agent Config may select the default `providerId/modelId`, while provider account/endpoint configuration stays user-global and credentials stay outside Agent Config/Provider Registry JSON.
 
 ### Deferred
 

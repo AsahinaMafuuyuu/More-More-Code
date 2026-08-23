@@ -1406,13 +1406,15 @@ Agent Config sandbox contract
 
 # Stage 6.4 — Provider Runtime & Local Model Configuration
 
-**Status:** Planned — architecture accepted 2026-08-23 in ADR-0023. This Stage now precedes Windows native Sandbox work.
+**Status:** Completed — delivered 2026-08-23. ADR-0023 remains broader than this Stage because Local Session authority/cloud optionalization are delivered in later Stages.
 
 ## Overview
 
 Replace the current hard-coded provider/model assumptions with a local Provider Registry, dynamic `ModelRef`, explicit authentication strategies, and a local Credential Store seam. The initial built-in provider set is exactly OpenAI, Anthropic, Google, and DeepSeek. Custom Provider V1 is OpenAI-compatible only. OpenAI supports API Key plus an initially experimental Codex OAuth seam; Anthropic/Google/DeepSeek start with API Key only.
 
 This Stage does **not** make the Server responsible for model traffic or provider secrets. Provider configuration is user-global local state and model execution remains owned by the CLI/Harness.
+
+**Delivered:** strict user-global Provider Registry; four built-in providers plus multiple Custom OpenAI-compatible provider IDs; encrypted local CredentialStore seam with environment compatibility; dynamic `ModelRef`; legacy model migration; provider-level Context fallback; `/providers`; dynamic `/models`; explicit experimental/unavailable Codex OAuth broker; full CLI/Harness regression and build verification.
 
 ## Architecture Decisions
 

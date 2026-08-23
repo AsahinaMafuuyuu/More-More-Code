@@ -243,6 +243,7 @@ bun dev:cli
 | `/parent` | 跳转到父 Entry；需要时执行同一套 Carry / No Carry / Cancel 流程 |
 | `/root` | 跳转到 `session_start` 根 Entry；需要时执行同一套 Branch Summary 流程 |
 | `/compact` | 手动压缩当前 active branch 的旧 Context；不创建伪 user message/Turn |
+| `/providers` | 查看/管理本地 Provider、Custom OpenAI-compatible endpoint、认证状态与凭据 |
 | `/settings` | 查看全局/项目 `.more-more-code` 配置、打开配置/AGENTS 文件并重新加载 |
 | `/theme` | 切换配色主题 |
 | `/exit` | 退出程序 |
@@ -260,7 +261,7 @@ bun dev:cli
 
 ## 🤖 AI Provider 与模型
 
-当前 Stage 6.3 代码处于 Provider 迁移过渡态：实际 resolver 已实现 OpenAI、Anthropic、DeepSeek，shared 固定模型清单仍包含尚未完整接通的条目。ADR-0023 已接受 Stage 6.4 的正式 Provider 设计，后续不再把固定模型清单作为唯一 allowlist。
+Stage 6.4 已将 Provider Runtime 从固定模型/provider switch 迁移为本地 Provider Registry + 动态 `ModelRef`。模型请求仍由 CLI 直接发往用户配置的 Provider；MORE-MORE-CODE Server 不代理模型流量，也不保存 Provider Secret。
 
 Stage 6.4 的内置 Provider **固定为四个**：
 
@@ -271,9 +272,9 @@ Stage 6.4 的内置 Provider **固定为四个**：
 | **Google** | API Key | Google OAuth / Vertex ADC 后续单独研究 |
 | **DeepSeek** | API Key | 本地直连 Provider |
 
-另外提供 **Custom Provider V1**：用户可自行添加多个稳定 `providerId` 的 OpenAI-compatible endpoint，配置 `baseURL`、模型 ID 与 `API Key | Bearer | None` auth。Mistral 不再属于 Stage 6.4+ 内置 Provider 面。
+另外提供 **Custom Provider V1**：用户可通过 `/providers` 添加多个稳定 `providerId` 的 OpenAI-compatible endpoint，配置 `baseURL`、模型 ID 与 `API Key | Bearer | None` auth。Mistral 不再属于 Stage 6.4+ 内置 Provider 面。
 
-模型选择将迁移为动态：
+模型选择现在使用动态引用：
 
 ```ts
 type ModelRef = {
@@ -283,6 +284,10 @@ type ModelRef = {
 ```
 
 内置/推荐模型目录只提供默认值、价格/Context metadata 与 UX 建议，而不是限制用户只能使用源码中硬编码的模型 ID。
+
+Provider 非敏感配置位于用户级 `~/.more-more-code/providers.json`。API Key/Bearer 不写入该文件，而是通过独立 `CredentialStore` 保存；当前实现使用 AES-256-GCM 加密的本地文件适配器，并保留常见 Provider 环境变量作为只读兼容 fallback。该加密适配器主要消除明文配置/日志/序列化泄漏，不等同于 OS Keychain/Windows Credential Manager；后续可以在不改变 Provider Runtime 的情况下替换为平台原生 Secret Store。
+
+OpenAI `codex-oauth` 已作为独立实验性 Auth Broker seam 建模，但当前没有可用于原生 Provider execution 的受支持 broker，因此会明确显示 unavailable 并要求改用 API Key；实现不会读取或复制 `~/.codex` 私有 token 文件，也不会静默降级认证方式。Anthropic OAuth、Google OAuth/Vertex ADC 仍明确延后。
 
 ---
 
@@ -315,6 +320,8 @@ CLI 会在渲染 UI 和创建 Agent Run 之前完成一次 Agent Bootstrap：
 
 ~/.more-more-code/
 ├── config.json
+├── providers.json
+├── credentials.enc.json
 ├── AGENTS.md
 └── skills/<skill>/SKILL.md
 
@@ -326,7 +333,7 @@ CLI 会在渲染 UI 和创建 Agent Run 之前完成一次 Agent Bootstrap：
 
 全局配置先加载，项目配置随后覆盖。`AGENTS.md` 按 **global → project** 组成 instruction chain，并进入每次 Model Step 的 system prompt。Skill discovery 的同名优先级为 **`~/.agents/skills < ~/.more-more-code/skills < project/.more-more-code/skills`**。Skills 与 Tools 是两个不同概念：启动时只发现 Skill 的 `name / description / path / scope`，完整 `SKILL.md` 只有在模型通过 native `loadSkill` 工具明确加载时才进入工作上下文，从而避免无关 Skill 占用 context window。
 
-`/settings` 可查看当前解析出的全局/项目路径、兼容 `.agents` Skill 路径、instruction/skill/tool source 数量以及 Branch Summary 跳转策略，打开两级 `config.json` / `AGENTS.md` 或 `.agents/skills` 后可以执行 reload。当前配置格式为 JSON。`session.branchSummaryOnJump` 支持 `ask | always | never`，默认 `ask`。
+`/settings` 可查看当前解析出的全局/项目路径、兼容 `.agents` Skill 路径、instruction/skill/tool source 数量以及 Branch Summary 跳转策略，打开两级 `config.json` / `AGENTS.md` 或 `.agents/skills` 后可以执行 reload。当前配置格式为 JSON。项目/全局 Agent Config 可通过 `model: { providerId, modelId }` 选择默认模型，但 Provider account/endpoint 仍只存在于用户级 Registry，凭据只存在于 CredentialStore。`session.branchSummaryOnJump` 支持 `ask | always | never`，默认 `ask`。
 
 权限策略同样从两级 `config.json` 按 **代码默认值 → global → project → 不可覆盖的 workspace containment** 生成。普通规则按声明顺序匹配，最后一个匹配规则生效；`capabilities`、`commands`、`paths`、`resources` 与 `scopes` 在同一规则中是 AND 约束，数组内部按 glob pattern 做 OR 匹配。路径 pattern 中 `*` 不跨目录、`**` 可跨目录；Windows 路径匹配不区分大小写。例如：
 

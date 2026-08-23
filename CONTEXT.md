@@ -74,7 +74,7 @@ The boundary that translates canonical model input and prefix identity into prov
 
 ## Provider Registry
 
-The accepted Stage 6.4+ user-global catalog of configured model providers. Provider identity (`ProviderId`) is separate from implementation kind (`openai | anthropic | google | deepseek | custom`) so multiple custom endpoints can coexist. The built-in provider set is OpenAI, Anthropic, Google, and DeepSeek; Mistral is intentionally removed. Custom Provider V1 is limited to OpenAI-compatible endpoints. The Registry resolves non-secret provider configuration and model references but does not own raw credentials.
+The Stage 6.4 user-global catalog of configured model providers, persisted as strict versioned `~/.more-more-code/providers.json`. Provider identity (`ProviderId`) is separate from implementation kind (`openai | anthropic | google | deepseek | custom`) so multiple custom endpoints can coexist. The built-in provider set is OpenAI, Anthropic, Google, and DeepSeek; Mistral is intentionally removed. Custom Provider V1 is limited to OpenAI-compatible endpoints. The Registry resolves non-secret provider configuration and model references but does not own raw credentials.
 
 ## Model Reference
 
@@ -86,7 +86,7 @@ The provider-specific credential acquisition seam used by Provider Runtime. Init
 
 ## Credential Store
 
-The local secret-storage deep module referenced by Provider configuration. `providers.json` and project config contain credential references, not plaintext API keys or refresh/access tokens. Production adapters should prefer OS-native secret storage; any interim encrypted local adapter must remain behind the same interface. Provider secrets are never cloud-synchronized by the MORE-MORE-CODE Server.
+The local secret-storage deep module referenced by Provider configuration. `providers.json` contains credential references rather than plaintext API keys, while project config contains only model selection (`providerId/modelId`). Stage 6.4 ships an AES-256-GCM encrypted local-file adapter plus read-only environment-variable compatibility behind one `CredentialStore` interface; the encrypted-file adapter prevents plaintext config/serialization but is not claimed to provide the same trust boundary as an OS-native keychain. A future Windows Credential Manager/macOS Keychain/Secret Service adapter can replace it without changing Provider Runtime. Provider secrets are never cloud-synchronized by the MORE-MORE-CODE Server.
 
 ## Execution Event
 

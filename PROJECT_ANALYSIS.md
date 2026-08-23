@@ -50,7 +50,7 @@ OpenTUI + React CLI
 Agent Harness Runtime
   │  AgentLoop → Lifecycle + Execution Events → Run/Turn/Step Projection
   │  Turn = one Model response + requested Tool Steps
-  │  Model Step: CLI LocalModelTransport → Provider API
+  │  Model Step: ProviderRegistry/ModelRef → CLI LocalModelTransport → Provider API
   │  Tool Step: CLI 本地执行
   │
   ├──────────────► LLM Provider
@@ -202,9 +202,9 @@ Run 活跃期间，普通 Enter 将输入排入 steering queue；Alt+Enter 排�
 
 ### 5.6 多模型抽象
 
-当前 shared 包仍维护固定模型 ID、厂商和输入/输出 Token 单价，CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例；实际 resolver 只真正实现了 OpenAI、Anthropic 和 DeepSeek，默认模型为 `deepseek-v4-flash`。这属于 Stage 6.3 的过渡实现。
+Stage 6.4 已完成多模型抽象迁移。shared 中的固定模型目录现在只承担推荐默认值、价格和 Context metadata，不再是 runtime allowlist；canonical 选择值为 `{ providerId, modelId }`。用户级 `~/.more-more-code/providers.json` 保存严格版本化、非敏感的 Provider Registry，`ProviderId` 与 `ProviderKind` 分离，因此可以同时存在多个 Custom OpenAI-compatible endpoint。
 
-ADR-0023 已接受 Stage 6.4 的新模型：built-in ProviderKind 固定为 OpenAI、Anthropic、Google、DeepSeek，Mistral 从内置支持面移除；另增加可存在多个实例的 Custom OpenAI-compatible Provider。Provider identity 与 kind 分离，模型引用迁移为 `{ providerId, modelId }`，固定模型目录降级为推荐/价格/Context metadata，而不再是唯一 allowlist。Provider account/endpoint config 存本地用户全局配置，secret 则由独立 CredentialStore/Auth seam 管理。
+内置 ProviderKind 固定为 OpenAI、Anthropic、Google、DeepSeek，Mistral 已移除。CLI resolver 通过 Registry/Auth seam 创建对应 AI SDK model：OpenAI 使用 Responses、Anthropic/DeepSeek 使用原生 SDK provider、Google 使用 Gemini OpenAI-compatible endpoint，Custom V1 使用可配置 OpenAI-compatible `baseURL`。API Key/Bearer 由独立 CredentialStore 获取；当前是 AES-256-GCM 本地加密适配器 + 环境变量只读兼容 fallback。Codex OAuth 已建独立实验性 broker seam，但在没有受支持 provider-execution contract 时明确 unavailable，不读取 `~/.codex` 私有 token 文件。
 
 ### 5.7 可观测性
 
@@ -266,7 +266,7 @@ ADR-0023 已接受 Stage 6.4 的新模型：built-in ProviderKind 固定为 Open
 - PostgreSQL（云 Session Store）；
 - SQLite（本地 Runtime Store，无独立服务进程）；
 - `DATABASE_URL`；
-- 所选模型 Provider 对应的 API Key；
+- 已配置的 Provider Registry；需要认证的 Provider 还需 CredentialStore/API Key（Custom `None` 可无需凭据）；
 - 可选的 `API_URL`。
 
 云数据库代码在缺少 `DATABASE_URL` 时会在模块加载阶段直接抛错。云端与本地 Prisma Client 分别输出到 `packages/database/generated/prisma` 和 `packages/runtime-store/generated/prisma`，必须通过各自包的 `db:generate` 脚本独立生成。
@@ -275,11 +275,11 @@ ADR-0023 已接受 Stage 6.4 的新模型：built-in ProviderKind 固定为 Open
 
 以下内容是基于当前代码确认的主要边界：
 
-1. **Provider 依赖已迁到 CLI，但 Provider account/model 配置仍是过渡态**
-   当前模型执行已经不经过 Server，但 Provider/model 仍由 shared 固定清单 + CLI resolver 驱动，凭证主要依赖 ambient environment。ADR-0023 已接受 Stage 6.4：用户全局 Provider Registry、`ProviderId`/`ProviderKind`、动态 `ModelRef`、CredentialStore 与 Auth Strategy。
+1. **Provider Runtime 已完成本地配置化，但 OS-native Secret Store 仍可加强**
+   Stage 6.4 已交付用户全局 Provider Registry、`ProviderId`/`ProviderKind`、动态 `ModelRef`、CredentialStore/Auth Strategy 与 `/providers`/动态 `/models`。当前 CredentialStore 的 AES-256-GCM 本地文件适配器解决明文 JSON/序列化泄漏，但加密 key 与数据都位于用户配置目录，因此不把它描述成等价于 Windows Credential Manager/macOS Keychain/Secret Service 的系统级隔离；后续可在同一接口下替换。
 
-2. **模型清单与实际 Provider 支持仍不完全一致，且将在 Stage 6.4 重构**
-   当前本地 resolver 实现 OpenAI、Anthropic 和 DeepSeek；Stage 6.4 的正式内置 Provider 面固定为 OpenAI、Anthropic、Google、DeepSeek，移除 Mistral，并增加可配置多个实例的 Custom OpenAI-compatible Provider。模型身份从闭合 TypeScript union 迁移为 `{ providerId, modelId }`。
+2. **Codex OAuth 目前只有安全 seam/status，尚不是可执行认证方式**
+   OpenAI `codex-oauth` 与 API Key 已被建模为不同 Auth Strategy，但当前没有采用复制/解析私有 Codex token 文件的非正式方案。Broker 因此显式返回 unavailable，Provider execution 会 fail early 并要求 API Key；真正登录/登出和 token acquisition 需要后续建立在受支持、可维护的 Codex 集成协议上。
 
 3. **云 Session 已升级为 Session Entry Tree v3，但同步仍是 last-write-wins**
    v3 直接持久化 append-only `entries[]`；message、tool、runtime-state change、compaction 与 branch summary 都是可分支的 Session Entries，旧 linear/v1/v2 状态在 CLI 恢复时兼容升级。`POST /sessions/:id/state` 仍没有 revision / optimistic concurrency / conflict resolution。
@@ -328,4 +328,4 @@ ADR-0023 已接受 Stage 6.4 的新模型：built-in ProviderKind 固定为 Open
 - ProcessSandbox 深模块、strict sandbox config、safe child environment、Linux Bubblewrap launch plan，以及 `bash/grep` 统一 subprocess seam；
 - AgentLoop / lifecycle interaction / ExecutionEventStore / Execution Projection / ContextManager / Session Tree 确定性测试基础。
 
-Stage 6.2 已补齐原先 `ask -> approval_required` 的产品死路；Stage 6.3 又把 process creation 收口到可替换的 Sandbox seam，并在 Linux/Bubblewrap 上提供真实的 workspace-write/process/network 隔离能力。经 ADR-0023 调整后，下一阶段不再优先做 Windows Sandbox，而是按产品依赖顺序推进：**Stage 6.4 Provider Runtime & Local Model Configuration → Stage 6.5 Local Session Authority & Server Optionalization → Stage 6.6 Cloud Session Sync & Commercial Entitlements → Stage 6.7 Windows Native Sandbox**。MCP transport/auth/remote Tool trust boundary、持久化 allow-for-session/project、shell-AST-aware authorization、exact tokenizer 继续独立演进。
+Stage 6.2 已补齐原先 `ask -> approval_required` 的产品死路；Stage 6.3 又把 process creation 收口到可替换的 Sandbox seam，并在 Linux/Bubblewrap 上提供真实的 workspace-write/process/network 隔离能力；Stage 6.4 现已完成 Provider Runtime、Credential/Auth seam、动态 ModelRef 与 Provider 管理 UX。下一阶段按产品依赖顺序推进：**Stage 6.5 Local Session Authority & Server Optionalization → Stage 6.6 Cloud Session Sync & Commercial Entitlements → Stage 6.7 Windows Native Sandbox**。MCP transport/auth/remote Tool trust boundary、持久化 allow-for-session/project、shell-AST-aware authorization、exact tokenizer 与 OS-native Secret Store 继续独立演进。
