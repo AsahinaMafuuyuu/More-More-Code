@@ -1182,3 +1182,210 @@ Harness approval contract
 - Shell-AST-aware command authorization.
 - MCP transport/auth/remote Tool execution.
 - Cloud synchronization of approval/runtime events.
+
+
+# Stage 6.3 — Sandbox Execution Foundation & Process Hardening
+
+**Status:** In progress — 2026-08-23.
+
+## Overview
+
+Introduce a real execution seam between native Tools and host subprocess creation so MORE-MORE-CODE can enforce process-isolation policy without pushing OS-specific behavior into `ToolRuntime` or individual Tools. This Stage centralizes every native subprocess launch (`bash` and `grep`), adds explicit `off | auto | required` sandbox configuration, removes ambient secret exposure from child-process environments by default, and provides a Linux Bubblewrap adapter for OS-enforced workspace-write/process/network isolation when available.
+
+The current Windows development host does not provide a native Bubblewrap/nsjail-style primitive. Stage 6.3 therefore does **not** claim full Windows filesystem/network sandboxing. `auto` may fall back to a direct process adapter only when no hard restriction such as `network=deny` was requested; `required` always fails closed when no supported isolation provider is available. This keeps capability claims truthful while creating the seam needed for a future Windows AppContainer/Job-object or container adapter.
+
+## Architecture Decisions
+
+- `ToolRuntime` remains source-agnostic and owns permission/approval/timeout orchestration only. Sandbox/process launch belongs below the native Tool executor in the CLI.
+- Native subprocesses must cross one deep `ProcessSandbox` interface. `local-tools.ts` may consume stdout/stderr/exit/kill from that interface but must not call `Bun.spawn` directly.
+- Sandbox configuration is layered global -> project like the rest of Agent Config and is independent from Permission Policy. Permission answers **whether** an operation may run; Sandbox constrains **how** an allowed operation runs.
+- `mode=off` preserves direct execution. `mode=auto` uses a supported OS adapter when available and may use the direct adapter only when doing so does not violate an explicitly requested hard restriction. `mode=required` is fail-closed.
+- Child processes default to a bounded safe environment allowlist rather than inheriting every CLI/provider credential. Users may explicitly opt into `environment=inherit` or add named environment variables through `envAllow`.
+- Linux Bubblewrap uses a read-only host root, a read-write workspace bind, private `/tmp`, isolated PID/IPC/UTS namespaces, a private home view, and optional network namespace isolation. This is an OS-enforced process/filesystem-write boundary, not a claim that arbitrary host reads outside all system paths are impossible.
+- Windows/macOS unsupported-provider fallback is explicit and observable through sandbox status; no environment-only hardening is described as OS sandboxing.
+
+## Dependency Graph
+
+```text
+Agent Config sandbox contract
+    -> ProcessSandbox interface + provider selection
+        -> safe child-process environment
+        -> Bubblewrap launch-plan adapter
+            -> bash/grep unified subprocess seam
+                -> cancellation/regression verification
+                    -> ADR/current-state delivery
+```
+
+## Phase 1: Configuration & Deep Process Seam
+
+### Task 1: Add layered Sandbox configuration
+
+**Description:** Extend Agent Config with a small process-sandbox contract: `mode`, `network`, `environment`, and exact-name `envAllow`. Merge global then project settings deterministically and ship secure-but-compatible defaults.
+
+**Acceptance criteria:**
+- Invalid sandbox values are rejected by config parsing.
+- Global values are overridden only by explicitly supplied project values.
+- Defaults are deterministic and documented; `envAllow` is copied rather than shared/mutated.
+
+**Verification:** CLI agent-bootstrap/config tests and TypeScript typecheck.
+
+**Dependencies:** None.
+
+**Files likely touched:**
+- `packages/cli/src/lib/agent-config.ts`
+- `packages/cli/tests/agent-bootstrap.test.ts`
+- `.more-more-code/config.json`
+
+**Estimated scope:** Small.
+
+### Task 2: Add the ProcessSandbox module
+
+**Description:** Add one CLI module that owns provider discovery, effective sandbox status, child-process environment projection, provider selection, and subprocess creation behind a minimal interface used by native Tools.
+
+**Acceptance criteria:**
+- Callers do not need OS/provider branching.
+- `required` fails before child-process creation when no provider exists.
+- `auto` never silently drops an explicitly requested hard network restriction.
+
+**Verification:** Focused process-sandbox tests using injected provider discovery/spawn seams.
+
+**Dependencies:** Task 1.
+
+**Files likely touched:**
+- `packages/cli/src/lib/process-sandbox.ts`
+- `packages/cli/tests/process-sandbox.test.ts`
+
+**Estimated scope:** Medium.
+
+## Checkpoint: Configuration & Process Seam
+
+- Agent Config resolves sandbox policy correctly.
+- No subprocess is required to know platform-specific isolation details.
+- Fail-open/fail-closed behavior is covered by tests.
+
+## Phase 2: OS Adapter & Native Tool Integration
+
+### Task 3: Implement safe child-process environment projection
+
+**Description:** Prevent ambient provider/API credentials from being inherited by native child processes in `environment=safe` mode while preserving platform variables required to find and start ordinary development tools. Allow exact explicitly configured variable names to cross the seam.
+
+**Acceptance criteria:**
+- Common path/temp/locale/shell variables survive safe projection.
+- Representative secret/token variables do not survive unless explicitly allowlisted.
+- Environment-name matching follows Windows case-insensitive semantics where relevant.
+
+**Verification:** Focused environment projection tests.
+
+**Dependencies:** Task 2.
+
+**Files likely touched:**
+- `packages/cli/src/lib/process-sandbox.ts`
+- `packages/cli/tests/process-sandbox.test.ts`
+
+**Estimated scope:** Small.
+
+### Task 4: Add Linux Bubblewrap workspace isolation adapter
+
+**Description:** When running on Linux with `bwrap` available, build an OS-enforced launch plan with read-only host root, read-write canonical workspace, private temp/home views, process namespace isolation, and optional network denial. Provider availability is discovered without making Bubblewrap a package dependency.
+
+**Acceptance criteria:**
+- Workspace is the only normal host write bind in the launch plan.
+- `network=deny` adds network namespace isolation.
+- Missing Bubblewrap is represented as unavailable rather than silently reported as isolated.
+
+**Verification:** Pure launch-plan tests plus optional local provider probe when available.
+
+**Dependencies:** Tasks 2 and 3.
+
+**Files likely touched:**
+- `packages/cli/src/lib/process-sandbox.ts`
+- `packages/cli/tests/process-sandbox.test.ts`
+
+**Estimated scope:** Medium.
+
+### Task 5: Route bash and grep through ProcessSandbox
+
+**Description:** Replace direct `Bun.spawn` calls in native `bash` and `grep` with the shared process seam while preserving existing process-group cancellation, timeout propagation, bounded output, canonical workspace cwd, and grep exit-code semantics.
+
+**Acceptance criteria:**
+- `local-tools.ts` contains no direct child-process creation.
+- Bash cancellation still terminates its descendant process group and cleans temporary cancellation state.
+- Grep and Bash both receive the same sandbox/environment policy.
+
+**Verification:** Existing cancellation tests plus new native-tool sandbox integration tests.
+
+**Dependencies:** Tasks 2-4.
+
+**Files likely touched:**
+- `packages/cli/src/lib/local-tools.ts`
+- `packages/cli/src/hooks/use-chat.ts`
+- `packages/cli/tests/local-tools-cancellation.test.ts`
+- `packages/cli/tests/process-sandbox.test.ts`
+
+**Estimated scope:** Medium.
+
+## Checkpoint: Native Process Enforcement
+
+- Every native subprocess crosses ProcessSandbox.
+- Linux isolation launch plans are deterministic and test-covered.
+- Windows remains explicitly unsupported for full OS isolation rather than receiving a false security label.
+- Cancellation and timeout behavior remain unchanged at the ToolRuntime interface.
+
+## Phase 3: Documentation, Security Review & Delivery
+
+### Task 6: Record sandbox semantics and remaining platform boundary
+
+**Description:** Add an ADR and update current-state documentation to separate Permission/Approval from Sandbox, document mode/fallback semantics, safe environment behavior, the Bubblewrap profile, and the unresolved Windows native isolation adapter.
+
+**Acceptance criteria:**
+- Documentation never calls direct fallback a sandbox.
+- Windows limitation and `required` fail-closed behavior are explicit.
+- The next-stage recommendation distinguishes Windows native isolation, MCP trust, and persistent approvals.
+
+**Verification:** Documentation review and `git diff --check`.
+
+**Dependencies:** Task 5.
+
+**Files likely touched:**
+- `docs/decisions/0022-sandbox-execution-seam-and-linux-bubblewrap.md`
+- `.docs/2026-08-12-current-implementation-and-decisions.md`
+- `README.md`
+- `CONTEXT.md`
+- `PROJECT_ANALYSIS.md`
+- `CHANGELOG.md`
+
+**Estimated scope:** Medium.
+
+### Task 7: Complete Stage 6.3 delivery
+
+**Description:** Run focused and full regressions, review the integrated diff for fail-open paths or cancellation regressions, close the checklist, and commit Stage 6.3 on `stage/6.3-sandbox-execution-foundation` only when no residual P0/P1 issue remains.
+
+**Acceptance criteria:**
+- CLI tests/typecheck/build and dependent Harness tests pass.
+- Full repository package typechecks/builds used by the prior security stages still pass.
+- `git diff --check` passes and the Stage is committed with a clean working tree.
+
+**Verification:** Stage 6.3 Final Verification commands.
+
+**Dependencies:** Task 6.
+
+**Estimated scope:** Small.
+
+## Stage 6.3 Final Verification
+
+- `bun test packages/cli/tests`
+- `bun run --filter @more-more-code/harness test`
+- Shared/Harness/CLI/Server/Database/Runtime Store TypeScript checks.
+- CLI and Server builds.
+- Both Prisma schemas validate/generate independently.
+- `git diff --check`.
+- Security review confirms `required` and hard restrictions fail closed before spawn; direct fallback is never labeled isolated.
+
+## Explicitly Deferred
+
+- Windows AppContainer/restricted-token/Job-object sandbox adapter and equivalent macOS provider.
+- Full host-read confidentiality isolation for arbitrary subprocesses on every OS.
+- Persistent `Allow for session/project` approval rules.
+- Shell-AST-aware authorization.
+- MCP transport/auth/remote Tool sandboxing.
+- Cloud synchronization of Runtime Events.

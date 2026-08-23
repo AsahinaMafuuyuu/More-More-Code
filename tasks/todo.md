@@ -297,3 +297,34 @@
 - [ ] Shell-AST-aware command authorization.
 - [ ] MCP transport/auth/remote Tool execution.
 - [ ] Cloud synchronization of approval/runtime events.
+
+# Stage 6.3 — Sandbox Execution Foundation & Process Hardening
+
+## Phase 1: Configuration & Deep Process Seam
+
+- [ ] Add layered `sandbox.mode/network/environment/envAllow` Agent Config with deterministic global -> project merge semantics.
+- [ ] Add a deep `ProcessSandbox` module for provider discovery, status, environment projection, launch policy, and child-process creation.
+- [ ] Verify `required` fails before spawn and `auto` cannot silently drop explicit hard network isolation.
+
+## Phase 2: OS Adapter & Native Tool Integration
+
+- [ ] Add safe child-process environment projection that excludes ambient provider/API credentials unless explicitly allowlisted.
+- [ ] Add Linux Bubblewrap launch-plan support for read-only host root, read-write workspace, private temp/home, namespace isolation, and optional network denial.
+- [ ] Route native `bash` and `grep` through `ProcessSandbox`; remove direct subprocess creation from `local-tools.ts`.
+- [ ] Preserve Bash descendant cancellation, grep semantics, timeout propagation, and bounded output.
+
+## Phase 3: Documentation, Security Review & Delivery
+
+- [ ] Add ADR-0022 and update README, CONTEXT, PROJECT_ANALYSIS, CHANGELOG, current-state docs, and project Agent configuration.
+- [ ] Run focused/full CLI and Harness tests plus package typechecks/builds and Prisma validation/generation.
+- [ ] Review fail-open paths and platform capability claims; close with no residual P0/P1 finding.
+- [ ] Commit Stage 6.3 on `stage/6.3-sandbox-execution-foundation` with a clean working tree.
+
+## Explicitly Deferred from Stage 6.3
+
+- [ ] Windows AppContainer/restricted-token/Job-object and equivalent macOS native sandbox adapters.
+- [ ] Full cross-platform host-read confidentiality isolation.
+- [ ] Allow-for-session / allow-for-project persistent approval rules.
+- [ ] Shell-AST-aware command authorization.
+- [ ] MCP transport/auth/remote Tool execution and sandboxing.
+- [ ] Cloud synchronization of approval/runtime events.
