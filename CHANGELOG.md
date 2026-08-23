@@ -44,6 +44,10 @@ All notable changes to MORE MORE CODE are recorded here.
 - Shared canonical workspace path resolution for policy and native filesystem execution, including symlink/junction escape rejection and segment-aware platform path globs.
 - Independently versioned schema-v2 permission request/decision lifecycle events with schema-v1 decision compatibility and strict raw command/path rejection.
 - ADR-0019 documenting effective permission policy precedence, the Tool Runtime enforcement seam, and redacted lifecycle persistence.
+- Derived session-scoped security audit projection over Runtime Events, with v1 legacy entries, v2 request/decision correlation, durable offsets, and explicit complete/pending/inconsistent states.
+- Security lifecycle consistency replay that validates request/decision/Tool-terminal invariants without reconstructing redacted command, path, or resource values.
+- Dangerous-operation coverage for composed command patterns, multi-capability denial, outside-workspace symlink/junction paths, and fail-closed policy/observer failures.
+- ADR-0020 documenting derived audit projection, lifecycle consistency replay, and the boundary between application policy and OS-level sandboxing.
 
 ### Changed
 
@@ -68,10 +72,11 @@ All notable changes to MORE MORE CODE are recorded here.
 - The real CLI launcher no longer contains a trailing executable identifier.
 - RuntimeSession now serializes same-Session append/projection work; derived snapshot failure preserves committed event success and records bounded-backoff retry diagnostics.
 - CLI Tool Step infrastructure failures now propagate to AgentLoop instead of being converted into ordinary Tool outcomes that permit later side effects.
+- Tool Runtime construction now requires an explicit `PermissionPolicy`; the implicit allow-all fallback was removed from the security enforcement seam.
 
 ### Deferred
 
-- MCP transport/auth/remote tool execution, interactive permission approval UI, security audit projection, OS-level Sandbox enforcement, and product-level Subagent runtime remain outside this delivery slice.
+- MCP transport/auth/remote tool execution, interactive permission approval UI, OS-level Sandbox enforcement, and product-level Subagent runtime remain outside this delivery slice.
 
 ## [2.0.1] - 2026-08-13
 

@@ -62,6 +62,6 @@ Rejected because no interactive approval transaction exists yet. Returning `appr
 - Tool Runtime remains the final enforcement seam; Tool executors do not reimplement policy.
 - Agent config can persist defaults and ordered rules without breaking older files where `permissions` is absent; workspace containment is intentionally not configurable.
 - Security events support request/decision correlation without storing raw commands, paths, Tool input/output, or reasons.
-- The Phase 6 session-scoped audit projection can consume both legacy v1 decisions and v2 lifecycle events.
+- ADR-0020 completes the Phase 6 session-scoped derived audit projection over both legacy v1 decisions and v2 lifecycle events, using lifecycle consistency replay rather than redacted policy recomputation.
 - Canonical path validation closes existing-link escape but retains a check/use race; OS-level no-follow filesystem isolation remains a separate Sandbox follow-up.
 - Interactive approval UI, OS-level process/network sandboxing, and MCP-specific authorization remain separate follow-up work.

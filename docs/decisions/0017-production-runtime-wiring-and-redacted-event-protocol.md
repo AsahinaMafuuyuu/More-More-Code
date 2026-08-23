@@ -67,4 +67,4 @@ Rejected because replay cannot determine whether an interrupted external side ef
 - Runtime Event schema changes require a new explicit version and validator/migration compatibility work; adding a TypeScript property alone is insufficient.
 - Runtime telemetry is intentionally less detailed than Session history or ephemeral error UI. Rich content remains in its appropriate semantic or transient boundary.
 - SQLite is the durable runtime authority while Projection Cache and snapshots are derived acceleration structures.
-- ADR-0019 completes permission-policy consolidation and the redacted request/decision lifecycle. The session-scoped security audit projection remains follow-up work built on the same strict event protocol.
+- ADR-0019 completes permission-policy consolidation and the redacted request/decision lifecycle. ADR-0020 adds the session-scoped derived security audit projection and lifecycle consistency replay on the same strict event protocol.

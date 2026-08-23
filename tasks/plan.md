@@ -599,7 +599,7 @@ Expose Carry / No Carry / Cancel when `ask` applies and add the `ask | always | 
 
 # Stage 6.0 — Recoverable Runtime & Security Foundation
 
-**Status:** In progress — persistence/recovery, production runtime wiring, and permission enforcement are delivered; Phase 6 audit and validation remains.
+**Status:** Delivered — 2026-08-23. Persistence/recovery, production runtime wiring, permission enforcement, and security audit/validation are complete.
 
 ## Overview
 
@@ -911,6 +911,9 @@ Harness Runtime Event contract
 
 ## Phase 6: Audit Follow-up
 
+**Status:** Delivered — 2026-08-23. Derived audit projection, lifecycle consistency replay, dangerous-operation validation, and final verification are complete.
+
+
 ### Task 14: Add a session-scoped security audit projection
 
 Project persisted `security` Runtime Events into a derived Harness audit timeline rather than storing an ever-growing audit array in `RuntimeSessionProjection` snapshots. Pair v2 `requested -> decided` facts by session/correlation metadata, retain v1 decisions as explicit legacy decision-only entries, and surface incomplete/duplicate/mismatched lifecycles without reconstructing redacted resource values.
@@ -943,7 +946,7 @@ Reconcile ADR/current-state documentation with implemented audit semantics, run 
 
 ## Final Verification
 
-- Harness, CLI, Runtime Store, and Server tests pass.
+- Harness, CLI, and Runtime Store tests pass; Server currently has no test suite and must pass typecheck/build.
 - Shared/Harness/CLI/Server/Database/Runtime Store typechecks pass.
 - CLI and Server builds pass.
 - Both Prisma schemas validate and generate independently.

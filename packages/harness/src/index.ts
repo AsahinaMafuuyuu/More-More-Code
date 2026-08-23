@@ -203,6 +203,13 @@ export type {
   RuntimeToolEventPayload,
   RuntimeToolStatus,
 } from "./event-store";
+export { projectSecurityAuditTimeline } from "./security-audit";
+export type {
+  SecurityAuditEntry,
+  SecurityAuditIssue,
+  SecurityAuditStatus,
+  SecurityAuditTimeline,
+} from "./security-audit";
 export { recoverRuntime } from "./recovery";
 export type {
   PendingExternalOperation,

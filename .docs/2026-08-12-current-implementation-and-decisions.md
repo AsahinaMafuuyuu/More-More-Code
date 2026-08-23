@@ -1257,6 +1257,12 @@ Phase 5 已完成 Harness/CLI permission contract 收口、两级 persisted over
 
 CLI Tool Step 现在区分 normalized executor outcome 与 permission/observer/Runtime Store infrastructure exception。前者作为 Tool Result 返回模型；后者在记录 UI/Session error 后重新抛给 AgentLoop，使 Step/Run failed 并阻止后续外部副作用。
 
+### 16.13 Derived Security Audit & Lifecycle Validation：Stage 6.0 Phase 6
+
+Phase 6 已在 Harness 增加 `projectSecurityAuditTimeline(sessionId, events)`，直接从 session-scoped Runtime Event stream 派生权限审计时间线，而不把完整 audit history 写入 `RuntimeSessionProjection` 或 snapshot。schema-v2 `requested / decided` 通过 Run/Turn/Step/Tool-call/capability 关联，v1 decision 保留为 `legacy` 条目；投影显式区分 `complete / pending / legacy / inconsistent` 并保留 durable offsets 作为证据。
+
+Replay 的定义固定为 **security lifecycle consistency replay**，而不是 policy recomputation。由于 v2 按 ADR-0019 不持久化 raw command/path/resource value，重启后不能严谨重跑原始 `matchesPermissionRule()`；审计层只验证可由 durable facts 证明的结构和 enforcement invariants，包括 request/decision 缺失、重复、乱序、metadata mismatch、Tool terminal 缺失/重复，以及 Tool-call 聚合后的 `deny -> denied`、`ask -> approval_required`、全 allow 才能进入 executor terminal。危险操作回归同时覆盖组合 command pattern、multi-capability blocking、absolute/symlink/junction workspace escape，以及 policy/observer failure 的 fail-closed 行为。命令 glob 仍属于应用层 policy，不等于 shell parser 或 OS-level Sandbox。
+
 ---
 
 ## 17. 当前需要特别避免的架构回退
@@ -1309,7 +1315,7 @@ Cloud persistence 应保持外围能力。
 
 ## 18. 当前阶段边界与后续候选
 
-Stage 4.1 Agent Bootstrap、Stage 4.2 Skill Registry、Stage 5 Context & Provider Runtime、Stage 5.1 Session/Context 语义收口、Stage 6 Tool Runtime 第一版、Stage 6.1 native shell cancellation，以及 Stage 6.0 的 recoverable runtime / permission enforcement 均已完成。当前从启动到 Model Step / Tool Step 的链路已经形成：
+Stage 4.1 Agent Bootstrap、Stage 4.2 Skill Registry、Stage 5 Context & Provider Runtime、Stage 5.1 Session/Context 语义收口、Stage 6 Tool Runtime 第一版、Stage 6.1 native shell cancellation，以及 Stage 6.0 的 recoverable runtime / permission enforcement / security audit validation 均已完成。当前从启动到 Model Step / Tool Step 的链路已经形成：
 
 ```text
 CLI bootstrap
@@ -1331,7 +1337,7 @@ Tool Runtime → Registry / Effective Permission Policy / Timeout / Source Adapt
 Redacted Runtime Events → SQLite snapshot + replay
 ```
 
-下一阶段是 session-scoped security audit timeline、v1/v2 permission replay verification 与 dangerous-operation validation。MCP transport adapter、交互式 approval UI、OS-level Sandbox、cloud Runtime Event sync、exact tokenizer 或产品级 Subagent runtime 仍应作为独立后续能力；其中任何一项都不应重新把职责塞入 `AgentLoop`、`ContextManager` 或 OpenAI-specific adapter。
+Stage 6.0 的 session-scoped security audit timeline、v1/v2 lifecycle consistency replay 与 dangerous-operation validation 已完成。后续可独立推进 MCP transport adapter、交互式 approval UI、OS-level Sandbox、cloud Runtime Event sync、exact tokenizer 或产品级 Subagent runtime；其中任何一项都不应重新把职责塞入 `AgentLoop`、`ContextManager` 或 OpenAI-specific adapter。
 
 当前关键边界已经分离：
 
@@ -1375,7 +1381,8 @@ docs/decisions/
 ├── 0016-separate-cloud-session-and-local-runtime-stores.md
 ├── 0017-production-runtime-wiring-and-redacted-event-protocol.md
 ├── 0018-governed-multi-agent-collaboration.md
-└── 0019-effective-permission-policy-and-redacted-lifecycle.md
+├── 0019-effective-permission-policy-and-redacted-lifecycle.md
+└── 0020-derived-security-audit-and-lifecycle-replay.md
 ```
 
 其中：
@@ -1396,5 +1403,6 @@ docs/decisions/
 - ADR-0015/0016/0017 记录 SQLite Runtime security foundation、两套 persistence store 分离与 production write-ahead/redaction/recovery wiring。
 - ADR-0018 记录仓库级受治理多代理协作规则。
 - ADR-0019 记录 effective permission policy、Tool Runtime enforcement 与 redacted schema-v2 permission lifecycle。
+- ADR-0020 记录 derived security audit timeline、lifecycle consistency replay 与 application policy / OS Sandbox 边界。
 
 本文件属于近期工程状态快照，不替代正式 ADR。

@@ -80,6 +80,10 @@ A runtime lifecycle fact about Run, Turn, or Step execution. Execution Events de
 
 A JSON-safe, append-only local fact in one of the `execution`, `tool`, `security`, `context`, or `system` categories. Runtime Events use a SQLite-assigned global offset as their durable replay cursor and are always queried within an explicit Session scope. Execution/tool/context/system payloads use strict schema v1 allowlists. Security payload v2 adds separate permission `requested` / `decided` lifecycle facts while the validator retains v1 decision compatibility. Unknown fields are rejected. Prompts, messages, Tool input/output, raw commands/paths/file content, policy reasons, and arbitrary error text are excluded. An Execution Event may be persisted inside an `execution` Runtime Event envelope, but its per-Run sequence and the durable database offset have different meanings.
 
+## Security Audit Projection
+
+A derived, session-scoped Harness view over persisted Runtime Events. Schema-v2 permission `requested` / `decided` facts are correlated with Tool terminals into `complete | pending | inconsistent` audit entries, while schema-v1 decisions remain explicit `legacy` entries. Replay verifies lifecycle/enforcement consistency rather than recomputing the original Permission Policy: raw command/path/resource values are intentionally absent from durable events. The audit timeline is rebuilt from the append-only event stream and is not copied into RuntimeSession snapshots.
+
 ## Runtime Snapshot
 
 A session-scoped checkpoint of a Runtime projection at a specific durable event offset. Recovery loads the latest snapshot and applies later Runtime Events through an explicit reducer. Snapshots optimize replay; they do not become a second Session history authority and do not authorize automatic repetition of incomplete external work.
@@ -114,7 +118,7 @@ The origin of executable tool capabilities. `native` is the built-in default sou
 
 ## Tool Runtime
 
-The local boundary between AgentLoop Tool Steps and concrete Tool Sources. It applies Tool Registry visibility/capabilities, permission decisions, timeout/cancellation propagation, source selection, and normalized status/timing outcomes. AgentLoop owns lifecycle orchestration; Tool Runtime owns these execution concerns. Native command execution consumes the Runtime workspace root and AbortSignal, and command-specific timeout values are resolved at this boundary rather than by a second native timer.
+The local boundary between AgentLoop Tool Steps and concrete Tool Sources. It applies Tool Registry visibility/capabilities, permission decisions, timeout/cancellation propagation, source selection, and normalized status/timing outcomes. Construction requires an explicit `PermissionPolicy`; there is no implicit allow-all fallback. AgentLoop owns lifecycle orchestration; Tool Runtime owns these execution concerns. Native command execution consumes the Runtime workspace root and AbortSignal, and command-specific timeout values are resolved at this boundary rather than by a second native timer.
 
 ## Tool Capability
 

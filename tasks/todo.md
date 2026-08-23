@@ -245,12 +245,12 @@
 
 ## Phase 6: Audit & Validation
 
-- [ ] Add a session-scoped security audit timeline projection.
-- [ ] Add lifecycle consistency replay verification for v1/v2 permission events (not redacted policy recomputation).
-- [ ] Add dangerous command/path/symlink/multi-capability and fail-closed operation tests.
+- [x] Add a session-scoped security audit timeline projection.
+- [x] Add lifecycle consistency replay verification for v1/v2 permission events (not redacted policy recomputation).
+- [x] Add dangerous command/path/symlink/multi-capability and fail-closed operation tests.
 - [x] Update ADR, README, CONTEXT, PROJECT_ANALYSIS, CHANGELOG, and Agent rules for the delivered foundation.
 - [x] Run foundation tests, typechecks, builds, Prisma validation/generation, migration deploy, and `git diff --check`.
-- [ ] Complete the final Stage 6.0 audit/delivery review and close with no residual P0/P1 findings.
+- [x] Complete the final Stage 6.0 audit/delivery review and close with no residual P0/P1 findings.
 
 ## Deferred
 
