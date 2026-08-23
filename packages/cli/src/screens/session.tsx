@@ -16,9 +16,8 @@ import { ApprovalDialogContent } from "../components/dialogs";
 import { apiClient } from "../lib/api-client";
 import { getErrorMessage } from "../lib/http-errors";
 import {
-  findSupportedChatModel,
+  type ModelRef,
   type ModeType,
-  type SupportedChatModelId,
 } from "@more-more-code/shared";
 import { useChat } from "../hooks/use-chat";
 import { usePromptConfig } from "../providers/prompt-config";
@@ -31,6 +30,7 @@ import {
 } from "@more-more-code/harness";
 import { useKeyboardLayer } from "../providers/keyboard-layer";
 import { formatRuntimeRecoveryNotice } from "../lib/runtime-recovery";
+import { normalizeModelRef } from "../lib/models";
 
 type SessionData = InferResponseType<(typeof apiClient.sessions)[":id"]["$get"], 200>; // 获取SessionData的类型
 
@@ -41,7 +41,10 @@ const sessionLocationSchema = z.object({
   initialPrompt: z.object({
     message: z.string(),
     mode: z.custom<ModeType>(),
-    model: z.custom<SupportedChatModelId>(),
+    model: z.object({
+      providerId: z.string().min(1),
+      modelId: z.string().min(1),
+    }).strict(),
   })
 })
 
@@ -92,7 +95,11 @@ function ChatMessage({ msg }: { msg: Message }) {
   return (
     <BotMessage
       parts={msg.parts}
-      model={msg.metadata?.model ?? "unknown"}
+      model={typeof msg.metadata?.model === "string"
+        ? msg.metadata.model
+        : msg.metadata?.model
+          ? `${msg.metadata.model.providerId}/${msg.metadata.model.modelId}`
+          : "unknown"}
       mode={msg.metadata?.mode ?? "BUILD"}
       durationMs={msg.metadata?.durationMs}
       streaming={false}
@@ -108,7 +115,7 @@ function SessionChat({
   initialPrompt?: {
     message: string;
     mode: ModeType;
-    model: SupportedChatModelId;
+    model: ModelRef;
   }
 }) {
   const { mode, model, setMode, setModel } = usePromptConfig(); // 获取当前的模式和模型
@@ -184,8 +191,12 @@ function SessionChat({
     if (runtime.mode === "BUILD" || runtime.mode === "PLAN") {
       setMode(runtime.mode);
     }
-    if (runtime.model && findSupportedChatModel(runtime.model)) {
-      setModel(runtime.model as SupportedChatModelId);
+    if (runtime.model) {
+      try {
+        setModel(normalizeModelRef(runtime.model, runtime.provider));
+      } catch {
+        // Legacy unknown model IDs cannot be restored without provider metadata.
+      }
     }
   }, [setMode, setModel]);
 

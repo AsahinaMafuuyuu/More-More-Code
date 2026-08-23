@@ -5,11 +5,11 @@ import {
 } from "@more-more-code/harness";
 import {
   findSupportedChatModel,
-  type SupportedChatModelId,
-  type SupportedProvider,
+  type ModelRef,
+  type ProviderKind,
 } from "@more-more-code/shared";
 
-const providerCounters: Record<SupportedProvider, TokenCounter> = {
+const providerCounters: Record<ProviderKind, TokenCounter> = {
   openai: createHeuristicTokenCounter({
     id: "openai-estimator-v1",
     latinCharsPerToken: 3.8,
@@ -30,9 +30,9 @@ const providerCounters: Record<SupportedProvider, TokenCounter> = {
     latinCharsPerToken: 3.8,
     cjkCharsPerToken: 1.35,
   }),
-  mistral: createHeuristicTokenCounter({
-    id: "mistral-estimator-v1",
-    latinCharsPerToken: 3.7,
+  custom: createHeuristicTokenCounter({
+    id: "openai-compatible-estimator-v1",
+    latinCharsPerToken: 3.8,
     cjkCharsPerToken: 1.35,
   }),
 };
@@ -48,10 +48,34 @@ const DEFAULT_CONTEXT_REDUCTION_POLICY = {
   toolResultReferenceRatio: 0.006,
 } as const;
 
-// These are conservative application policies, not claims about a provider's
-// absolute maximum. Keeping them here makes model-specific budgeting explicit
-// and easy to override when an exact provider/model limit is configured.
-const MODEL_CONTEXT_POLICIES: Record<SupportedChatModelId, StaticProfile> = {
+const DEFAULT_MODEL_CONTEXT_POLICY: StaticProfile = {
+  contextWindowTokens: 128_000,
+  reservedOutputTokens: 12_288,
+  safetyMarginTokens: 4_096,
+  retainedTailTurns: 3,
+  maxSummaryTokens: 2_048,
+};
+
+const PROVIDER_DEFAULT_POLICIES: Record<ProviderKind, StaticProfile> = {
+  openai: { ...DEFAULT_MODEL_CONTEXT_POLICY, reservedOutputTokens: 16_384 },
+  anthropic: {
+    ...DEFAULT_MODEL_CONTEXT_POLICY,
+    contextWindowTokens: 200_000,
+    reservedOutputTokens: 16_384,
+    safetyMarginTokens: 6_144,
+    maxSummaryTokens: 3_072,
+  },
+  google: {
+    ...DEFAULT_MODEL_CONTEXT_POLICY,
+    reservedOutputTokens: 16_384,
+    safetyMarginTokens: 6_144,
+    maxSummaryTokens: 3_072,
+  },
+  deepseek: { ...DEFAULT_MODEL_CONTEXT_POLICY },
+  custom: { ...DEFAULT_MODEL_CONTEXT_POLICY },
+};
+
+const MODEL_CONTEXT_POLICIES: Record<string, StaticProfile> = {
   "gpt-5.5": {
     contextWindowTokens: 128_000,
     reservedOutputTokens: 16_384,
@@ -80,20 +104,6 @@ const MODEL_CONTEXT_POLICIES: Record<SupportedChatModelId, StaticProfile> = {
     retainedTailTurns: 3,
     maxSummaryTokens: 2_048,
   },
-  "mistral-medium-latest": {
-    contextWindowTokens: 128_000,
-    reservedOutputTokens: 12_288,
-    safetyMarginTokens: 4_096,
-    retainedTailTurns: 3,
-    maxSummaryTokens: 2_048,
-  },
-  "mistral-small-latest": {
-    contextWindowTokens: 128_000,
-    reservedOutputTokens: 8_192,
-    safetyMarginTokens: 4_096,
-    retainedTailTurns: 3,
-    maxSummaryTokens: 2_048,
-  },
   "gemini-2.5-flash": {
     contextWindowTokens: 128_000,
     reservedOutputTokens: 16_384,
@@ -108,29 +118,29 @@ const MODEL_CONTEXT_POLICIES: Record<SupportedChatModelId, StaticProfile> = {
     retainedTailTurns: 3,
     maxSummaryTokens: 2_048,
   },
-  "deepseek-v4-flash": {
-    contextWindowTokens: 128_000,
-    reservedOutputTokens: 12_288,
-    safetyMarginTokens: 4_096,
-    retainedTailTurns: 3,
-    maxSummaryTokens: 2_048,
-  },
+  "deepseek-v4-flash": { ...DEFAULT_MODEL_CONTEXT_POLICY },
   "deepseek-v4-pro": {
-    contextWindowTokens: 128_000,
+    ...DEFAULT_MODEL_CONTEXT_POLICY,
     reservedOutputTokens: 16_384,
-    safetyMarginTokens: 4_096,
-    retainedTailTurns: 3,
-    maxSummaryTokens: 2_048,
   },
 };
 
-export function resolveModelContextProfile(modelId: SupportedChatModelId): ModelContextProfile {
-  const definition = findSupportedChatModel(modelId);
-  if (!definition) throw new Error(`Unsupported chat model: ${modelId}`);
-  const policy = MODEL_CONTEXT_POLICIES[modelId];
+/**
+ * Resolve a deterministic Context budget for any configured model. Recommended
+ * model metadata sharpens the defaults, while unknown configured model IDs use
+ * a conservative provider-level fallback instead of becoming unsupported.
+ */
+export function resolveModelContextProfile(
+  modelRef: ModelRef,
+  providerKind: ProviderKind,
+): ModelContextProfile {
+  const recommended = findSupportedChatModel(modelRef.modelId);
+  const policy = recommended && recommended.provider === providerKind
+    ? MODEL_CONTEXT_POLICIES[modelRef.modelId] ?? PROVIDER_DEFAULT_POLICIES[providerKind]
+    : PROVIDER_DEFAULT_POLICIES[providerKind];
   return {
     ...DEFAULT_CONTEXT_REDUCTION_POLICY,
     ...policy,
-    tokenCounter: providerCounters[definition.provider],
+    tokenCounter: providerCounters[providerKind],
   };
 }

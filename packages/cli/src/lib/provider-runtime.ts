@@ -11,7 +11,8 @@ export type ProviderRequestCompilation = {
 };
 
 export type ProviderCacheTelemetry = {
-    provider: ResolvedModel["provider"];
+    provider: ResolvedModel["providerId"];
+    providerKind: ResolvedModel["provider"];
     model: string;
     inputTokens?: number;
     outputTokens?: number;
@@ -76,7 +77,8 @@ export function createProviderCacheTelemetry(input: {
     prefixIdentity: PromptPrefixIdentity;
 }): ProviderCacheTelemetry {
     return {
-        provider: input.resolvedModel.provider,
+        provider: input.resolvedModel.providerId,
+        providerKind: input.resolvedModel.provider,
         model: input.resolvedModel.modelId,
         ...(input.usage?.inputTokens != null ? { inputTokens: input.usage.inputTokens } : {}),
         ...(input.usage?.outputTokens != null ? { outputTokens: input.usage.outputTokens } : {}),

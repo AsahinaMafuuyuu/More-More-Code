@@ -3,6 +3,7 @@ export { SessionsDialogContent } from "./sessions-dialog";
 export { SessionTreeDialogContent } from "./session-tree-dialog";
 export { AgentsDialogContent } from "./agents-dialog";
 export { ModelsDialogContent } from "./models-dialog";
+export { ProvidersDialogContent } from "./providers-dialog";
 export { SettingsDialogContent } from "./settings-dialog";
 export { ApprovalDialogContent } from "./approval-dialog";
 export {

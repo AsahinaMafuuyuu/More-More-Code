@@ -5,8 +5,9 @@ import {
     isToolUIPart,
 } from "ai";
 import {
+    modelRefEquals,
+    type ModelRef,
     type ModeType,
-    type SupportedChatModelId,
 } from "@more-more-code/shared";
 import {
     AgentLoop,
@@ -55,6 +56,7 @@ import { getRuntimeSession } from "../lib/runtime-environment";
 import { createEffectivePermissionPolicy } from "../lib/permission-policy";
 import { ProcessSandbox } from "../lib/process-sandbox";
 import { InteractiveApprovalBroker } from "../lib/interactive-approval-broker";
+import { normalizeModelRef } from "../lib/models";
 
 export type { Message } from "../lib/chat-types";
 
@@ -65,7 +67,7 @@ type PendingModelStep = {
 
 type PromptSelection = {
     mode: ModeType;
-    model: SupportedChatModelId;
+    model: ModelRef;
 };
 
 export type SessionNavigationOutcome =
@@ -293,11 +295,15 @@ function getInteractionPrompt(
     interaction: AgentInteraction,
     fallback: PromptSelection,
 ) {
+    const metadataModel = interaction.metadata?.model;
+    const model = metadataModel == null
+        ? fallback.model
+        : normalizeModelRef(metadataModel as ModelRef | string);
     return {
         id: interaction.inputMessageId ?? interaction.id,
         text: interaction.text,
         mode: (interaction.metadata?.mode as ModeType | undefined) ?? fallback.mode,
-        model: (interaction.metadata?.model as SupportedChatModelId | undefined) ?? fallback.model,
+        model,
     };
 }
 
@@ -385,7 +391,7 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
                         operationId: event.operationId,
                         operation: event.operation,
                         mode: event.mode,
-                        model: event.model,
+                        model: `${event.model.providerId}/${event.model.modelId}`,
                         ...(event.phase === "completed" ? {
                             inputTokensBefore: event.inputTokensBefore,
                             inputTokensAfter: event.inputTokensAfter,
@@ -558,10 +564,19 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         const runtime = projectSessionRuntimeState(currentTree);
         let nextTree = currentTree;
 
-        if (runtime.model !== selection.model) {
+        let runtimeModel: ModelRef | null = null;
+        if (runtime.model) {
+            try {
+                runtimeModel = normalizeModelRef(runtime.model, runtime.provider);
+            } catch {
+                runtimeModel = null;
+            }
+        }
+        if (!modelRefEquals(runtimeModel, selection.model)) {
             nextTree = appendSessionEntry(nextTree, {
                 type: "model_change",
-                model: selection.model,
+                model: selection.model.modelId,
+                provider: selection.model.providerId,
                 ...metadata,
             });
         }
@@ -780,7 +795,7 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         submit: async (params: {
             userText: string;
             mode: ModeType;
-            model: SupportedChatModelId;
+            model: ModelRef;
         }) => {
             await runtimeSession.ready();
             const inputMessageId = crypto.randomUUID();
@@ -984,7 +999,7 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         steer: (params: {
             userText: string;
             mode: ModeType;
-            model: SupportedChatModelId;
+            model: ModelRef;
         }) => {
             const queued = agentLoop.steer({
                 text: params.userText,
@@ -1002,7 +1017,7 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         followUp: (params: {
             userText: string;
             mode: ModeType;
-            model: SupportedChatModelId;
+            model: ModelRef;
         }) => {
             const queued = agentLoop.followUp({
                 text: params.userText,

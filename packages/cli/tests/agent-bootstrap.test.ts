@@ -49,6 +49,7 @@ describe("agent bootstrap", () => {
     test("project configuration overrides global values while MCP servers merge by name", () => {
         const merged = mergeAgentConfig(
             {
+                model: { providerId: "openai", modelId: "gpt-5.5" },
                 skills: { enabled: false },
                 session: { branchSummaryOnJump: "never" },
                 sandbox: {
@@ -66,6 +67,7 @@ describe("agent bootstrap", () => {
                 },
             },
             {
+                model: { providerId: "deepseek", modelId: "deepseek-v4-pro" },
                 skills: { enabled: true, directories: ["project-skills"] },
                 session: { branchSummaryOnJump: "always" },
                 sandbox: {
@@ -84,6 +86,7 @@ describe("agent bootstrap", () => {
         );
 
         expect(merged.skills.enabled).toBe(true);
+        expect(merged.model).toEqual({ providerId: "deepseek", modelId: "deepseek-v4-pro" });
         expect(merged.skills.directories).toEqual(["project-skills"]);
         expect(merged.session.branchSummaryOnJump).toBe("always");
         expect(Object.keys(merged.tools.mcp.servers).sort()).toEqual(["globalDocs", "projectTools"]);
@@ -129,6 +132,33 @@ describe("agent bootstrap", () => {
                     mode: "required",
                     netwrok: "deny",
                 },
+            }, null, 2)),
+        ]);
+
+        await expect(loadAgentEnvironment({
+            workspaceRoot: workspace,
+            globalHome: home,
+            ensureLayout: false,
+        })).rejects.toThrow("Invalid MORE-MORE-CODE config");
+    });
+
+    test("rejects provider credentials in project Agent Config instead of treating JSON as a secret store", async () => {
+        const root = await createTempRoot("more-more-code-invalid-project-credential-");
+        const home = join(root, "home");
+        const workspace = join(root, "workspace");
+        const globalConfigDir = join(home, ".more-more-code");
+        const projectConfigDir = join(workspace, ".more-more-code");
+
+        await Promise.all([
+            mkdir(globalConfigDir, { recursive: true }),
+            mkdir(projectConfigDir, { recursive: true }),
+        ]);
+        await Promise.all([
+            writeFile(join(globalConfigDir, "config.json"), JSON.stringify({ version: 1 }, null, 2)),
+            writeFile(join(projectConfigDir, "config.json"), JSON.stringify({
+                version: 1,
+                model: { providerId: "openai", modelId: "gpt-5.5" },
+                credentials: { openai: "TOP-SECRET" },
             }, null, 2)),
         ]);
 

@@ -7,6 +7,10 @@ import type {
     PermissionRule,
     PermissionScope,
 } from "@more-more-code/harness";
+import {
+    DEFAULT_CHAT_MODEL_REF,
+    type ModelRef,
+} from "@more-more-code/shared";
 
 export const MORE_MORE_CODE_DIR = ".more-more-code";
 export const AGENT_CONFIG_FILE = "config.json";
@@ -48,6 +52,10 @@ const environmentVariableNameSchema = z.string()
 
 const agentConfigFileSchema = z.object({
     version: z.literal(1).optional(),
+    model: z.object({
+        providerId: z.string().trim().min(1),
+        modelId: z.string().trim().min(1),
+    }).strict().optional(),
     instructions: z.object({
         file: z.string().optional(),
     }).optional(),
@@ -76,7 +84,7 @@ const agentConfigFileSchema = z.object({
         environment: sandboxEnvironmentSchema.optional(),
         envAllow: z.array(environmentVariableNameSchema).optional(),
     }).strict().optional(),
-});
+}).strict();
 
 export type McpServerConfig = z.infer<typeof mcpServerSchema>;
 export type PermissionRuleConfig = z.infer<typeof permissionRuleSchema>;
@@ -84,6 +92,7 @@ export type AgentConfigFile = z.infer<typeof agentConfigFileSchema>;
 
 export type ResolvedAgentConfig = {
     version: 1;
+    model: ModelRef;
     instructions: {
         file: string;
     };
@@ -134,6 +143,7 @@ export type AgentConfigBundle = {
 
 const DEFAULT_CONFIG: ResolvedAgentConfig = {
     version: 1,
+    model: { ...DEFAULT_CHAT_MODEL_REF },
     instructions: {
         file: AGENT_INSTRUCTIONS_FILE,
     },
@@ -261,6 +271,9 @@ export function mergeAgentConfig(
     const resolved = cloneDefaultConfig();
 
     const apply = (config: AgentConfigFile) => {
+        if (config.model !== undefined) {
+            resolved.model = { ...config.model };
+        }
         if (config.instructions?.file !== undefined) {
             resolved.instructions.file = config.instructions.file;
         }

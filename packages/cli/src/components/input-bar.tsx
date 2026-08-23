@@ -17,7 +17,7 @@ import { useKeyboardLayer } from "../providers/keyboard-layer";
 import { useDialog } from "../providers/dialog";
 import { useTheme } from "../providers/theme";
 import { usePromptConfig } from "../providers/prompt-config";
-import type { ModeType, SupportedChatModelId } from "@more-more-code/shared";
+import type { ModeType, ModelRef } from "@more-more-code/shared";
 import type { ManualContextCompactionOutcome } from "../lib/local-model-transport";
 import { shutdownRuntimeEnvironment } from "../lib/runtime-environment";
 
@@ -342,7 +342,7 @@ interface Props {
     disabled?: boolean,
     sessionTree?: SessionTreeCommandApi,
     onModeChange?: (mode: ModeType) => void,
-    onModelChange?: (model: SupportedChatModelId) => void,
+    onModelChange?: (model: ModelRef) => void,
     onCompact?: () => Promise<ManualContextCompactionOutcome>,
 }
 
@@ -395,7 +395,7 @@ export default function InputBar({
         setMode(nextMode);
         onModeChange?.(nextMode);
     }, [onModeChange, setMode]);
-    const changeModel = useCallback((nextModel: SupportedChatModelId) => {
+    const changeModel = useCallback((nextModel: ModelRef) => {
         setModel(nextModel);
         onModelChange?.(nextModel);
     }, [onModelChange, setModel]);

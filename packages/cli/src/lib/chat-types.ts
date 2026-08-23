@@ -4,14 +4,14 @@ import type {
     UIMessage,
 } from "ai";
 import type {
+    ModelRef,
     ModeType,
-    SupportedChatModelId,
     ToolContracts,
 } from "@more-more-code/shared";
 
 export type ChatMessageMetadata = {
     mode?: ModeType;
-    model?: SupportedChatModelId | string;
+    model?: ModelRef | string;
     durationMs?: number;
     usage?: LanguageModelUsage;
 };

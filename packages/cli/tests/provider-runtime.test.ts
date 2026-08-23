@@ -21,6 +21,7 @@ describe("provider runtime", () => {
         const resolvedModel: ResolvedModel = {
             model: {} as LanguageModel,
             provider: "openai",
+            providerId: "openai",
             modelId: "gpt-5.5",
             providerOptions: {
                 openai: { store: false },
@@ -44,6 +45,7 @@ describe("provider runtime", () => {
         const resolvedModel: ResolvedModel = {
             model: {} as LanguageModel,
             provider: "openai",
+            providerId: "openai",
             modelId: "gpt-5.5",
         };
         const telemetry = createProviderCacheTelemetry({
@@ -66,6 +68,8 @@ describe("provider runtime", () => {
         });
 
         expect(telemetry).toMatchObject({
+            provider: "openai",
+            providerKind: "openai",
             inputTokens: 120,
             outputTokens: 30,
             cachedPromptTokens: 80,
@@ -79,6 +83,7 @@ describe("provider runtime", () => {
         const resolvedModel: ResolvedModel = {
             model: {} as LanguageModel,
             provider: "deepseek",
+            providerId: "deepseek",
             modelId: "deepseek-v4-flash",
             providerOptions: {
                 deepseek: { reasoningEffort: "medium" },

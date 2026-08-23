@@ -9,8 +9,8 @@ import {
     type ModelMessage,
 } from "ai";
 import {
+    type ModelRef,
     type ModeType,
-    type SupportedChatModelId,
     type ToolContracts,
 } from "@more-more-code/shared";
 import {
@@ -34,7 +34,7 @@ import {
     projectToolResultWorkingSet,
     type ToolResultPruningStats,
 } from "./tool-result-pruning";
-import { resolveChatModel } from "./models";
+import { normalizeModelRef, resolveChatModel, resolveConfiguredProvider } from "./models";
 import { resolveModelContextProfile } from "./model-context-profile";
 import {
     buildSystemPrompt,
@@ -77,14 +77,14 @@ export type ContextProjectionLifecycleEvent =
         operationId: string;
         operation: "model-step" | "manual-compaction";
         mode: ModeType;
-        model: SupportedChatModelId;
+        model: ModelRef;
     }
     | {
         phase: "completed";
         operationId: string;
         operation: "model-step" | "manual-compaction";
         mode: ModeType;
-        model: SupportedChatModelId;
+        model: ModelRef;
         inputTokensBefore: number;
         inputTokensAfter: number;
         inputBudgetTokens: number;
@@ -333,7 +333,7 @@ export async function projectMessages(input: {
 
 function resolveExecutionConfig(messages: Message[]): {
     mode: ModeType;
-    model: SupportedChatModelId;
+    model: ModelRef;
 } {
     const metadata = messages.findLast(
         (message) => message.metadata?.mode && message.metadata?.model,
@@ -345,7 +345,7 @@ function resolveExecutionConfig(messages: Message[]): {
 
     return {
         mode: metadata.mode,
-        model: metadata.model as SupportedChatModelId,
+        model: normalizeModelRef(metadata.model as ModelRef | string),
     };
 }
 
@@ -401,12 +401,12 @@ export class LocalModelTransport implements ChatTransport<Message> {
     async summarizeBranch(input: {
         analysis: BranchSummaryNavigationAnalysis<Message>;
         mode: ModeType;
-        model: SupportedChatModelId;
+        model: ModelRef;
         abortSignal?: AbortSignal;
     }): Promise<BranchSummaryReductionOutcome> {
         const environment = getAgentEnvironment();
-        const resolvedModel = resolveChatModel(input.model);
-        const contextProfile = resolveModelContextProfile(input.model);
+        const provider = resolveConfiguredProvider(input.model, environment);
+        const contextProfile = resolveModelContextProfile(input.model, provider.kind);
         const systemPrompt = buildSystemPrompt({ mode: input.mode, environment });
         const effectiveInputBudgetTokens = Math.max(
             0,
@@ -423,6 +423,7 @@ export class LocalModelTransport implements ChatTransport<Message> {
             effectiveInputBudgetTokens,
             targetTokens,
             reduce: async ({ instructions, prompt, maxOutputTokens }) => {
+                const resolvedModel = await resolveChatModel(input.model, environment);
                 const result = await generateText({
                     model: resolvedModel.model,
                     system: instructions,
@@ -439,14 +440,14 @@ export class LocalModelTransport implements ChatTransport<Message> {
     async compactContext(input: {
         messages: Message[];
         mode: ModeType;
-        model: SupportedChatModelId;
+        model: ModelRef;
         abortSignal?: AbortSignal;
     }): Promise<ManualContextCompactionOutcome> {
         const operationId = crypto.randomUUID();
         const environment = getAgentEnvironment();
         const tools = environment.tools.getModelTools(input.mode) as ToolContracts;
-        const resolvedModel = resolveChatModel(input.model);
-        const contextProfile = resolveModelContextProfile(input.model);
+        const provider = resolveConfiguredProvider(input.model, environment);
+        const contextProfile = resolveModelContextProfile(input.model, provider.kind);
         const validatedMessages = await validateUIMessages<Message>({
             messages: input.messages,
             tools,
@@ -464,6 +465,7 @@ export class LocalModelTransport implements ChatTransport<Message> {
         const contextCompactor = createSemanticContextCompactor({
             profile: contextProfile,
             reduce: async ({ instructions, prompt, maxOutputTokens }) => {
+                const resolvedModel = await resolveChatModel(input.model, environment);
                 const result = await generateText({
                     model: resolvedModel.model,
                     system: instructions,
@@ -542,8 +544,8 @@ export class LocalModelTransport implements ChatTransport<Message> {
         const { mode, model } = resolveExecutionConfig(messages);
         const environment = getAgentEnvironment();
         const tools = environment.tools.getModelTools(mode) as ToolContracts;
-        const resolvedModel = resolveChatModel(model);
-        const contextProfile = resolveModelContextProfile(model);
+        const resolvedModel = await resolveChatModel(model, environment);
+        const contextProfile = resolveModelContextProfile(model, resolvedModel.provider);
         const startedAt = Date.now();
 
         const validatedMessages = await validateUIMessages<Message>({
@@ -553,7 +555,7 @@ export class LocalModelTransport implements ChatTransport<Message> {
         const systemPrompt = buildSystemPrompt({ mode, environment });
         const prefixSources = getPromptPrefixSources(environment);
         const prefixIdentity = createPromptPrefixIdentity({
-            provider: resolvedModel.provider,
+            provider: resolvedModel.providerId,
             model: resolvedModel.modelId,
             mode,
             systemPromptVersion: SYSTEM_PROMPT_VERSION,

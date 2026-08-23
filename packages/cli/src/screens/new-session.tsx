@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import { z } from "zod";
-import { Mode, modeSchema } from "@more-more-code/shared";
+import { modeSchema } from "@more-more-code/shared";
 import { useNavigate, useLocation } from "react-router";
 import { useTheme } from "../providers/theme";
 import { ErrorMessage, UserMessage, BotMessage } from "../components/messages";
@@ -14,7 +14,10 @@ import { getErrorMessage } from "../lib/http-errors";
 const newSessionSchema = z.object({
     message: z.string(),
     mode: modeSchema,
-    model: z.string(),
+    model: z.object({
+        providerId: z.string().min(1),
+        modelId: z.string().min(1),
+    }).strict(),
 })
 
 // 创建默认的聊天对话

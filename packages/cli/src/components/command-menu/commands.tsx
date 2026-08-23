@@ -1,10 +1,10 @@
 import { Children } from "react";
 import type { Command } from "./types";
-import { SUPPORTED_CHAT_MODELS } from "@more-more-code/shared";
-import { ThemeDialogContent, AgentsDialogContent, SessionsDialogContent, ModelsDialogContent, SessionTreeDialogContent, SettingsDialogContent, BranchSummaryDecisionDialogContent, showNavigationResultToast } from "../dialogs";
+import { ThemeDialogContent, AgentsDialogContent, SessionsDialogContent, ModelsDialogContent, ProvidersDialogContent, SessionTreeDialogContent, SettingsDialogContent, BranchSummaryDecisionDialogContent, showNavigationResultToast } from "../dialogs";
 import { performLogin } from "../../lib/oauth";
 import { clearAuth } from "../../lib/auth";
 import { openBillingPortal, openUpgradeCheckout } from "../../lib/upgrade";
+import { getAgentEnvironment } from "../../lib/agent-environment";
 
 async function requestSessionTreeJump(
     ctx: Parameters<NonNullable<Command["action"]>>[0],
@@ -71,11 +71,22 @@ export const COMMANDS: Command[] = [
             ctx.dialog.open({
                 title: "Select Model",
                 children: <ModelsDialogContent 
-                models={SUPPORTED_CHAT_MODELS.map((model) => model.id)}
+                models={getAgentEnvironment().providers.listModelRefs()}
                 onSelectModel={ctx.setModel}
                 />
             })
         }
+    },
+    {
+        name: 'providers',
+        description: "Manage local model providers and credentials",
+        value: "/providers",
+        action: (ctx) => {
+            ctx.dialog.open({
+                title: "Providers",
+                children: <ProvidersDialogContent />,
+            });
+        },
     },
     {
         name: 'sessions',

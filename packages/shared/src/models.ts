@@ -1,20 +1,42 @@
-// 定义可用的模型
 export type ModelPricing = {
     inputUsdPerMillionTokens: number;
     outputUsdPerMillionTokens: number;
-}
+};
 
-export type SupportedProvider = "openai" | "anthropic" | "mistral" | "google" | "deepseek";
+export const BUILT_IN_PROVIDER_KINDS = [
+    "openai",
+    "anthropic",
+    "google",
+    "deepseek",
+] as const;
 
-type SupportedChatModelDefinition = {
+export type BuiltInProviderKind = (typeof BUILT_IN_PROVIDER_KINDS)[number];
+export type ProviderKind = BuiltInProviderKind | "custom";
+export type ProviderId = string;
+
+/**
+ * Canonical model identity. Provider accounts and model identifiers are data,
+ * not a closed TypeScript union, so custom providers can coexist safely.
+ */
+export type ModelRef = {
+    providerId: ProviderId;
+    modelId: string;
+};
+
+/** @deprecated Prefer BuiltInProviderKind/ProviderKind + ProviderId. */
+export type SupportedProvider = BuiltInProviderKind;
+
+type RecommendedChatModelDefinition = {
     id: string;
-    provider: SupportedProvider;
+    provider: BuiltInProviderKind;
     pricing: ModelPricing;
-}
+};
 
+/**
+ * Recommended model metadata used for defaults, pricing hints, and migration.
+ * This is intentionally not an allowlist for Provider Registry model selection.
+ */
 export const SUPPORTED_CHAT_MODELS = [
-    // OpenAI
-    // Standard / short context pricing
     {
         id: "gpt-5.5",
         provider: "openai",
@@ -31,9 +53,6 @@ export const SUPPORTED_CHAT_MODELS = [
             outputUsdPerMillionTokens: 4.5,
         },
     },
-
-    // Anthropic
-    // Claude Sonnet 5 使用 2026-08-31 前 introductory pricing
     {
         id: "claude-sonnet-5",
         provider: "anthropic",
@@ -50,27 +69,6 @@ export const SUPPORTED_CHAT_MODELS = [
             outputUsdPerMillionTokens: 5,
         },
     },
-
-    // Mistral
-    {
-        id: "mistral-medium-latest",
-        provider: "mistral",
-        pricing: {
-            inputUsdPerMillionTokens: 1.5,
-            outputUsdPerMillionTokens: 7.5,
-        },
-    },
-    {
-        id: "mistral-small-latest",
-        provider: "mistral",
-        pricing: {
-            inputUsdPerMillionTokens: 0.15,
-            outputUsdPerMillionTokens: 0.6,
-        },
-    },
-
-    // Google Gemini
-    // Standard paid tier，文本/图像/视频输入价格
     {
         id: "gemini-2.5-flash",
         provider: "google",
@@ -103,14 +101,29 @@ export const SUPPORTED_CHAT_MODELS = [
             outputUsdPerMillionTokens: 0.87,
         },
     },
-
-] as const satisfies readonly SupportedChatModelDefinition[];
+] as const satisfies readonly RecommendedChatModelDefinition[];
 
 export type SupportedChatModel = (typeof SUPPORTED_CHAT_MODELS)[number];
+/** @deprecated Recommended model IDs are not the canonical runtime model type. */
 export type SupportedChatModelId = SupportedChatModel["id"];
 
 export function findSupportedChatModel(modelId: string) {
     return SUPPORTED_CHAT_MODELS.find((model) => model.id === modelId);
 }
 
+export function inferModelRefFromLegacyModelId(modelId: string): ModelRef | null {
+    const definition = findSupportedChatModel(modelId);
+    return definition
+        ? { providerId: definition.provider, modelId: definition.id }
+        : null;
+}
+
+export function modelRefEquals(left: ModelRef | null | undefined, right: ModelRef | null | undefined) {
+    return left?.providerId === right?.providerId && left?.modelId === right?.modelId;
+}
+
 export const DEFAULT_CHAT_MODEL_ID: SupportedChatModelId = "deepseek-v4-flash";
+export const DEFAULT_CHAT_MODEL_REF: ModelRef = {
+    providerId: "deepseek",
+    modelId: DEFAULT_CHAT_MODEL_ID,
+};

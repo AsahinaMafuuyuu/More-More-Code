@@ -34,17 +34,18 @@ describe("Context Runtime Events", () => {
       },
     });
     const secret = "TOP-SECRET-PROMPT";
+    const model = { providerId: "openai", modelId: "gpt-5.5" } as const;
     const messages: Message[] = [{
       id: "message-one",
       role: "user",
       parts: [{ type: "text", text: secret }],
-      metadata: { mode: "PLAN", model: "gpt-5.5" },
+      metadata: { mode: "PLAN", model },
     }];
 
     const outcome = await transport.compactContext({
       messages,
       mode: "PLAN",
-      model: "gpt-5.5",
+      model,
     });
 
     expect(outcome.status).toBe("noop");

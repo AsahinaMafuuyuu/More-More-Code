@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { Chat } from "@ai-sdk/react";
 import type { ChatTransport, UIMessage, UIMessageChunk } from "ai";
+import type { ModelRef } from "@more-more-code/shared";
 import { createAgentUserMessage } from "../src/lib/agent-chat-message";
 
 type TestMessage = UIMessage<{
     mode?: "PLAN" | "BUILD";
-    model?: string;
+    model?: ModelRef | string;
 }>;
 
 const transport: ChatTransport<TestMessage> = {
@@ -33,7 +34,7 @@ describe("agent chat submission", () => {
             id: "run-input-1",
             text: "hello",
             mode: "BUILD",
-            model: "gpt-5.6-sol" as never,
+            model: { providerId: "openai", modelId: "gpt-5.6-sol" },
         });
 
         await expect(chat.sendMessage(request)).resolves.toBeUndefined();

@@ -4,7 +4,7 @@ import InputBar from "./input-bar";
 import { Spinner } from "./spinner";
 import { usePromptConfig } from "../providers/prompt-config";
 import type { SessionTreeCommandApi } from "./command-menu/types";
-import type { ModeType, SupportedChatModelId } from "@more-more-code/shared";
+import type { ModeType, ModelRef } from "@more-more-code/shared";
 import type { ManualContextCompactionOutcome } from "../lib/local-model-transport";
 
 type Props = {
@@ -16,7 +16,7 @@ type Props = {
     interruptible?: boolean;
     sessionTree?: SessionTreeCommandApi;
     onModeChange?: (mode: ModeType) => void;
-    onModelChange?: (model: SupportedChatModelId) => void;
+    onModelChange?: (model: ModelRef) => void;
     onCompact?: () => Promise<ManualContextCompactionOutcome>;
 };
 

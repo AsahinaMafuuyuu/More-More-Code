@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ModeType, SupportedProvider } from "@more-more-code/shared";
+import type { ModeType, ProviderId } from "@more-more-code/shared";
 import type { ToolSetSnapshot } from "./tool-registry";
 
 function normalize(value: unknown): unknown {
@@ -36,7 +36,7 @@ export type PromptPrefixIdentity = {
 };
 
 export function createPromptPrefixIdentity(input: {
-    provider: SupportedProvider;
+    provider: ProviderId;
     model: string;
     mode: ModeType;
     systemPromptVersion: string;
