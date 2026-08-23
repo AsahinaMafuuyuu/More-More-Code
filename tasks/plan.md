@@ -964,7 +964,7 @@ Reconcile ADR/current-state documentation with implemented audit semantics, run 
 
 # Stage 6.2 — Interactive Approval & Permission UX
 
-**Status:** In progress — planned 2026-08-23.
+**Status:** Delivered — 2026-08-23. Provider-independent approval contracts, redacted schema-v3 lifecycle events, same-Tool-Step interactive approval, CLI `Allow once | Deny` UX, approval-aware audit replay, and full delivery verification are complete.
 
 ## Overview
 

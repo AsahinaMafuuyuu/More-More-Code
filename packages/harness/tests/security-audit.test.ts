@@ -416,4 +416,215 @@ describe("security audit projection", () => {
       .toContain("duplicate_terminal");
   });
 
+  test("accepts ask -> approval allow -> executor completion", () => {
+    nextOffset = 1;
+    const requirement = {
+      capability: "process.execute",
+      resourceKind: "command" as const,
+      scope: "workspace" as const,
+    };
+    const requirements = [requirement];
+    const timeline = projectSecurityAuditTimeline("session-one", [
+      runtimeEvent("security", {
+        schemaVersion: 2,
+        kind: "permission.lifecycle",
+        phase: "requested",
+        ...requirement,
+        ...correlation,
+      }),
+      runtimeEvent("security", {
+        schemaVersion: 2,
+        kind: "permission.lifecycle",
+        phase: "decided",
+        ...requirement,
+        decision: "ask",
+        policy: "configured",
+        ...correlation,
+      }),
+      runtimeEvent("security", {
+        schemaVersion: 3,
+        kind: "approval.lifecycle",
+        phase: "requested",
+        approvalId: "approval-one",
+        requirements,
+        ...correlation,
+      }),
+      runtimeEvent("security", {
+        schemaVersion: 3,
+        kind: "approval.lifecycle",
+        phase: "resolved",
+        approvalId: "approval-one",
+        requirements,
+        decision: "allow",
+        ...correlation,
+      }),
+      runtimeEvent("tool", {
+        schemaVersion: 1,
+        kind: "tool.lifecycle",
+        phase: "completed",
+        toolName: "bash",
+        source: "native",
+        status: "completed",
+        durationMs: 2,
+        ...correlation,
+      }),
+    ]);
+
+    expect(timeline.inconsistentCount).toBe(0);
+    expect(timeline.pendingCount).toBe(0);
+    expect(timeline.entries[0]).toEqual(expect.objectContaining({
+      decision: "ask",
+      toolStatus: "completed",
+      status: "complete",
+      issues: [],
+    }));
+    expect(timeline.approvals).toEqual([expect.objectContaining({
+      approvalId: "approval-one",
+      outcome: "allow",
+      status: "complete",
+      requestedOffset: 3,
+      terminalOffset: 4,
+      issues: [],
+    })]);
+  });
+
+  test.each([
+    ["deny", "denied"],
+    ["cancelled", "cancelled"],
+    ["timed_out", "timed_out"],
+  ] as const)("reconciles approval %s with the matching Tool terminal", (outcome, toolStatus) => {
+    nextOffset = 1;
+    const requirement = {
+      capability: "filesystem.write",
+      resourceKind: "path" as const,
+      scope: "workspace" as const,
+    };
+    const requirements = [requirement];
+    const terminalApproval = outcome === "deny"
+      ? {
+          schemaVersion: 3 as const,
+          kind: "approval.lifecycle" as const,
+          phase: "resolved" as const,
+          approvalId: "approval-one",
+          requirements,
+          decision: "deny" as const,
+          ...correlation,
+        }
+      : {
+          schemaVersion: 3 as const,
+          kind: "approval.lifecycle" as const,
+          phase: outcome,
+          approvalId: "approval-one",
+          requirements,
+          ...correlation,
+        };
+
+    const timeline = projectSecurityAuditTimeline("session-one", [
+      runtimeEvent("security", {
+        schemaVersion: 2,
+        kind: "permission.lifecycle",
+        phase: "requested",
+        ...requirement,
+        ...correlation,
+      }),
+      runtimeEvent("security", {
+        schemaVersion: 2,
+        kind: "permission.lifecycle",
+        phase: "decided",
+        ...requirement,
+        decision: "ask",
+        policy: "configured",
+        ...correlation,
+      }),
+      runtimeEvent("security", {
+        schemaVersion: 3,
+        kind: "approval.lifecycle",
+        phase: "requested",
+        approvalId: "approval-one",
+        requirements,
+        ...correlation,
+      }),
+      runtimeEvent("security", terminalApproval),
+      runtimeEvent("tool", {
+        schemaVersion: 1,
+        kind: "tool.lifecycle",
+        phase: "completed",
+        toolName: "writeFile",
+        source: "native",
+        status: toolStatus,
+        durationMs: 2,
+        ...correlation,
+      }),
+    ]);
+
+    expect(timeline.inconsistentCount).toBe(0);
+    expect(timeline.approvals[0]).toEqual(expect.objectContaining({
+      outcome,
+      status: "complete",
+    }));
+  });
+
+  test("flags approval lifecycle and Tool-terminal mismatches", () => {
+    nextOffset = 1;
+    const requirement = {
+      capability: "process.execute",
+      resourceKind: "command" as const,
+      scope: "workspace" as const,
+    };
+    const requirements = [requirement];
+    const timeline = projectSecurityAuditTimeline("session-one", [
+      runtimeEvent("security", {
+        schemaVersion: 2,
+        kind: "permission.lifecycle",
+        phase: "requested",
+        ...requirement,
+        ...correlation,
+      }),
+      runtimeEvent("security", {
+        schemaVersion: 2,
+        kind: "permission.lifecycle",
+        phase: "decided",
+        ...requirement,
+        decision: "ask",
+        policy: "configured",
+        ...correlation,
+      }),
+      runtimeEvent("security", {
+        schemaVersion: 3,
+        kind: "approval.lifecycle",
+        phase: "requested",
+        approvalId: "approval-one",
+        requirements,
+        ...correlation,
+      }),
+      runtimeEvent("security", {
+        schemaVersion: 3,
+        kind: "approval.lifecycle",
+        phase: "resolved",
+        approvalId: "approval-one",
+        requirements: [{
+          capability: "process.execute",
+          resourceKind: "resource",
+          scope: "external",
+        }],
+        decision: "deny",
+        ...correlation,
+      }),
+      runtimeEvent("tool", {
+        schemaVersion: 1,
+        kind: "tool.lifecycle",
+        phase: "completed",
+        toolName: "bash",
+        source: "native",
+        status: "completed",
+        durationMs: 2,
+        ...correlation,
+      }),
+    ]);
+
+    expect(timeline.inconsistentCount).toBeGreaterThanOrEqual(1);
+    expect(timeline.approvals[0]?.issues).toContain("approval_metadata_mismatch");
+    expect(timeline.entries[0]?.issues).toContain("approval_tool_terminal_mismatch");
+  });
+
 });

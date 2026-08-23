@@ -11,6 +11,8 @@ import {
   ErrorMessage,
 } from "../components/messages";
 import { useToast } from "../providers/toast";
+import { useDialog } from "../providers/dialog";
+import { ApprovalDialogContent } from "../components/dialogs";
 import { apiClient } from "../lib/api-client";
 import { getErrorMessage } from "../lib/http-errors";
 import {
@@ -112,6 +114,7 @@ function SessionChat({
   const { mode, model, setMode, setModel } = usePromptConfig(); // 获取当前的模式和模型
   const { isTopLayer } = useKeyboardLayer(); // 获取键盘层状态
   const toast = useToast();
+  const { open: openDialog, close: closeDialog } = useDialog();
   const {
     messages,
     status,
@@ -124,6 +127,9 @@ function SessionChat({
     run,
     busy,
     runtimeRecovery,
+    pendingApproval,
+    resolveApproval,
+    cancelApproval,
     sessionTree,
     inspectNavigation,
     navigateToNode,
@@ -149,6 +155,30 @@ function SessionChat({
       message,
     });
   }, [runtimeRecovery, toast]);
+
+  useEffect(() => {
+    if (!pendingApproval) return;
+
+    const approvalId = pendingApproval.approvalId;
+    openDialog({
+      title: "Tool approval required",
+      children: (
+        <ApprovalDialogContent
+          request={pendingApproval}
+          onResolve={(decision) => {
+            resolveApproval(approvalId, decision);
+          }}
+          onCancel={() => {
+            cancelApproval(approvalId);
+          }}
+        />
+      ),
+    });
+
+    return () => {
+      closeDialog();
+    };
+  }, [pendingApproval, resolveApproval, cancelApproval, openDialog, closeDialog]);
 
   const restorePromptRuntime = useCallback((runtime: SessionRuntimeState) => {
     if (runtime.mode === "BUILD" || runtime.mode === "PLAN") {

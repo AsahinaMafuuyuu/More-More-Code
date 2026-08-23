@@ -21,6 +21,7 @@ export type RuntimeEventType = (typeof RUNTIME_EVENT_TYPES)[number];
 
 export const RUNTIME_EVENT_SCHEMA_VERSION = 1 as const;
 export const RUNTIME_SECURITY_EVENT_SCHEMA_VERSION = 2 as const;
+export const RUNTIME_APPROVAL_EVENT_SCHEMA_VERSION = 3 as const;
 
 type RuntimeCorrelation = {
   runId?: string;
@@ -94,9 +95,31 @@ export type RuntimeSecurityEventPayloadV2 = RuntimePermissionLifecycleBase & (
     }
 );
 
+export type RuntimeApprovalRequirement = {
+  capability: string;
+  resourceKind: "path" | "command" | "resource";
+  scope: "workspace" | "outside-workspace" | "agent-config" | "external";
+};
+
+type RuntimeApprovalLifecycleBase = {
+  schemaVersion: typeof RUNTIME_APPROVAL_EVENT_SCHEMA_VERSION;
+  kind: "approval.lifecycle";
+  approvalId: string;
+  requirements: RuntimeApprovalRequirement[];
+  toolCallId: string;
+} & RuntimeCorrelation;
+
+export type RuntimeSecurityEventPayloadV3 = RuntimeApprovalLifecycleBase & (
+  | { phase: "requested" }
+  | { phase: "resolved"; decision: "allow" | "deny" }
+  | { phase: "cancelled" }
+  | { phase: "timed_out" }
+);
+
 export type RuntimeSecurityEventPayload =
   | RuntimeSecurityEventPayloadV1
-  | RuntimeSecurityEventPayloadV2;
+  | RuntimeSecurityEventPayloadV2
+  | RuntimeSecurityEventPayloadV3;
 
 export type RuntimeContextEventPayload = {
   schemaVersion: typeof RUNTIME_EVENT_SCHEMA_VERSION;
@@ -281,6 +304,33 @@ function isRuntimeSecurityEventPayload(
       && hasValidCorrelation(value);
   }
 
+  if (value.schemaVersion === RUNTIME_APPROVAL_EVENT_SCHEMA_VERSION) {
+    if (value.kind !== "approval.lifecycle"
+      || !isNonEmptyString(value.approvalId)
+      || !isRuntimeApprovalRequirements(value.requirements)
+      || !isNonEmptyString(value.toolCallId)
+      || !hasValidCorrelation(value)
+      || (value.phase !== "requested"
+        && value.phase !== "resolved"
+        && value.phase !== "cancelled"
+        && value.phase !== "timed_out")) {
+      return false;
+    }
+
+    if (value.phase === "resolved") {
+      return hasOnlyKeys(value, [
+        "schemaVersion", "kind", "phase", "approvalId", "requirements",
+        "decision", "toolCallId", "runId", "turnId", "stepId",
+      ])
+        && (value.decision === "allow" || value.decision === "deny");
+    }
+
+    return hasOnlyKeys(value, [
+      "schemaVersion", "kind", "phase", "approvalId", "requirements",
+      "toolCallId", "runId", "turnId", "stepId",
+    ]);
+  }
+
   if (value.schemaVersion !== RUNTIME_SECURITY_EVENT_SCHEMA_VERSION
     || value.kind !== "permission.lifecycle"
     || (value.phase !== "requested" && value.phase !== "decided")
@@ -305,6 +355,16 @@ function isRuntimeSecurityEventPayload(
   ])
     && isPermissionEffect(value.decision)
     && isPermissionPolicySource(value.policy);
+}
+
+function isRuntimeApprovalRequirements(value: unknown): value is RuntimeApprovalRequirement[] {
+  return Array.isArray(value)
+    && value.length > 0
+    && value.every((requirement) => isRecord(requirement)
+      && hasOnlyKeys(requirement, ["capability", "resourceKind", "scope"])
+      && isNonEmptyString(requirement.capability)
+      && isPermissionResourceKind(requirement.resourceKind)
+      && isPermissionScope(requirement.scope));
 }
 
 export function isRuntimeJsonValue(value: unknown): value is RuntimeJsonValue {

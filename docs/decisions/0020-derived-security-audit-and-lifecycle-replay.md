@@ -25,7 +25,7 @@ Harness provides a pure, provider-independent `projectSecurityAuditTimeline(sess
 - Schema-v1 permission decisions remain readable as explicit `legacy` decision-only audit entries. The projector does not invent a missing request.
 - The projector classifies entries as `complete | pending | legacy | inconsistent` and reports durable event offsets for evidence.
 - Lifecycle replay validates structural and enforcement invariants: missing/orphan/duplicate request/decision facts, decision-before-request, metadata mismatches, missing/duplicate Tool terminals, and permission-to-terminal consistency.
-- Terminal verification is Tool-call aggregate aware. If any capability is `deny`, the Tool terminal must be `denied`; otherwise if any capability is `ask`, it must be `approval_required`; only a fully allowed capability set may proceed to an executor terminal.
+- Terminal verification is Tool-call aggregate aware. If any capability is `deny`, the Tool terminal must be `denied`. For legacy permission-only histories, `ask` terminates as `approval_required`; ADR-0021 extends new histories so a matching schema-v3 approval may resolve allow/deny/cancel/timeout and the eventual Tool terminal must agree with that human outcome.
 - Replay verification is **lifecycle consistency replay**, not policy recomputation. It never claims to rerun command/path/resource rule matching from redacted events.
 - Foreign-session events are rejected rather than silently mixed into one audit projection.
 
@@ -56,4 +56,4 @@ Rejected. Pattern matching is application policy. Process, filesystem, network, 
 - Phase 6 can detect lifecycle corruption or enforcement disagreement after restart without claiming impossible policy recomputation.
 - Legacy v1 events remain visible but carry less evidence than v2 request/decision pairs.
 - The audit projector is intentionally derived and does not enlarge RuntimeSession snapshots.
-- Interactive approval, shell-AST-aware command authorization, and OS-level Sandbox enforcement remain separate follow-up work.
+- ADR-0021 extends this derived projection with schema-v3 interactive approval transactions. Shell-AST-aware command authorization and OS-level Sandbox enforcement remain separate follow-up work.

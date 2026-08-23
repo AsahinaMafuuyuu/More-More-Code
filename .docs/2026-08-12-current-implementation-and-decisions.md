@@ -1070,9 +1070,9 @@ Tool Runtime enforcement
 
 规则支持 capability、command、path、generic resource 与 `workspace | outside-workspace | agent-config | external` scope；同一规则内各维度为 AND，pattern 数组为 OR，普通规则按声明顺序 last-match-wins。最终不可覆盖的 `outside-workspace` deny 保持 policy 与 native executor 一致。路径 glob 中 `*` 不跨 segment、`**` 可跨 segment，Windows 按不区分大小写匹配。Tool Registry 与 native filesystem executor 共享 canonical resolver：既有 symlink/junction 解析真实目标，新建目标解析最近存在父目录。Tool Runtime 对每个 capability 逐项 awaited evaluation，并在 executor 前执行最终结果。
 
-权限 Runtime Event 使用独立的 schema v2 `requested | decided` lifecycle，同时兼容读取旧 v1 decision。持久化内容只有 capability、resource kind、scope、decision/source 与 correlation IDs；原始命令、路径、Tool input/output 和 policy reason 不进入 Runtime Store。
+权限 Runtime Event 使用独立的 schema v2 `requested | decided` lifecycle，同时兼容读取旧 v1 decision；Stage 6.2 又增加独立 schema v3 `approval.lifecycle requested | resolved | cancelled | timed_out`。持久化内容只有 capability、resource kind、scope、decision/source、approval ID 与 correlation IDs；原始命令、路径、Tool input/output 和 policy reason 不进入 Runtime Store。
 
-`ask` 当前规范化为 `approval_required`；交互式审批界面和 OS-level Sandbox 仍未实现，也不由 Permission Engine 假装提供。
+`ask` 不再由 Permission Engine 假装批准，也不再成为模型可见死路：Stage 6.2 由独立 Approval Broker 在原 Tool Step 内等待 `Allow once | Deny`。Permission Engine 仍只负责规则判断；OS-level Sandbox 仍未实现。
 
 ### 16.6 Sandbox
 
@@ -1261,7 +1261,15 @@ CLI Tool Step 现在区分 normalized executor outcome 与 permission/observer/R
 
 Phase 6 已在 Harness 增加 `projectSecurityAuditTimeline(sessionId, events)`，直接从 session-scoped Runtime Event stream 派生权限审计时间线，而不把完整 audit history 写入 `RuntimeSessionProjection` 或 snapshot。schema-v2 `requested / decided` 通过 Run/Turn/Step/Tool-call/capability 关联，v1 decision 保留为 `legacy` 条目；投影显式区分 `complete / pending / legacy / inconsistent` 并保留 durable offsets 作为证据。
 
-Replay 的定义固定为 **security lifecycle consistency replay**，而不是 policy recomputation。由于 v2 按 ADR-0019 不持久化 raw command/path/resource value，重启后不能严谨重跑原始 `matchesPermissionRule()`；审计层只验证可由 durable facts 证明的结构和 enforcement invariants，包括 request/decision 缺失、重复、乱序、metadata mismatch、Tool terminal 缺失/重复，以及 Tool-call 聚合后的 `deny -> denied`、`ask -> approval_required`、全 allow 才能进入 executor terminal。危险操作回归同时覆盖组合 command pattern、multi-capability blocking、absolute/symlink/junction workspace escape，以及 policy/observer failure 的 fail-closed 行为。命令 glob 仍属于应用层 policy，不等于 shell parser 或 OS-level Sandbox。
+Replay 的定义固定为 **security lifecycle consistency replay**，而不是 policy recomputation。由于 v2/v3 按 ADR-0019/0021 不持久化 raw command/path/resource value，重启后不能严谨重跑原始 `matchesPermissionRule()`；审计层只验证可由 durable facts 证明的结构和 enforcement invariants。Stage 6.0 的 permission-only 历史中 `ask -> approval_required`；Stage 6.2 新历史则通过 schema-v3 approval 证明 `ask + allow -> executor`，并验证 deny/cancel/timeout 与 Tool terminal 一致。危险操作回归同时覆盖组合 command pattern、multi-capability blocking、absolute/symlink/junction workspace escape，以及 policy/observer failure 的 fail-closed 行为。命令 glob 仍属于应用层 policy，不等于 shell parser 或 OS-level Sandbox。
+
+### 16.14 Interactive Approval & Permission UX：Stage 6.2
+
+Stage 6.2 将 `ask` 从 fail-closed 的产品死路升级为真实的一次性人类审批事务，同时保持 `PermissionPolicy` 与交互式批准分离。Harness 新增 `ApprovalBroker` contract；CLI 使用 process-local `InteractiveApprovalBroker` 管理 pending transaction。Tool Runtime 会先完成同一 Tool Call 的所有 capability evaluation：任一 deny 直接阻止且不会弹框；没有 deny 时，所有 ask requirements 聚合成一个 approval request。用户 `Allow once` 后继续**同一个 Tool Step**，不要求模型重发 Tool Call；Deny、Escape/关闭 Dialog、Run interrupt 与 approval timeout 均不会执行 executor。
+
+审批 UI 可以显示 process-local 的 raw command/path/resource value 以帮助用户判断，但这些值不会跨 durable seam。schema-v3 `approval.lifecycle` 只持久化 `approvalId`、ask requirement 的 capability/resourceKind/scope 与 Run/Turn/Step/Tool-call correlation；终态为 `resolved allow|deny`、`cancelled` 或 `timed_out`。`approval_requested` 必须先 durable append 才会进入 broker；用户 Allow 后，`approval_resolved` 也必须先 durable append 才能调用 executor。任一 observer/Runtime Store/broker infrastructure failure 都保持 fail-closed。
+
+Stage 6.0 的 derived security audit projector 已扩展到 v3 approval：旧 v1/v2 permission-only history 仍保持兼容；新历史允许 `ask + approval allow -> executor terminal`，并检查 approval deny/cancel/timeout 与 Tool terminal 的一致性。Stage 6.2 只提供 `Allow once / Deny`，不会自动写 global/project permission config；allow-for-session/project、shell-AST-aware command authorization、MCP authorization 与 OS-level Sandbox 继续独立后置。
 
 ---
 
@@ -1315,7 +1323,7 @@ Cloud persistence 应保持外围能力。
 
 ## 18. 当前阶段边界与后续候选
 
-Stage 4.1 Agent Bootstrap、Stage 4.2 Skill Registry、Stage 5 Context & Provider Runtime、Stage 5.1 Session/Context 语义收口、Stage 6 Tool Runtime 第一版、Stage 6.1 native shell cancellation，以及 Stage 6.0 的 recoverable runtime / permission enforcement / security audit validation 均已完成。当前从启动到 Model Step / Tool Step 的链路已经形成：
+Stage 4.1 Agent Bootstrap、Stage 4.2 Skill Registry、Stage 5 Context & Provider Runtime、Stage 5.1 Session/Context 语义收口、Stage 6 Tool Runtime 第一版、Stage 6.1 native shell cancellation、Stage 6.0 recoverable runtime / permission enforcement / security audit validation，以及 Stage 6.2 interactive approval 均已完成。当前从启动到 Model Step / Tool Step 的链路已经形成：
 
 ```text
 CLI bootstrap
@@ -1332,12 +1340,16 @@ Provider Adapter / Model Step
   ↓
 AgentLoop Tool Step
   ↓
-Tool Runtime → Registry / Effective Permission Policy / Timeout / Source Adapter
+Tool Runtime → Registry / Effective Permission Policy
+  ↓ ask only
+Interactive Approval Broker → Allow once / Deny
+  ↓ allow
+Tool Executor / Timeout / Source Adapter
   ↓
 Redacted Runtime Events → SQLite snapshot + replay
 ```
 
-Stage 6.0 的 session-scoped security audit timeline、v1/v2 lifecycle consistency replay 与 dangerous-operation validation 已完成。后续可独立推进 MCP transport adapter、交互式 approval UI、OS-level Sandbox、cloud Runtime Event sync、exact tokenizer 或产品级 Subagent runtime；其中任何一项都不应重新把职责塞入 `AgentLoop`、`ContextManager` 或 OpenAI-specific adapter。
+Stage 6.2 已补齐一次性交互式 approval，并将 v3 approval lifecycle 纳入安全审计。下一安全阶段优先考虑 OS-level Sandbox / process isolation，以补齐当前 canonical-path + command-policy 无法提供的 no-follow、进程、网络与系统资源隔离；之后再扩大 MCP remote Tool trust boundary 更稳妥。Cloud Runtime Event sync、allow-for-session/project、exact tokenizer 或产品级 Subagent runtime 仍可独立推进；其中任何一项都不应重新把职责塞入 `AgentLoop`、`ContextManager` 或 OpenAI-specific adapter。
 
 当前关键边界已经分离：
 
@@ -1347,6 +1359,7 @@ Execution Events         = Run / Turn / Step 实际发生了什么
 Context Projection       = 当前 Model Step 发给模型什么，以及 stable→dynamic ordering / compaction checkpoint
 Provider Runtime         = provider-specific model/options/cache telemetry 编译
 Tool Runtime             = tool visibility / capability / policy / cancellation / timeout / normalized result
+Approval Broker          = process-local human approval transaction / Allow once / Deny
 Message / UI Projection  = 当前 branch 显示哪些聊天/树信息
 Runtime State Projection = 当前 branch 恢复哪些 model / mode / config
 Agent Environment        = 当前进程加载了哪些 global/project instructions、skills 与 tool sources
@@ -1382,7 +1395,8 @@ docs/decisions/
 ├── 0017-production-runtime-wiring-and-redacted-event-protocol.md
 ├── 0018-governed-multi-agent-collaboration.md
 ├── 0019-effective-permission-policy-and-redacted-lifecycle.md
-└── 0020-derived-security-audit-and-lifecycle-replay.md
+├── 0020-derived-security-audit-and-lifecycle-replay.md
+└── 0021-interactive-tool-approval-transactions.md
 ```
 
 其中：
@@ -1404,5 +1418,6 @@ docs/decisions/
 - ADR-0018 记录仓库级受治理多代理协作规则。
 - ADR-0019 记录 effective permission policy、Tool Runtime enforcement 与 redacted schema-v2 permission lifecycle。
 - ADR-0020 记录 derived security audit timeline、lifecycle consistency replay 与 application policy / OS Sandbox 边界。
+- ADR-0021 记录 Tool-call approval transaction、PermissionPolicy/ApprovalBroker 职责分离、same-Step resume 与 redacted schema-v3 approval lifecycle。
 
 本文件属于近期工程状态快照，不替代正式 ADR。

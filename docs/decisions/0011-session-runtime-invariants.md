@@ -24,7 +24,7 @@ Session event appearance is semantic theme data. Message, capability-call, compa
 
 Local capability handling receives a dedicated Runtime boundary. AgentLoop owns Run/Turn/Step orchestration and decides when a capability step occurs; the Runtime owns registry visibility, capability metadata, permission decisions, timeout/cancellation propagation, source selection, and normalized outcomes. Native capabilities are the first source. MCP remains a future source adapter.
 
-Permission decisions use `allow | deny | ask`. `ask` is normalized as `approval_required`; interactive approval and OS-level sandbox enforcement remain future work. Durable result entries may add optional status/source/timing metadata while preserving existing output/error fields.
+Permission decisions use `allow | deny | ask`. At the time of this ADR, `ask` was normalized as fail-closed `approval_required`; ADR-0021 later adds a separate interactive Approval Broker that can resume the same Tool Step after an explicit one-time allow. OS-level sandbox enforcement remains separate. Durable result entries may add optional status/source/timing metadata while preserving existing output/error fields.
 
 ## Alternatives Considered
 
@@ -38,4 +38,4 @@ Permission decisions use `allow | deny | ask`. `ask` is normalized as `approval_
 - Restored sessions reconstruct message, runtime, and checkpoint projections from one durable tree.
 - Session event colors are controlled by themes.
 - Local capability outcomes have stable status and timing semantics.
-- MCP transport, interactive approval UI, OS-level sandboxing, WAL/crash recovery, cloud conflict handling, and Subagent Runtime remain deferred.
+- Interactive one-time approval is subsequently delivered by ADR-0021. MCP transport, persistent approval scopes, OS-level sandboxing, cloud conflict handling, and Subagent Runtime remain deferred; local runtime recovery/WAL concerns are addressed separately by the Stage 6.0 Runtime Store decisions.

@@ -177,6 +177,7 @@ export {
   isRuntimeEventType,
   isRuntimeEventPayload,
   isRuntimeJsonValue,
+  RUNTIME_APPROVAL_EVENT_SCHEMA_VERSION,
   RUNTIME_EVENT_SCHEMA_VERSION,
   RUNTIME_SECURITY_EVENT_SCHEMA_VERSION,
   RUNTIME_EVENT_TYPES,
@@ -184,6 +185,7 @@ export {
 export type {
   EventStore,
   PersistedExecutionEvent,
+  RuntimeApprovalRequirement,
   RuntimeContextEventPayload,
   RuntimeEvent,
   RuntimeEventInput,
@@ -195,6 +197,7 @@ export type {
   RuntimeSecurityEventPayload,
   RuntimeSecurityEventPayloadV1,
   RuntimeSecurityEventPayloadV2,
+  RuntimeSecurityEventPayloadV3,
   RuntimeSnapshot,
   RuntimeSnapshotInput,
   RuntimeSnapshotStore,
@@ -205,6 +208,9 @@ export type {
 } from "./event-store";
 export { projectSecurityAuditTimeline } from "./security-audit";
 export type {
+  ApprovalAuditEntry,
+  ApprovalAuditIssue,
+  ApprovalAuditOutcome,
   SecurityAuditEntry,
   SecurityAuditIssue,
   SecurityAuditStatus,
@@ -237,6 +243,14 @@ export type {
   RuntimeSessionRecoveryReport,
   RuntimeSessionSnapshotDiagnostics,
 } from "./runtime-session";
+export { ApprovalCancelledError, isApprovalResolution } from "./approval";
+export type {
+  ApprovalBroker,
+  ApprovalDecision,
+  ApprovalRequest,
+  ApprovalRequestOptions,
+  ApprovalResolution,
+} from "./approval";
 export {
   DefaultPermissionPolicy,
   canExecute,

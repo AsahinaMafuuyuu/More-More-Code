@@ -17,6 +17,11 @@ import { ToolRegistry } from "../src/lib/tool-registry";
 
 const tempRoots: string[] = [];
 const allowAllPermissionPolicy = new DefaultPermissionPolicy();
+const allowApprovalBroker = {
+    async request() {
+        return { decision: "allow" as const };
+    },
+};
 
 afterEach(async () => {
     await Promise.all(tempRoots.splice(0).map((path) => rm(path, {
@@ -238,6 +243,7 @@ describe("agent bootstrap", () => {
             registry,
             executors: [blockingExecutor],
             permissionPolicy: allowAllPermissionPolicy,
+            approvalBroker: allowApprovalBroker,
         });
         const pending = cancellationRuntime.run({
             toolName: "readFile",
@@ -250,6 +256,7 @@ describe("agent bootstrap", () => {
         const timeoutRuntime = new ToolRuntime({
             registry,
             permissionPolicy: allowAllPermissionPolicy,
+            approvalBroker: allowApprovalBroker,
             executors: [blockingExecutor],
             defaultTimeoutMs: 5,
         });
@@ -267,6 +274,7 @@ describe("agent bootstrap", () => {
         const runtime = new ToolRuntime({
             registry,
             permissionPolicy: allowAllPermissionPolicy,
+            approvalBroker: allowApprovalBroker,
             executors: [{
                 source: "native",
                 execute(toolName, input, context) {
@@ -331,10 +339,11 @@ describe("agent bootstrap", () => {
             registry,
             executors: [{ source: "native", async execute() { return null; } }],
             permissionPolicy: { decide: () => ({ effect, policy: "configured" }) },
+            approvalBroker: allowApprovalBroker,
         });
 
         expect((await createRuntime("deny").run({ toolName: "readFile", input: { path: "README.md" }, context })).status).toBe("denied");
-        expect((await createRuntime("ask").run({ toolName: "readFile", input: { path: "README.md" }, context })).status).toBe("approval_required");
+        expect((await createRuntime("ask").run({ toolName: "readFile", input: { path: "README.md" }, context })).status).toBe("completed");
     });
 
     test("routes registered native tools through normalized runtime outcomes", async () => {
@@ -343,6 +352,7 @@ describe("agent bootstrap", () => {
         const runtime = new ToolRuntime({
             registry,
             permissionPolicy: allowAllPermissionPolicy,
+            approvalBroker: allowApprovalBroker,
             executors: [{
                 source: "native",
                 async execute() {
@@ -388,6 +398,7 @@ describe("agent bootstrap", () => {
         const runtime = new ToolRuntime({
             registry,
             permissionPolicy: allowAllPermissionPolicy,
+            approvalBroker: allowApprovalBroker,
             executors: [{
                 source: "native",
                 async execute() {
@@ -429,6 +440,7 @@ describe("agent bootstrap", () => {
         const failingRuntime = new ToolRuntime({
             registry,
             permissionPolicy: allowAllPermissionPolicy,
+            approvalBroker: allowApprovalBroker,
             executors: [{
                 source: "native",
                 async execute() {

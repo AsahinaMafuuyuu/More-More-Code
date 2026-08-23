@@ -290,8 +290,8 @@ CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为
 3. **云 Session 已升级为 Session Entry Tree v3，但同步仍是 last-write-wins**
    v3 直接持久化 append-only `entries[]`；message、tool、runtime-state change、compaction 与 branch summary 都是可分支的 Session Entries，旧 linear/v1/v2 状态在 CLI 恢复时兼容升级。`POST /sessions/:id/state` 仍没有 revision / optimistic concurrency / conflict resolution。
 
-4. **Durable Runtime Store、有效权限策略与派生安全审计已成为完整安全基础**
-   Run / Turn / Step 通过 `RuntimeSession` 串行写入并投影本地 SQLite events；snapshot failure 不再把已提交 append 误报为失败。Tool Runtime 使用 Harness 的统一 `allow | deny | ask` contract，把 code defaults、global config 与 project config 合成为 last-match-wins effective policy，并按 command/path/resource/scope 在 executor 前执行；构造 Tool Runtime 必须显式注入 PermissionPolicy，不再存在隐式 allow-all。Tool/Context/system 使用严格白名单 v1 payload；permission lifecycle 使用可兼容旧 decision 的 v2 request/decision payload。Harness 的 `projectSecurityAuditTimeline` 直接从 session-scoped Runtime Events 派生审计视图，关联 v2 request/decision 与 Tool terminal、保留 v1 legacy decision，并检测缺失/重复/乱序、metadata mismatch 及 permission-terminal 冲突。Replay 只验证 lifecycle consistency，不从脱敏事件伪造 policy recomputation；审计历史也不复制进 RuntimeSession snapshot。
+4. **Durable Runtime Store、有效权限策略、交互式审批与派生安全审计已形成完整应用层安全链**
+   Run / Turn / Step 通过 `RuntimeSession` 串行写入并投影本地 SQLite events；snapshot failure 不再把已提交 append 误报为失败。Tool Runtime 使用 Harness 的统一 `allow | deny | ask` contract，把 code defaults、global config 与 project config 合成为 last-match-wins effective policy，并按 command/path/resource/scope 在 executor 前执行；构造 Tool Runtime 必须显式注入 PermissionPolicy 与 ApprovalBroker。所有 capability 先完成评估：任一 deny 直接阻止，多个 ask 聚合为一次 Tool-call approval。CLI 只提供 Allow once / Deny，原始 command/path/resource 只在 process-local approval request 中展示，不写 permission config。Tool/Context/system 使用严格白名单 v1 payload；permission lifecycle 使用 v2，approval lifecycle 使用 v3，均兼容旧 v1 decision。Harness 的 `projectSecurityAuditTimeline` 关联 permission、approval 与 Tool terminal，检测缺失/重复/乱序、metadata mismatch 及 enforcement 冲突。Replay 只验证 lifecycle consistency，不从脱敏事件伪造 policy recomputation；审计历史也不复制进 RuntimeSession snapshot。
 
 5. **Tool cancellation 已贯通，但仍不是 OS-level Sandbox**
    Tool Runtime 已统一 timeout/cancellation，Bash 会终止受监控的进程组，支持 AbortSignal 的文件操作也会协作取消；路径检查与进程取消仍不能替代命令、网络、资源和权限范围的系统级隔离。
@@ -329,7 +329,8 @@ CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为
 - 多 Provider 的本地抽象；
 - 默认启用的本地 SQLite Runtime Store、严格脱敏 Runtime Event、snapshot-plus-replay recovery 与未完成工作提示；
 - Harness 统一 permission policy、global/project persisted overrides、Tool Runtime capability enforcement 与脱敏 permission lifecycle；
-- 派生 security audit timeline、v1/v2 lifecycle consistency replay 与 dangerous-operation enforcement validation；
+- Tool-call-level Interactive Approval Broker、Allow once / Deny CLI 审批、same-Step resume、approval cancel/timeout 与脱敏 schema-v3 approval lifecycle；
+- 派生 security audit timeline、v1/v2/v3 lifecycle consistency replay 与 dangerous-operation enforcement validation；
 - AgentLoop / lifecycle interaction / ExecutionEventStore / Execution Projection / ContextManager / Session Tree 确定性测试基础。
 
-Stage 6.0 的 security audit projection、旧 v1 / 新 v2 permission lifecycle consistency replay 与危险操作策略覆盖已经完成。后续优先级应转向独立的 MCP transport/auth、交互式 approval、OS-level Sandbox 或 Cloud revision/conflict sync；这些能力不应重新塞回 AgentLoop。精确 tokenizer 仍可作为 provider adapter 的独立增强项。
+Stage 6.2 已补齐原先 `ask -> approval_required` 的产品死路：Human approval 现在留在原 Tool Step 内，并且请求/允许事实都必须 durable 后才能继续。后续优先级应转向 OS-level Sandbox / process isolation，再考虑 MCP transport/auth 或 Cloud revision/conflict sync；持久化 allow-for-session/project 仍应单独设计，不应混入一次性审批。精确 tokenizer 仍可作为 provider adapter 的独立增强项。

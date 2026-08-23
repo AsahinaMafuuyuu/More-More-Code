@@ -24,7 +24,7 @@ Harness owns one provider-independent permission interface and a deep `RulePermi
 - Ordinary rules are evaluated in declaration order and the last matching rule wins. CLI composes code defaults first, then persisted global config, then persisted project config, so more specific project rules can override earlier defaults without duplicating the evaluator. A final non-overridable `outside-workspace` deny keeps policy decisions aligned with native filesystem execution.
 - Path patterns are segment-aware (`*` stays within one segment; `**` may cross segments) and use case-insensitive matching on Windows. Tool Registry and native file execution share one canonical resolver: existing symlinks/junctions resolve to their real target, while create targets resolve their nearest existing ancestor before containment is decided.
 
-Tool Registry owns native Tool capability metadata and translates Tool input into ephemeral permission resources. Tool Runtime requires an explicit `PermissionPolicy` dependency; it has no implicit allow-all fallback. It asks the Harness policy once per registered capability, awaits a redacted request observation before evaluation, awaits a redacted decision observation afterward, and invokes an executor only when every effective decision allows it. `deny` produces `denied`; `ask` produces `approval_required`. A thrown policy/observer/Runtime Store error is infrastructure failure and propagates to AgentLoop rather than being normalized as an ordinary Tool outcome.
+Tool Registry owns native Tool capability metadata and translates Tool input into ephemeral permission resources. Tool Runtime requires an explicit `PermissionPolicy` dependency; it has no implicit allow-all fallback. It asks the Harness policy once per registered capability and awaits redacted request/decision observations. Stage 6.2 / ADR-0021 subsequently adds a separate Approval Broker: any deny still blocks immediately, while ask decisions are batched into one Tool-call approval and may continue the same Tool Step only after an explicit one-time human allow. A thrown policy/observer/Runtime Store error remains infrastructure failure and propagates to AgentLoop.
 
 Permission security payloads use an independently versioned schema v2 lifecycle:
 
@@ -54,7 +54,7 @@ Rejected because code defaults would prevent later global/project overrides from
 
 ### Treat `ask` as implicit approval
 
-Rejected because no interactive approval transaction exists yet. Returning `approval_required` is explicit and fail-closed without conflating policy with UI or sandbox enforcement.
+Rejected because policy must never manufacture human consent. Stage 6.0 therefore used fail-closed `approval_required`; ADR-0021 later adds a separate explicit Approval Broker without changing this policy principle.
 
 ## Consequences
 
@@ -64,4 +64,4 @@ Rejected because no interactive approval transaction exists yet. Returning `appr
 - Security events support request/decision correlation without storing raw commands, paths, Tool input/output, or reasons.
 - ADR-0020 completes the Phase 6 session-scoped derived audit projection over both legacy v1 decisions and v2 lifecycle events, using lifecycle consistency replay rather than redacted policy recomputation.
 - Canonical path validation closes existing-link escape but retains a check/use race; OS-level no-follow filesystem isolation remains a separate Sandbox follow-up.
-- Interactive approval UI, OS-level process/network sandboxing, and MCP-specific authorization remain separate follow-up work.
+- ADR-0021 completes one-time interactive approval while preserving Permission Policy separation. Persistent approval scopes, OS-level process/network sandboxing, and MCP-specific authorization remain separate follow-up work.

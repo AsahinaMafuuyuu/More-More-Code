@@ -10,6 +10,7 @@ import {
 } from "@more-more-code/shared";
 import {
     AgentLoop,
+    RUNTIME_APPROVAL_EVENT_SCHEMA_VERSION,
     RUNTIME_EVENT_SCHEMA_VERSION,
     RUNTIME_SECURITY_EVENT_SCHEMA_VERSION,
     appendSessionEntry,
@@ -52,6 +53,7 @@ import {
 import type { BranchSummaryReductionOutcome } from "../lib/branch-summary-reducer";
 import { getRuntimeSession } from "../lib/runtime-environment";
 import { createEffectivePermissionPolicy } from "../lib/permission-policy";
+import { InteractiveApprovalBroker } from "../lib/interactive-approval-broker";
 
 export type { Message } from "../lib/chat-types";
 
@@ -103,13 +105,17 @@ function toolFailureCode(result: ToolExecutionResult) {
     }
 }
 
-function createLocalToolRuntime(runtimeSession: RuntimeSession) {
+function createLocalToolRuntime(
+    runtimeSession: RuntimeSession,
+    approvalBroker: InteractiveApprovalBroker,
+) {
     const environment = getAgentEnvironment();
     return {
         workspaceRoot: environment.config.paths.workspaceRoot,
         runtime: new ToolRuntime({
             registry: environment.tools,
             permissionPolicy: createEffectivePermissionPolicy(environment.config.resolved),
+            approvalBroker,
             executors: [{
                 source: "native",
                 execute(toolName, input, context) {
@@ -170,6 +176,49 @@ function createLocalToolRuntime(runtimeSession: RuntimeSession) {
                             scope: event.scope,
                             decision: event.decision,
                             policy: event.policy,
+                            ...correlation,
+                        },
+                    });
+                    return;
+                }
+                if (event.type === "approval_requested") {
+                    await runtimeSession.record({
+                        type: "security",
+                        payload: {
+                            schemaVersion: RUNTIME_APPROVAL_EVENT_SCHEMA_VERSION,
+                            kind: "approval.lifecycle",
+                            phase: "requested",
+                            approvalId: event.approvalId,
+                            requirements: event.requirements,
+                            ...correlation,
+                        },
+                    });
+                    return;
+                }
+                if (event.type === "approval_resolved") {
+                    await runtimeSession.record({
+                        type: "security",
+                        payload: {
+                            schemaVersion: RUNTIME_APPROVAL_EVENT_SCHEMA_VERSION,
+                            kind: "approval.lifecycle",
+                            phase: "resolved",
+                            approvalId: event.approvalId,
+                            requirements: event.requirements,
+                            decision: event.decision,
+                            ...correlation,
+                        },
+                    });
+                    return;
+                }
+                if (event.type === "approval_cancelled" || event.type === "approval_timed_out") {
+                    await runtimeSession.record({
+                        type: "security",
+                        payload: {
+                            schemaVersion: RUNTIME_APPROVAL_EVENT_SCHEMA_VERSION,
+                            kind: "approval.lifecycle",
+                            phase: event.type === "approval_cancelled" ? "cancelled" : "timed_out",
+                            approvalId: event.approvalId,
+                            requirements: event.requirements,
                             ...correlation,
                         },
                     });
@@ -265,6 +314,7 @@ function getStepMetadata(input: {
 
 export function useChat(sessionId: string, persistedSessionState: unknown) {
     const runtimeSession = useMemo(() => getRuntimeSession(sessionId), [sessionId]);
+    const approvalBroker = useMemo(() => new InteractiveApprovalBroker(), [sessionId]);
     const agentLoop = useMemo(
         () => new AgentLoop({ eventStore: runtimeSession }),
         [runtimeSession],
@@ -273,6 +323,7 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
     const [busy, setBusy] = useState(false);
     const [runtimeRecovery, setRuntimeRecovery] = useState<RuntimeSessionRecoveryReport | null>(null);
     const [runtimeError, setRuntimeError] = useState<Error | null>(null);
+    const [pendingApprovals, setPendingApprovals] = useState(() => approvalBroker.getPending());
     const [sessionTree, setSessionTree] = useState<SessionTreeState<Message>>(() =>
         restoreSessionTree<Message>(persistedSessionState),
     );
@@ -299,6 +350,16 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
             active = false;
         };
     }, [runtimeSession]);
+
+    useEffect(() => {
+        const unsubscribe = approvalBroker.subscribe((pending) => {
+            setPendingApprovals([...pending]);
+        });
+        return () => {
+            unsubscribe();
+            approvalBroker.cancelAll();
+        };
+    }, [approvalBroker]);
 
     const transport = useMemo(() => {
         return new LocalModelTransport({
@@ -659,6 +720,15 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         ...(input.decision ? { decision: input.decision } : {}),
     }), [navigateToEntry]);
 
+    const resolveApproval = useCallback((
+        approvalId: string,
+        decision: "allow" | "deny",
+    ) => approvalBroker.resolve(approvalId, decision), [approvalBroker]);
+
+    const cancelApproval = useCallback((approvalId: string) => {
+        return approvalBroker.cancel(approvalId, "Approval dialog dismissed");
+    }, [approvalBroker]);
+
     return {
         messages: chat.messages,
         status: chat.status,
@@ -666,6 +736,9 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         run,
         busy,
         runtimeRecovery,
+        pendingApproval: pendingApprovals[0] ?? null,
+        resolveApproval,
+        cancelApproval,
         sessionTree,
         inspectNavigation,
         navigateToEntry,
@@ -795,7 +868,10 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
 
                             let toolRuntimeResult: ToolExecutionResult | null = null;
                             try {
-                                const { runtime: toolRuntime, workspaceRoot } = createLocalToolRuntime(runtimeSession);
+                                const { runtime: toolRuntime, workspaceRoot } = createLocalToolRuntime(
+                                    runtimeSession,
+                                    approvalBroker,
+                                );
                                 toolRuntimeResult = await toolRuntime.run({
                                     toolName: toolCall.toolName,
                                     input: toolCall.input,

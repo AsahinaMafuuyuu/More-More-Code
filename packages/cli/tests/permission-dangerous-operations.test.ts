@@ -47,6 +47,11 @@ function fakeRuntime(options: {
     registry: options.registry,
     permissionPolicy: options.permissionPolicy
       ?? createEffectivePermissionPolicy(mergeAgentConfig({}, {})),
+    approvalBroker: {
+      async request() {
+        return { decision: "allow" as const };
+      },
+    },
     executors: [{
       source: "native",
       async execute() {

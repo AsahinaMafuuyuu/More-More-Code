@@ -33,7 +33,7 @@
 ## Deferred
 
 - [ ] MCP transport / remote tool execution
-- [ ] Interactive permission approval UI
+- [x] Interactive permission approval UI (delivered in Stage 6.2 as Allow once / Deny)
 - [ ] OS-level Sandbox enforcement
 - [ ] Local WAL / crash recovery
 - [ ] Cloud revision/conflict sync
@@ -264,31 +264,31 @@
 
 ## Phase 1: Approval Contract & Durable Protocol
 
-- [ ] Add provider-independent Tool-call approval transaction contracts in Harness.
-- [ ] Add redacted independently versioned `approval.lifecycle` Runtime Events with v1/v2 compatibility.
-- [ ] Verify raw command/path/resource values cannot cross the durable approval event seam.
+- [x] Add provider-independent Tool-call approval transaction contracts in Harness.
+- [x] Add redacted independently versioned `approval.lifecycle` Runtime Events with v1/v2 compatibility.
+- [x] Verify raw command/path/resource values cannot cross the durable approval event seam.
 
 ## Phase 2: Tool Runtime & Interactive Broker
 
-- [ ] Refactor Tool Runtime to evaluate all capabilities before prompting and batch all ask requirements into one Tool-call approval.
-- [ ] Continue the same Tool Step after `Allow once`; block executor on deny/cancel/timeout.
-- [ ] Implement process-local `InteractiveApprovalBroker` with subscription, exact resolution, and abort cleanup.
-- [ ] Make approval waiting independently timeout-aware and Run-interruptible.
+- [x] Refactor Tool Runtime to evaluate all capabilities before prompting and batch all ask requirements into one Tool-call approval.
+- [x] Continue the same Tool Step after `Allow once`; block executor on deny/cancel/timeout.
+- [x] Implement process-local `InteractiveApprovalBroker` with subscription, exact resolution, and abort cleanup.
+- [x] Make approval waiting independently timeout-aware and Run-interruptible.
 
 ## Phase 3: Audit Compatibility & CLI UX
 
-- [ ] Extend security audit replay to validate approval lifecycle and interactive ask outcomes.
-- [ ] Add CLI approval dialog showing ephemeral operation details with `Allow once` and `Deny` only.
-- [ ] Treat Escape/dialog dismissal and Session unmount as approval cancellation with no stranded Tool Step.
-- [ ] Verify approval actions never persist global/project permission overrides.
+- [x] Extend security audit replay to validate approval lifecycle and interactive ask outcomes.
+- [x] Add CLI approval dialog showing ephemeral operation details with `Allow once` and `Deny` only.
+- [x] Treat Escape/dialog dismissal and Session unmount as approval cancellation with no stranded Tool Step.
+- [x] Verify approval actions never persist global/project permission overrides.
 
 ## Phase 4: Documentation & Delivery
 
-- [ ] Add/update ADR, README, CONTEXT, PROJECT_ANALYSIS, CHANGELOG, and current-state documentation for Stage 6.2.
-- [ ] Run approval-focused and full Harness/CLI/Runtime Store tests.
-- [ ] Run Shared/Harness/CLI/Server/Database/Runtime Store typechecks.
-- [ ] Run CLI/Server builds, both Prisma validate/generate paths, and `git diff --check`.
-- [ ] Complete integrated security review with no residual P0/P1 and commit Stage 6.2.
+- [x] Add/update ADR, README, CONTEXT, PROJECT_ANALYSIS, CHANGELOG, and current-state documentation for Stage 6.2.
+- [x] Run approval-focused and full Harness/CLI/Runtime Store tests.
+- [x] Run Shared/Harness/CLI/Server/Database/Runtime Store typechecks.
+- [x] Run CLI/Server builds, both Prisma validate/generate paths, and `git diff --check`.
+- [x] Complete integrated security review with no residual P0/P1 and commit Stage 6.2.
 
 ## Explicitly Deferred from Stage 6.2
 

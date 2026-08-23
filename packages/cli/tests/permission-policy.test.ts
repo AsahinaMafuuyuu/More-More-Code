@@ -8,6 +8,12 @@ import { createEffectivePermissionPolicy } from "../src/lib/permission-policy";
 import { ToolRegistry } from "../src/lib/tool-registry";
 import { ToolRuntime } from "../src/lib/tool-runtime";
 
+const allowApprovalBroker = {
+  async request() {
+    return { decision: "allow" as const };
+  },
+};
+
 describe("permission configuration and policy", () => {
   test("merges global rules before project rules so project overrides win", async () => {
     const resolved = mergeAgentConfig(
@@ -278,6 +284,7 @@ describe("ToolRuntime permission enforcement", () => {
     const runtime = new ToolRuntime({
       registry,
       permissionPolicy: createEffectivePermissionPolicy(resolved),
+      approvalBroker: allowApprovalBroker,
       executors: [{
         source: "native",
         async execute() {
@@ -315,6 +322,7 @@ describe("ToolRuntime permission enforcement", () => {
       permissionPolicy: {
         decide: () => ({ effect: "unexpected", policy: "default" }) as never,
       },
+      approvalBroker: allowApprovalBroker,
       executors: [{
         source: "native",
         async execute() {

@@ -1,9 +1,14 @@
 import type { ModeType } from "@more-more-code/shared";
 import {
+    ApprovalCancelledError,
+    isApprovalResolution,
     isPermissionDecision,
+    type ApprovalBroker,
+    type ApprovalRequest,
     type PermissionDecision,
     type PermissionEffect,
     type PermissionPolicy,
+    type PermissionRequest,
     type PermissionResourceKind,
     type PermissionScope,
 } from "@more-more-code/harness";
@@ -51,9 +56,17 @@ export type ToolRuntimeOptions = {
     registry: ToolRegistry;
     executors: ToolExecutor[];
     permissionPolicy: PermissionPolicy;
+    approvalBroker: ApprovalBroker;
+    approvalTimeoutMs?: number;
     defaultTimeoutMs?: number;
     now?: () => number;
     observer?: ToolRuntimeObserver;
+};
+
+export type ToolRuntimeApprovalRequirement = {
+    capability: string;
+    resourceKind: PermissionResourceKind;
+    scope: PermissionScope;
 };
 
 export type ToolRuntimeObserverEvent =
@@ -79,6 +92,35 @@ export type ToolRuntimeObserverEvent =
         scope: PermissionScope;
         decision: PermissionEffect;
         policy: "default" | "configured";
+        context: ToolRuntimeObservationContext;
+    }
+    | {
+        type: "approval_requested";
+        approvalId: string;
+        toolName: string;
+        requirements: ToolRuntimeApprovalRequirement[];
+        context: ToolRuntimeObservationContext;
+    }
+    | {
+        type: "approval_resolved";
+        approvalId: string;
+        toolName: string;
+        requirements: ToolRuntimeApprovalRequirement[];
+        decision: "allow" | "deny";
+        context: ToolRuntimeObservationContext;
+    }
+    | {
+        type: "approval_cancelled";
+        approvalId: string;
+        toolName: string;
+        requirements: ToolRuntimeApprovalRequirement[];
+        context: ToolRuntimeObservationContext;
+    }
+    | {
+        type: "approval_timed_out";
+        approvalId: string;
+        toolName: string;
+        requirements: ToolRuntimeApprovalRequirement[];
         context: ToolRuntimeObservationContext;
     }
     | {
@@ -117,6 +159,8 @@ export class ToolRuntime {
     private readonly registry: ToolRegistry;
     private readonly executors: Map<ToolSourceKind, ToolExecutor>;
     private readonly permissionPolicy: PermissionPolicy;
+    private readonly approvalBroker: ApprovalBroker;
+    private readonly approvalTimeoutMs: number;
     private readonly defaultTimeoutMs: number;
     private readonly now: () => number;
     private readonly observer?: ToolRuntimeObserver;
@@ -125,6 +169,8 @@ export class ToolRuntime {
         this.registry = options.registry;
         this.executors = new Map(options.executors.map((executor) => [executor.source, executor]));
         this.permissionPolicy = options.permissionPolicy;
+        this.approvalBroker = options.approvalBroker;
+        this.approvalTimeoutMs = options.approvalTimeoutMs ?? 5 * 60_000;
         this.defaultTimeoutMs = options.defaultTimeoutMs ?? 120_000;
         this.now = options.now ?? Date.now;
         this.observer = options.observer;
@@ -156,19 +202,36 @@ export class ToolRuntime {
         }
 
         const permission = await this.evaluatePermissions(tool, request);
-        if (permission?.effect === "deny") {
+        if (permission.denied) {
             return this.finishAndObserve(request.context, {
                 ...base,
                 status: "denied",
-                error: permission.reason ?? `Permission denied for tool ${request.toolName}`,
+                error: permission.denied.reason ?? `Permission denied for tool ${request.toolName}`,
             });
         }
-        if (permission?.effect === "ask") {
-            return this.finishAndObserve(request.context, {
-                ...base,
-                status: "approval_required",
-                error: permission.reason ?? `Tool ${request.toolName} requires approval`,
-            });
+        if (permission.asks.length > 0) {
+            const approval = await this.awaitApproval(tool, permission.asks, request);
+            if (approval === "deny") {
+                return this.finishAndObserve(request.context, {
+                    ...base,
+                    status: "denied",
+                    error: `Approval denied for tool ${request.toolName}`,
+                });
+            }
+            if (approval === "cancelled") {
+                return this.finishAndObserve(request.context, {
+                    ...base,
+                    status: "cancelled",
+                    error: `Approval cancelled for tool ${request.toolName}`,
+                });
+            }
+            if (approval === "timed_out") {
+                return this.finishAndObserve(request.context, {
+                    ...base,
+                    status: "timed_out",
+                    error: `Approval timed out for tool ${request.toolName}`,
+                });
+            }
         }
 
         // Permission evaluation may be async. Re-check before installing the
@@ -202,19 +265,27 @@ export class ToolRuntime {
     private async evaluatePermissions(
         tool: RegisteredToolDefinition,
         request: ToolExecutionRequest,
-    ): Promise<PermissionDecision | null> {
+    ): Promise<{
+        denied: PermissionDecision | null;
+        asks: PermissionRequest[];
+    }> {
         const permissionRequests = await this.registry.getPermissionRequests(
             tool,
             request.input,
             request.context.workspaceRoot,
         );
-        let blockingDecision: PermissionDecision | null = null;
+        let denied: PermissionDecision | null = null;
+        const asks: PermissionRequest[] = [];
 
         for (const permissionRequest of permissionRequests) {
             const resource = permissionRequest.resource ?? {
                 kind: "resource" as const,
                 value: `tool:${request.toolName}`,
                 scope: "workspace" as const,
+            };
+            const normalizedRequest: PermissionRequest = {
+                capability: permissionRequest.capability,
+                resource,
             };
             const observation = {
                 toolName: request.toolName,
@@ -227,7 +298,7 @@ export class ToolRuntime {
                 type: "permission_requested",
                 ...observation,
             });
-            const decision = await this.permissionPolicy.decide(permissionRequest);
+            const decision = await this.permissionPolicy.decide(normalizedRequest);
             if (!isPermissionDecision(decision)) {
                 throw new Error("Permission policy returned an invalid decision");
             }
@@ -238,13 +309,97 @@ export class ToolRuntime {
                 policy: decision.policy,
             });
 
-            if (decision.effect === "deny"
-                || (decision.effect === "ask" && blockingDecision?.effect !== "deny")) {
-                blockingDecision = decision;
-            }
+            if (decision.effect === "deny") denied ??= decision;
+            if (decision.effect === "ask") asks.push(normalizedRequest);
         }
 
-        return blockingDecision;
+        return { denied, asks };
+    }
+
+    private async awaitApproval(
+        tool: RegisteredToolDefinition,
+        requirements: PermissionRequest[],
+        request: ToolExecutionRequest,
+    ): Promise<"allow" | "deny" | "cancelled" | "timed_out"> {
+        if (request.context.signal.aborted) return "cancelled";
+
+        const approvalId = crypto.randomUUID();
+        const observationRequirements = requirements.map((requirement) => {
+            const resource = requirement.resource!;
+            return {
+                capability: requirement.capability,
+                resourceKind: resource.kind,
+                scope: resource.scope,
+            };
+        });
+        const observation = {
+            approvalId,
+            toolName: request.toolName,
+            requirements: observationRequirements,
+            context: redactToolExecutionContext(request.context),
+        };
+
+        await this.observe({
+            type: "approval_requested",
+            ...observation,
+        });
+
+        const controller = new AbortController();
+        let timedOut = false;
+        const propagateAbort = () => controller.abort(request.context.signal.reason);
+        request.context.signal.addEventListener("abort", propagateAbort, { once: true });
+        const timer = this.approvalTimeoutMs > 0
+            ? setTimeout(() => {
+                timedOut = true;
+                controller.abort(new Error(`Approval timed out after ${this.approvalTimeoutMs}ms`));
+            }, this.approvalTimeoutMs)
+            : null;
+
+        const approvalRequest: ApprovalRequest = {
+            approvalId,
+            sessionId: request.context.sessionId,
+            runId: request.context.runId,
+            turnId: request.context.turnId,
+            stepId: request.context.stepId,
+            toolCallId: request.context.toolCallId,
+            toolName: tool.name,
+            requirements,
+        };
+
+        try {
+            const brokerPromise = this.approvalBroker.request(approvalRequest, {
+                signal: controller.signal,
+            });
+            const resolution = await awaitWithAbort(brokerPromise, controller.signal);
+            if (!isApprovalResolution(resolution)) {
+                throw new Error("Approval broker returned an invalid resolution");
+            }
+            await this.observe({
+                type: "approval_resolved",
+                ...observation,
+                decision: resolution.decision,
+            });
+            return resolution.decision;
+        } catch (error) {
+            if (timedOut) {
+                await this.observe({
+                    type: "approval_timed_out",
+                    ...observation,
+                });
+                return "timed_out";
+            }
+            if (request.context.signal.aborted || error instanceof ApprovalCancelledError) {
+                await this.observe({
+                    type: "approval_cancelled",
+                    ...observation,
+                });
+                return "cancelled";
+            }
+            throw error;
+        } finally {
+            if (timer) clearTimeout(timer);
+            request.context.signal.removeEventListener("abort", propagateAbort);
+        }
     }
 
     private async finishAndObserve(
@@ -314,6 +469,35 @@ export class ToolRuntime {
             request.context.signal.removeEventListener("abort", propagateAbort);
         }
     }
+}
+
+function awaitWithAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+    if (signal.aborted) {
+        return Promise.reject(signal.reason instanceof Error
+            ? signal.reason
+            : new Error("Approval was cancelled"));
+    }
+
+    return new Promise<T>((resolve, reject) => {
+        const onAbort = () => {
+            cleanup();
+            reject(signal.reason instanceof Error
+                ? signal.reason
+                : new Error("Approval was cancelled"));
+        };
+        const cleanup = () => signal.removeEventListener("abort", onAbort);
+        signal.addEventListener("abort", onAbort, { once: true });
+        promise.then(
+            (value) => {
+                cleanup();
+                resolve(value);
+            },
+            (error) => {
+                cleanup();
+                reject(error);
+            },
+        );
+    });
 }
 
 function redactToolExecutionResult(

@@ -48,6 +48,11 @@ All notable changes to MORE MORE CODE are recorded here.
 - Security lifecycle consistency replay that validates request/decision/Tool-terminal invariants without reconstructing redacted command, path, or resource values.
 - Dangerous-operation coverage for composed command patterns, multi-capability denial, outside-workspace symlink/junction paths, and fail-closed policy/observer failures.
 - ADR-0020 documenting derived audit projection, lifecycle consistency replay, and the boundary between application policy and OS-level sandboxing.
+- Provider-independent Tool-call approval transaction contracts and a process-local CLI `InteractiveApprovalBroker` with exact one-time resolution, abort cleanup, and Session-unmount cancellation.
+- Interactive Tool approval UI with ephemeral operation details and `Allow once | Deny` choices; dismiss/Escape cancels the pending transaction and never mutates permission config.
+- Independently versioned schema-v3 `approval.lifecycle` Runtime Events with strict redaction and schema-v1/v2 backward compatibility.
+- Approval-aware security audit replay correlating `ask` permission decisions, human approval outcomes, and Tool terminals.
+- ADR-0021 documenting Permission Policy / Approval Broker separation, same-Tool-Step resume, write-ahead approval ordering, and one-time approval scope.
 
 ### Changed
 
@@ -73,10 +78,12 @@ All notable changes to MORE MORE CODE are recorded here.
 - RuntimeSession now serializes same-Session append/projection work; derived snapshot failure preserves committed event success and records bounded-backoff retry diagnostics.
 - CLI Tool Step infrastructure failures now propagate to AgentLoop instead of being converted into ordinary Tool outcomes that permit later side effects.
 - Tool Runtime construction now requires an explicit `PermissionPolicy`; the implicit allow-all fallback was removed from the security enforcement seam.
+- Tool Runtime now evaluates all capabilities before prompting, batches all asks for one Tool Call into one approval transaction, and resumes the original Tool Step only after an awaited durable `Allow once` resolution.
+- Approval request/resolution observer failures are fail-closed: broker interaction cannot start before a durable request fact, and executor invocation cannot start before a durable approval-allow fact.
 
 ### Deferred
 
-- MCP transport/auth/remote tool execution, interactive permission approval UI, OS-level Sandbox enforcement, and product-level Subagent runtime remain outside this delivery slice.
+- MCP transport/auth/remote tool execution, persistent allow-for-session/project rules, OS-level Sandbox enforcement, and product-level Subagent runtime remain outside this delivery slice.
 
 ## [2.0.1] - 2026-08-13
 

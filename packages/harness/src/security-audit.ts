@@ -5,9 +5,11 @@ import type {
   PermissionScope,
 } from "./permission";
 import type {
+  RuntimeApprovalRequirement,
   RuntimeEvent,
   RuntimeSecurityEventPayloadV1,
   RuntimeSecurityEventPayloadV2,
+  RuntimeSecurityEventPayloadV3,
   RuntimeToolEventPayload,
   RuntimeToolStatus,
 } from "./event-store";
@@ -23,7 +25,20 @@ export type SecurityAuditIssue =
   | "duplicate_terminal"
   | "deny_must_not_execute"
   | "ask_requires_approval"
-  | "allow_cannot_be_policy_blocked";
+  | "allow_cannot_be_policy_blocked"
+  | "multiple_approvals"
+  | "approval_requirement_mismatch"
+  | "approval_tool_terminal_mismatch";
+
+export type ApprovalAuditIssue =
+  | "missing_approval_terminal"
+  | "orphan_approval_terminal"
+  | "duplicate_approval_request"
+  | "duplicate_approval_terminal"
+  | "approval_terminal_before_request"
+  | "approval_metadata_mismatch";
+
+export type ApprovalAuditOutcome = "allow" | "deny" | "cancelled" | "timed_out";
 
 export type SecurityAuditStatus =
   | "complete"
@@ -51,9 +66,26 @@ export type SecurityAuditEntry = {
   issues: SecurityAuditIssue[];
 };
 
+export type ApprovalAuditEntry = {
+  schemaVersion: 3;
+  sessionId: string;
+  runId?: string;
+  turnId?: string;
+  stepId?: string;
+  toolCallId: string;
+  approvalId: string;
+  requirements: RuntimeApprovalRequirement[];
+  outcome?: ApprovalAuditOutcome;
+  requestedOffset?: number;
+  terminalOffset?: number;
+  status: Exclude<SecurityAuditStatus, "legacy">;
+  issues: ApprovalAuditIssue[];
+};
+
 export type SecurityAuditTimeline = {
   sessionId: string;
   entries: SecurityAuditEntry[];
+  approvals: ApprovalAuditEntry[];
   inconsistentCount: number;
   pendingCount: number;
   legacyCount: number;
@@ -74,7 +106,22 @@ type V2Group = {
   }>;
 };
 
+type V3Group = {
+  toolKey: string;
+  approvalId: string;
+  requests: Array<SecurityRuntimeEvent & {
+    payload: Extract<RuntimeSecurityEventPayloadV3, { phase: "requested" }>;
+  }>;
+  terminals: Array<SecurityRuntimeEvent & {
+    payload: Exclude<RuntimeSecurityEventPayloadV3, { phase: "requested" }>;
+  }>;
+};
+
 type InternalAuditEntry = SecurityAuditEntry & {
+  toolKey: string;
+};
+
+type InternalApprovalAuditEntry = ApprovalAuditEntry & {
   toolKey: string;
 };
 
@@ -96,7 +143,9 @@ export function projectSecurityAuditTimeline(
   }
 
   const groups = new Map<string, V2Group>();
+  const approvalGroups = new Map<string, V3Group>();
   const entries: InternalAuditEntry[] = [];
+  const approvals: InternalApprovalAuditEntry[] = [];
   const terminals = new Map<string, ToolRuntimeEvent[]>();
 
   for (const event of ordered) {
@@ -117,6 +166,23 @@ export function projectSecurityAuditTimeline(
       continue;
     }
 
+    if (event.payload.schemaVersion === 3) {
+      const key = approvalCorrelationKey(event.payload);
+      const group = approvalGroups.get(key) ?? {
+        toolKey: toolCorrelationKey(event.payload),
+        approvalId: event.payload.approvalId,
+        requests: [],
+        terminals: [],
+      };
+      if (event.payload.phase === "requested") {
+        group.requests.push(event as V3Group["requests"][number]);
+      } else {
+        group.terminals.push(event as V3Group["terminals"][number]);
+      }
+      approvalGroups.set(key, group);
+      continue;
+    }
+
     const key = permissionCorrelationKey(event.payload);
     const group = groups.get(key) ?? {
       toolKey: toolCorrelationKey(event.payload),
@@ -134,21 +200,35 @@ export function projectSecurityAuditTimeline(
   for (const group of groups.values()) {
     entries.push(createV2Entry(sessionId, group));
   }
+  for (const group of approvalGroups.values()) {
+    approvals.push(createApprovalEntry(sessionId, group));
+  }
 
-  applyToolTerminalVerification(entries, terminals);
+  applyToolTerminalVerification(entries, approvals, terminals);
 
   entries.sort((left, right) => {
     const leftOffset = left.requestedOffset ?? left.decidedOffset ?? Number.MAX_SAFE_INTEGER;
     const rightOffset = right.requestedOffset ?? right.decidedOffset ?? Number.MAX_SAFE_INTEGER;
     return leftOffset - rightOffset || left.capability.localeCompare(right.capability);
   });
+  approvals.sort((left, right) => {
+    const leftOffset = left.requestedOffset ?? left.terminalOffset ?? Number.MAX_SAFE_INTEGER;
+    const rightOffset = right.requestedOffset ?? right.terminalOffset ?? Number.MAX_SAFE_INTEGER;
+    return leftOffset - rightOffset || left.approvalId.localeCompare(right.approvalId);
+  });
 
   const publicEntries = entries.map(({ toolKey: _toolKey, ...entry }) => entry);
+  const publicApprovals = approvals.map(({ toolKey: _toolKey, ...entry }) => entry);
   return {
     sessionId,
     entries: publicEntries,
-    inconsistentCount: publicEntries.filter((entry) => entry.status === "inconsistent").length,
-    pendingCount: publicEntries.filter((entry) => entry.status === "pending").length,
+    approvals: publicApprovals,
+    inconsistentCount:
+      publicEntries.filter((entry) => entry.status === "inconsistent").length
+      + publicApprovals.filter((entry) => entry.status === "inconsistent").length,
+    pendingCount:
+      publicEntries.filter((entry) => entry.status === "pending").length
+      + publicApprovals.filter((entry) => entry.status === "pending").length,
     legacyCount: publicEntries.filter((entry) => entry.status === "legacy").length,
   };
 }
@@ -218,8 +298,53 @@ function createLegacyEntry(
   };
 }
 
+function createApprovalEntry(
+  sessionId: string,
+  group: V3Group,
+): InternalApprovalAuditEntry {
+  const request = group.requests[0];
+  const terminal = group.terminals[0];
+  const source = request?.payload ?? terminal?.payload;
+  if (!source) {
+    throw new Error("Security audit approval group has no lifecycle events");
+  }
+
+  const issues: ApprovalAuditIssue[] = [];
+  if (group.requests.length === 0) issues.push("orphan_approval_terminal");
+  if (group.requests.length > 1) issues.push("duplicate_approval_request");
+  if (group.terminals.length === 0) issues.push("missing_approval_terminal");
+  if (group.terminals.length > 1) issues.push("duplicate_approval_terminal");
+
+  if (request && terminal) {
+    if (terminal.offset < request.offset) {
+      issues.push("approval_terminal_before_request");
+    }
+    if (!sameApprovalRequirements(request.payload.requirements, terminal.payload.requirements)) {
+      issues.push("approval_metadata_mismatch");
+    }
+  }
+
+  const entry: InternalApprovalAuditEntry = {
+    schemaVersion: 3,
+    sessionId,
+    ...copyCorrelation(source),
+    toolCallId: source.toolCallId,
+    approvalId: source.approvalId,
+    requirements: structuredClone(request?.payload.requirements ?? terminal?.payload.requirements ?? []),
+    ...(terminal ? { outcome: approvalOutcome(terminal.payload) } : {}),
+    ...(request ? { requestedOffset: request.offset } : {}),
+    ...(terminal ? { terminalOffset: terminal.offset } : {}),
+    status: "complete",
+    issues,
+    toolKey: group.toolKey,
+  };
+  entry.status = resolveApprovalStatus(entry);
+  return entry;
+}
+
 function applyToolTerminalVerification(
   entries: InternalAuditEntry[],
+  approvals: InternalApprovalAuditEntry[],
   terminals: Map<string, ToolRuntimeEvent[]>,
 ): void {
   const byTool = new Map<string, InternalAuditEntry[]>();
@@ -229,9 +354,17 @@ function applyToolTerminalVerification(
     byTool.set(entry.toolKey, toolEntries);
   }
 
+  const approvalsByTool = new Map<string, InternalApprovalAuditEntry[]>();
+  for (const approval of approvals) {
+    const toolApprovals = approvalsByTool.get(approval.toolKey) ?? [];
+    toolApprovals.push(approval);
+    approvalsByTool.set(approval.toolKey, toolApprovals);
+  }
+
   for (const [toolKey, toolEntries] of byTool) {
     const terminalEvents = terminals.get(toolKey) ?? [];
     const terminal = terminalEvents[0];
+    const toolApprovals = approvalsByTool.get(toolKey) ?? [];
 
     if (terminalEvents.length > 1) {
       for (const entry of toolEntries) addIssue(entry, "duplicate_terminal");
@@ -260,8 +393,37 @@ function applyToolTerminalVerification(
           for (const entry of toolEntries) addIssue(entry, "deny_must_not_execute");
         }
       } else if (decisions.includes("ask")) {
-        if (terminal.payload.status !== "approval_required") {
-          for (const entry of toolEntries) addIssue(entry, "ask_requires_approval");
+        if (toolApprovals.length === 0) {
+          if (terminal.payload.status !== "approval_required") {
+            for (const entry of toolEntries) addIssue(entry, "ask_requires_approval");
+          }
+        } else {
+          if (toolApprovals.length > 1) {
+            for (const entry of toolEntries) addIssue(entry, "multiple_approvals");
+          }
+          const approval = toolApprovals[0]!;
+          const askRequirements = toolEntries
+            .filter((entry) => entry.decision === "ask")
+            .flatMap((entry) => entry.resourceKind && entry.scope
+              ? [{
+                  capability: entry.capability,
+                  resourceKind: entry.resourceKind,
+                  scope: entry.scope,
+                }]
+              : []);
+          if (!sameApprovalRequirements(askRequirements, approval.requirements)) {
+            for (const entry of toolEntries) addIssue(entry, "approval_requirement_mismatch");
+          }
+
+          const expectedStatus = expectedToolStatusForApproval(approval.outcome);
+          if (expectedStatus === "execute") {
+            if (terminal.payload.status === "denied"
+              || terminal.payload.status === "approval_required") {
+              for (const entry of toolEntries) addIssue(entry, "approval_tool_terminal_mismatch");
+            }
+          } else if (expectedStatus && terminal.payload.status !== expectedStatus) {
+            for (const entry of toolEntries) addIssue(entry, "approval_tool_terminal_mismatch");
+          }
         }
       } else if (terminal.payload.status === "denied"
         || terminal.payload.status === "approval_required") {
@@ -273,6 +435,53 @@ function applyToolTerminalVerification(
       entry.status = resolveEntryStatus(entry);
     }
   }
+}
+
+function expectedToolStatusForApproval(
+  outcome: ApprovalAuditOutcome | undefined,
+): RuntimeToolStatus | "execute" | undefined {
+  switch (outcome) {
+    case "allow":
+      return "execute";
+    case "deny":
+      return "denied";
+    case "cancelled":
+      return "cancelled";
+    case "timed_out":
+      return "timed_out";
+    default:
+      return undefined;
+  }
+}
+
+function approvalOutcome(
+  payload: Exclude<RuntimeSecurityEventPayloadV3, { phase: "requested" }>,
+): ApprovalAuditOutcome {
+  if (payload.phase === "resolved") return payload.decision;
+  return payload.phase;
+}
+
+function resolveApprovalStatus(
+  entry: ApprovalAuditEntry,
+): Exclude<SecurityAuditStatus, "legacy"> {
+  if (entry.issues.length === 0) return "complete";
+  if (entry.issues.length === 1 && entry.issues[0] === "missing_approval_terminal") {
+    return "pending";
+  }
+  return "inconsistent";
+}
+
+function sameApprovalRequirements(
+  left: readonly RuntimeApprovalRequirement[],
+  right: readonly RuntimeApprovalRequirement[],
+): boolean {
+  const normalize = (requirements: readonly RuntimeApprovalRequirement[]) => requirements
+    .map((requirement) => `${requirement.capability}\u0000${requirement.resourceKind}\u0000${requirement.scope}`)
+    .sort();
+  const normalizedLeft = normalize(left);
+  const normalizedRight = normalize(right);
+  return normalizedLeft.length === normalizedRight.length
+    && normalizedLeft.every((value, index) => value === normalizedRight[index]);
 }
 
 function resolveEntryStatus(entry: SecurityAuditEntry): SecurityAuditStatus {
@@ -296,6 +505,10 @@ function addIssue(entry: SecurityAuditEntry, issue: SecurityAuditIssue): void {
 
 function permissionCorrelationKey(payload: RuntimeSecurityEventPayloadV2): string {
   return `${toolCorrelationKey(payload)}\u0000${payload.capability}`;
+}
+
+function approvalCorrelationKey(payload: RuntimeSecurityEventPayloadV3): string {
+  return `${toolCorrelationKey(payload)}\u0000${payload.approvalId}`;
 }
 
 function toolCorrelationKey(payload: {
