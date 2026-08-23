@@ -599,7 +599,7 @@ Expose Carry / No Carry / Cancel when `ask` applies and add the `ask | always | 
 
 # Stage 6.0 — Recoverable Runtime & Security Foundation
 
-**Status:** In progress — persistence/recovery foundation delivered 2026-08-22 and production runtime wiring delivered 2026-08-23; permission and audit phases remain.
+**Status:** In progress — persistence/recovery, production runtime wiring, and permission enforcement are delivered; Phase 6 audit and validation remains.
 
 ## Overview
 
@@ -616,7 +616,7 @@ Upgrade the local Agent Runtime into a recoverable and auditable runtime without
 - Memory Projection Cache is disposable hot state. SQLite is the durable local runtime source of truth.
 - CLI startup owns one per-user Runtime Store at `~/.more-more-code/runtime/runtime.db` and applies embedded versioned migrations without invoking Prisma CLI.
 - Runtime Event payloads are strict versioned allowlists; critical execution/Tool/Context start facts are durably appended before the corresponding external side effect, with no in-memory fallback.
-- Existing CLI Tool Runtime remains the final permission-enforcement boundary. A later slice will consolidate its policy contract with the Harness policy engine.
+- Existing CLI Tool Runtime remains the final permission-enforcement boundary and consumes the unified Harness permission policy contract. Every `ToolRuntime` instance must receive an explicit policy; omission must not silently become allow-all.
 
 ## Dependency Graph
 
@@ -911,11 +911,35 @@ Harness Runtime Event contract
 
 ## Phase 6: Audit Follow-up
 
-### Task 14: Add security audit projection and validation
+### Task 14: Add a session-scoped security audit projection
 
-Project a session-scoped security timeline, verify replayed decisions, and cover dangerous command/path/scope cases.
+Project persisted `security` Runtime Events into a derived Harness audit timeline rather than storing an ever-growing audit array in `RuntimeSessionProjection` snapshots. Pair v2 `requested -> decided` facts by session/correlation metadata, retain v1 decisions as explicit legacy decision-only entries, and surface incomplete/duplicate/mismatched lifecycles without reconstructing redacted resource values.
+
+**Verification:** Harness tests for v1/v2 compatibility, session isolation, ordering, and malformed lifecycle sequences.
 
 **Dependencies:** Task 13.
+
+### Task 15: Verify permission lifecycle replay invariants
+
+Define replay verification as **security lifecycle consistency replay**, not policy recomputation. Schema-v2 intentionally excludes raw command/path/resource values, so recovery must not claim it can rerun `matchesPermissionRule()` from durable facts. Verify request/decision metadata consistency, forbid orphan/duplicate decisions, and ensure `deny` cannot reach executor completion while `ask` terminates as `approval_required`; only `allow` may proceed.
+
+**Verification:** replay tests for valid allow/deny/ask flows and each inconsistency class.
+
+**Dependencies:** Task 14.
+
+### Task 16: Add dangerous-operation validation
+
+Stress the enforcement seam with command/path/symlink or junction/multi-capability/fail-closed cases. Cover representative shell-pattern bypass attempts, traversal/absolute/create-under-link cases, `editFile` and `grep` multi-capability blocking, plus policy throw/invalid return and permission-observer persistence failure with executor call count remaining zero. Document explicitly that command-pattern matching is policy enforcement, not an OS sandbox.
+
+**Verification:** focused CLI/Harness dangerous-operation tests plus normal integration suites.
+
+**Dependencies:** Task 15.
+
+### Task 17: Complete Stage 6.0 audit and delivery
+
+Reconcile ADR/current-state documentation with implemented audit semantics, run the complete Stage 6.0 verification matrix, and close the Stage only when no residual P0/P1 audit findings remain. Documentation must explicitly distinguish lifecycle consistency replay from impossible redacted policy recomputation.
+
+**Dependencies:** Task 16.
 
 ## Final Verification
 

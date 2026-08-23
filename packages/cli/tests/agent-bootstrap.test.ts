@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, mkdir, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
+import { DefaultPermissionPolicy } from "@more-more-code/harness";
 import { mergeAgentConfig } from "../src/lib/agent-config";
 import { loadAgentEnvironment } from "../src/lib/agent-environment";
 import {
@@ -15,6 +16,7 @@ import { ToolRuntime } from "../src/lib/tool-runtime";
 import { ToolRegistry } from "../src/lib/tool-registry";
 
 const tempRoots: string[] = [];
+const allowAllPermissionPolicy = new DefaultPermissionPolicy();
 
 afterEach(async () => {
     await Promise.all(tempRoots.splice(0).map((path) => rm(path, {
@@ -232,7 +234,11 @@ describe("agent bootstrap", () => {
             mode: "BUILD" as const,
             signal: controller.signal,
         };
-        const cancellationRuntime = new ToolRuntime({ registry, executors: [blockingExecutor] });
+        const cancellationRuntime = new ToolRuntime({
+            registry,
+            executors: [blockingExecutor],
+            permissionPolicy: allowAllPermissionPolicy,
+        });
         const pending = cancellationRuntime.run({
             toolName: "readFile",
             input: { path: "README.md" },
@@ -243,6 +249,7 @@ describe("agent bootstrap", () => {
 
         const timeoutRuntime = new ToolRuntime({
             registry,
+            permissionPolicy: allowAllPermissionPolicy,
             executors: [blockingExecutor],
             defaultTimeoutMs: 5,
         });
@@ -259,6 +266,7 @@ describe("agent bootstrap", () => {
         const workspaceRoot = await createTempRoot("more-more-code-shell-runtime-");
         const runtime = new ToolRuntime({
             registry,
+            permissionPolicy: allowAllPermissionPolicy,
             executors: [{
                 source: "native",
                 execute(toolName, input, context) {
@@ -334,6 +342,7 @@ describe("agent bootstrap", () => {
         let calls = 0;
         const runtime = new ToolRuntime({
             registry,
+            permissionPolicy: allowAllPermissionPolicy,
             executors: [{
                 source: "native",
                 async execute() {
@@ -378,6 +387,7 @@ describe("agent bootstrap", () => {
         const secret = "TOP-SECRET-COMMAND";
         const runtime = new ToolRuntime({
             registry,
+            permissionPolicy: allowAllPermissionPolicy,
             executors: [{
                 source: "native",
                 async execute() {
@@ -418,6 +428,7 @@ describe("agent bootstrap", () => {
 
         const failingRuntime = new ToolRuntime({
             registry,
+            permissionPolicy: allowAllPermissionPolicy,
             executors: [{
                 source: "native",
                 async execute() {

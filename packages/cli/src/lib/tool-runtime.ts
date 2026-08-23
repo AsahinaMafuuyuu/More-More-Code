@@ -1,6 +1,5 @@
 import type { ModeType } from "@more-more-code/shared";
 import {
-    DefaultPermissionPolicy,
     isPermissionDecision,
     type PermissionDecision,
     type PermissionEffect,
@@ -51,7 +50,7 @@ export type ToolExecutionResult = {
 export type ToolRuntimeOptions = {
     registry: ToolRegistry;
     executors: ToolExecutor[];
-    permissionPolicy?: PermissionPolicy;
+    permissionPolicy: PermissionPolicy;
     defaultTimeoutMs?: number;
     now?: () => number;
     observer?: ToolRuntimeObserver;
@@ -97,8 +96,6 @@ export type ToolRuntimeObserver = (
     event: ToolRuntimeObserverEvent,
 ) => void | Promise<void>;
 
-const ALLOW_ALL_POLICY = new DefaultPermissionPolicy();
-
 function errorMessage(error: unknown) {
     return error instanceof Error ? error.message : String(error);
 }
@@ -127,7 +124,7 @@ export class ToolRuntime {
     constructor(options: ToolRuntimeOptions) {
         this.registry = options.registry;
         this.executors = new Map(options.executors.map((executor) => [executor.source, executor]));
-        this.permissionPolicy = options.permissionPolicy ?? ALLOW_ALL_POLICY;
+        this.permissionPolicy = options.permissionPolicy;
         this.defaultTimeoutMs = options.defaultTimeoutMs ?? 120_000;
         this.now = options.now ?? Date.now;
         this.observer = options.observer;
