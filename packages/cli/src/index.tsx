@@ -6,9 +6,11 @@ import { Home } from "./screens/home";
 import { NewSession } from "./screens/new-session";
 import { Session } from "./screens/session";
 import { bootstrapAgentEnvironment } from "./lib/agent-environment";
+import { bootstrapRuntimeEnvironment } from "./lib/runtime-environment";
 
 // Agent bootstrap resolves ~/.more-more-code and workspace .more-more-code before any session can run.
 await bootstrapAgentEnvironment();
+await bootstrapRuntimeEnvironment();
 
 // 要使用多个会话，因此需要创建对应的路由：sessions/new 以及 sessions/:id
 const router = createMemoryRouter([

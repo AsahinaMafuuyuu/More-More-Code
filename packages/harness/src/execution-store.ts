@@ -30,6 +30,12 @@ export class InMemoryExecutionEventStore implements ExecutionEventStore {
   private readonly eventIds = new Set<string>();
   private readonly eventsByRun = new Map<string, ExecutionEvent[]>();
 
+  constructor(initialEvents: readonly ExecutionEvent[] = []) {
+    for (const event of initialEvents) {
+      this.append(event);
+    }
+  }
+
   append(event: ExecutionEvent) {
     if (this.eventIds.has(event.id)) {
       throw new ExecutionEventStoreError(`Duplicate execution event id: ${event.id}`);

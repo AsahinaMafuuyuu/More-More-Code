@@ -25,6 +25,7 @@
     "@ai-sdk/provider-utils": "^5.0.7",
     "@ai-sdk/react": "^4.0.40",
     "@more-more-code/harness": "workspace:*",
+    "@more-more-code/runtime-store": "workspace:*",
     "@more-more-code/shared": "workspace:*",
     "@opentui/core": "^0.4.2",
     "@opentui/react": "^0.4.2",

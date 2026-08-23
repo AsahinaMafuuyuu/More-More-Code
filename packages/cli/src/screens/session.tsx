@@ -28,6 +28,7 @@ import {
   type SessionRuntimeState,
 } from "@more-more-code/harness";
 import { useKeyboardLayer } from "../providers/keyboard-layer";
+import { formatRuntimeRecoveryNotice } from "../lib/runtime-recovery";
 
 type SessionData = InferResponseType<(typeof apiClient.sessions)[":id"]["$get"], 200>; // 获取SessionData的类型
 
@@ -110,6 +111,7 @@ function SessionChat({
 }) {
   const { mode, model, setMode, setModel } = usePromptConfig(); // 获取当前的模式和模型
   const { isTopLayer } = useKeyboardLayer(); // 获取键盘层状态
+  const toast = useToast();
   const {
     messages,
     status,
@@ -121,6 +123,7 @@ function SessionChat({
     error,
     run,
     busy,
+    runtimeRecovery,
     sessionTree,
     inspectNavigation,
     navigateToNode,
@@ -129,6 +132,23 @@ function SessionChat({
   } = useChat(session.id, session.messages); // 使用自定义hook管理消息状态与会话树
   const runActive = run?.status === "running";
   const settling = busy && !runActive;
+  const reportedRecoveryKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!runtimeRecovery) return;
+    const recoveryKey = `${runtimeRecovery.sessionId}:${runtimeRecovery.recoveredEventOffset}`;
+    if (reportedRecoveryKeyRef.current === recoveryKey) return;
+
+    const message = formatRuntimeRecoveryNotice(runtimeRecovery);
+    if (!message) return;
+
+    reportedRecoveryKeyRef.current = recoveryKey;
+    toast.show({
+      variant: "info",
+      duration: 8000,
+      message,
+    });
+  }, [runtimeRecovery, toast]);
 
   const restorePromptRuntime = useCallback((runtime: SessionRuntimeState) => {
     if (runtime.mode === "BUILD" || runtime.mode === "PLAN") {

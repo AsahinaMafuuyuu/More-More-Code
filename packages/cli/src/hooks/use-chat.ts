@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useChat as useAiChat } from "@ai-sdk/react";
 import {
     getToolName,
@@ -10,6 +10,7 @@ import {
 } from "@more-more-code/shared";
 import {
     AgentLoop,
+    RUNTIME_EVENT_SCHEMA_VERSION,
     appendSessionEntry,
     appendSessionTreeMessages,
     getParentSessionEntry,
@@ -23,6 +24,8 @@ import {
     type AgentInteraction,
     type AgentRun,
     type AgentToolCall,
+    type RuntimeSession,
+    type RuntimeSessionRecoveryReport,
     type SessionEntryInput,
     type SessionEntryMetadata,
     type SessionRuntimeState,
@@ -35,6 +38,7 @@ import { createAgentUserMessage } from "../lib/agent-chat-message";
 import {
     LocalModelTransport,
     type ContextCompactionEvent,
+    type ContextProjectionLifecycleEvent,
 } from "../lib/local-model-transport";
 import { persistSessionState } from "../lib/session-store";
 import type { ChatTools, Message } from "../lib/chat-types";
@@ -45,6 +49,7 @@ import {
     type BranchNavigationIntent,
 } from "../lib/branch-navigation";
 import type { BranchSummaryReductionOutcome } from "../lib/branch-summary-reducer";
+import { getRuntimeSession } from "../lib/runtime-environment";
 
 export type { Message } from "../lib/chat-types";
 
@@ -96,7 +101,7 @@ function toolFailureCode(result: ToolExecutionResult) {
     }
 }
 
-function createLocalToolRuntime() {
+function createLocalToolRuntime(runtimeSession: RuntimeSession) {
     const environment = getAgentEnvironment();
     return {
         workspaceRoot: environment.config.paths.workspaceRoot,
@@ -114,6 +119,55 @@ function createLocalToolRuntime() {
                     return resolveNativeToolTimeoutMs(toolName, input);
                 },
             }],
+            async observer(event) {
+                const correlation = {
+                    runId: event.context.runId,
+                    turnId: event.context.turnId,
+                    stepId: event.context.stepId,
+                    toolCallId: event.context.toolCallId,
+                };
+                if (event.type === "tool_requested") {
+                    await runtimeSession.record({
+                        type: "tool",
+                        payload: {
+                            schemaVersion: RUNTIME_EVENT_SCHEMA_VERSION,
+                            kind: "tool.lifecycle",
+                            phase: "requested",
+                            toolName: event.toolName,
+                            source: event.source,
+                            ...correlation,
+                        },
+                    });
+                    return;
+                }
+                if (event.type === "permission_decided") {
+                    await runtimeSession.record({
+                        type: "security",
+                        payload: {
+                            schemaVersion: RUNTIME_EVENT_SCHEMA_VERSION,
+                            kind: "permission.decision",
+                            capability: `tool.${event.toolName}`,
+                            decision: event.decision,
+                            policy: event.policy,
+                            ...correlation,
+                        },
+                    });
+                    return;
+                }
+                await runtimeSession.record({
+                    type: "tool",
+                    payload: {
+                        schemaVersion: RUNTIME_EVENT_SCHEMA_VERSION,
+                        kind: "tool.lifecycle",
+                        phase: "completed",
+                        toolName: event.result.toolName,
+                        source: event.result.source,
+                        status: event.result.status,
+                        durationMs: event.result.durationMs,
+                        ...correlation,
+                    },
+                });
+            },
         }),
     };
 }
@@ -189,9 +243,15 @@ function getStepMetadata(input: {
 }
 
 export function useChat(sessionId: string, persistedSessionState: unknown) {
-    const agentLoop = useMemo(() => new AgentLoop(), []);
+    const runtimeSession = useMemo(() => getRuntimeSession(sessionId), [sessionId]);
+    const agentLoop = useMemo(
+        () => new AgentLoop({ eventStore: runtimeSession }),
+        [runtimeSession],
+    );
     const [run, setRun] = useState<AgentRun | null>(null);
     const [busy, setBusy] = useState(false);
+    const [runtimeRecovery, setRuntimeRecovery] = useState<RuntimeSessionRecoveryReport | null>(null);
+    const [runtimeError, setRuntimeError] = useState<Error | null>(null);
     const [sessionTree, setSessionTree] = useState<SessionTreeState<Message>>(() =>
         restoreSessionTree<Message>(persistedSessionState),
     );
@@ -205,6 +265,20 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         cloneMessages(projectSessionTreeMessages(sessionTree)),
     );
 
+    useEffect(() => {
+        let active = true;
+        setRuntimeRecovery(null);
+        setRuntimeError(null);
+        void runtimeSession.ready().then((report) => {
+            if (active) setRuntimeRecovery(report);
+        }).catch((error) => {
+            if (active) setRuntimeError(toError(error));
+        });
+        return () => {
+            active = false;
+        };
+    }, [runtimeSession]);
+
     const transport = useMemo(() => {
         return new LocalModelTransport({
             onMessageSnapshot(messages) {
@@ -212,6 +286,38 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
             },
             onContextCompaction(event) {
                 contextCompactionHandlerRef.current?.(event);
+            },
+            async onContextEvent(event: ContextProjectionLifecycleEvent) {
+                const metadata = event.operation === "model-step"
+                    ? activeModelStepMetadataRef.current
+                    : {};
+                await runtimeSession.record({
+                    type: "context",
+                    payload: {
+                        schemaVersion: RUNTIME_EVENT_SCHEMA_VERSION,
+                        kind: "context.projection",
+                        phase: event.phase,
+                        operationId: event.operationId,
+                        operation: event.operation,
+                        mode: event.mode,
+                        model: event.model,
+                        ...(event.phase === "completed" ? {
+                            inputTokensBefore: event.inputTokensBefore,
+                            inputTokensAfter: event.inputTokensAfter,
+                            inputBudgetTokens: event.inputBudgetTokens,
+                            toolResultTokensBefore: event.toolResultTokensBefore,
+                            toolResultTokensAfter: event.toolResultTokensAfter,
+                            prunedToolResultCount: event.prunedToolResultCount,
+                            overBudget: event.overBudget,
+                            ...(event.compactionTrigger
+                                ? { compactionTrigger: event.compactionTrigger }
+                                : {}),
+                        } : {}),
+                        ...(metadata.runId ? { runId: metadata.runId } : {}),
+                        ...(metadata.turnId ? { turnId: metadata.turnId } : {}),
+                        ...(metadata.stepId ? { stepId: metadata.stepId } : {}),
+                    },
+                });
             },
             getContextCheckpoint() {
                 const checkpoint = projectLatestSessionCompaction(sessionTreeRef.current);
@@ -258,7 +364,7 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
                     ?.id;
             },
         });
-    }, []);
+    }, [runtimeSession]);
 
     const chat = useAiChat<Message>({
         id: sessionId,
@@ -535,9 +641,10 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
     return {
         messages: chat.messages,
         status: chat.status,
-        error: chat.error,
+        error: runtimeError ?? chat.error,
         run,
         busy,
+        runtimeRecovery,
         sessionTree,
         inspectNavigation,
         navigateToEntry,
@@ -563,6 +670,7 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
 
             setBusy(true);
             try {
+                await runtimeSession.ready();
                 return await transport.compactContext({
                     messages: cloneMessages(latestMessagesRef.current),
                     mode: params.mode,
@@ -577,6 +685,7 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
             mode: ModeType;
             model: SupportedChatModelId;
         }) => {
+            await runtimeSession.ready();
             const inputMessageId = crypto.randomUUID();
             recordPromptSelection(params);
             setBusy(true);
@@ -665,7 +774,7 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
 
                             let toolRuntimeResult: ToolExecutionResult | null = null;
                             try {
-                                const { runtime: toolRuntime, workspaceRoot } = createLocalToolRuntime();
+                                const { runtime: toolRuntime, workspaceRoot } = createLocalToolRuntime(runtimeSession);
                                 toolRuntimeResult = await toolRuntime.run({
                                     toolName: toolCall.toolName,
                                     input: toolCall.input,
@@ -674,6 +783,7 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
                                         runId: run.id,
                                         turnId: turn.id,
                                         stepId: step.id,
+                                        toolCallId: toolCall.toolCallId,
                                         workspaceRoot,
                                         mode: activeExecutionSelection.mode,
                                         signal,

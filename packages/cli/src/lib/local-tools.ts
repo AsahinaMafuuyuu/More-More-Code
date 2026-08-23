@@ -1,4 +1,5 @@
-import { mkdir, readFile, readdir, stat, writeFile } from "fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "path";
 import { toolInputSchemas } from "@more-more-code/shared";
 import { getAgentEnvironment } from "./agent-environment";
@@ -277,14 +278,51 @@ export async function executeNativeTool(
 
         case "bash": {
             const { command } = toolInputSchemas.bash.parse(input);
-            const proc = Bun.spawn(["bash", "-c", command], {
-                cwd: resolveInsideWorkspace(context.workspaceRoot, ".").resolved,
+            const workspaceRoot = resolveInsideWorkspace(context.workspaceRoot, ".").resolved;
+            const shellStateDirectory = await mkdtemp(join(tmpdir(), "more-more-code-shell-"));
+            const cancellationFile = join(shellStateDirectory, "cancel");
+            const cancellationFileExpression = process.platform === "win32"
+                ? '"$(cygpath -u "$1")"'
+                : '"$1"';
+            const shellWrapper = [
+                "set -m",
+                `cancel_file=${cancellationFileExpression}`,
+                'eval "$2" &',
+                "child=$!",
+                'while kill -0 "$child" 2>/dev/null; do',
+                '  if [ -f "$cancel_file" ]; then',
+                '    kill -TERM -- -"$child" 2>/dev/null || true',
+                "    sleep 0.05",
+                '    kill -KILL -- -"$child" 2>/dev/null || true',
+                '    wait "$child" 2>/dev/null || true',
+                "    exit 130",
+                "  fi",
+                "  sleep 0.02",
+                "done",
+                'wait "$child"',
+            ].join("\n");
+            const proc = Bun.spawn([
+                "bash",
+                "-c",
+                shellWrapper,
+                "more-more-code-shell",
+                cancellationFile,
+                command,
+            ], {
+                cwd: workspaceRoot,
                 stdout: "pipe",
                 stderr: "pipe",
                 env: { ...process.env, TERM: "dumb" },
             });
 
-            const cancel = () => proc.kill();
+            let cancellation: Promise<void> | null = null;
+            const cancel = () => {
+                // The Bash wrapper owns the POSIX process group. Signalling it
+                // through a file works on Windows/MSYS too, where killing only
+                // the visible bash.exe process can leave grandchildren alive.
+                cancellation ??= writeFile(cancellationFile, "cancel", "utf8")
+                    .then(async () => { await proc.exited; });
+            };
             context.signal.addEventListener("abort", cancel, { once: true });
             if (context.signal.aborted) cancel();
             let stdout: string;
@@ -298,6 +336,8 @@ export async function executeNativeTool(
                 ]);
             } finally {
                 context.signal.removeEventListener("abort", cancel);
+                if (cancellation) await cancellation;
+                await rm(shellStateDirectory, { recursive: true, force: true });
             }
             throwIfAborted(context.signal);
 

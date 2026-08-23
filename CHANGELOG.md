@@ -31,6 +31,14 @@ All notable changes to MORE MORE CODE are recorded here.
 - Lazy Branch Summary navigation policy `ask | always | never` (`ask` default), with shared Carry / No Carry / Cancel semantics across `/tree`, `/jump`, `/parent`, and `/root`.
 - Dedicated bounded Branch Summary semantic reducer with Tool Result pre-pruning and deterministic fallback.
 - ADR-0014 documenting lazy branch knowledge transfer, provenance, navigation semantics, and Context/Compaction interop.
+- Independent `packages/runtime-store` SQLite persistence boundary with its own Prisma schema, generated client, migration, and explicit adapter dependencies.
+- Session-scoped Runtime Event/Snapshot contracts, database-assigned replay offsets, disposable Projection Cache, hybrid Snapshot Policy, and reducer-based snapshot-plus-replay recovery diagnostics.
+- SQLite integration coverage for append ordering, cross-session isolation, restart recovery, and snapshot/replay parity.
+- ADR-0016 separating the PostgreSQL Cloud Session Store from the SQLite Local Runtime Store and superseding ADR-0015's shared-package placement.
+- Per-user Runtime Store bootstrap at `~/.more-more-code/runtime/runtime.db`, with an absolute file-URL override and embedded idempotent migrations that do not invoke Prisma CLI at application startup.
+- Durable `RuntimeSession` wiring for AgentLoop write-ahead execution events, snapshot/replay recovery, Projection Cache warming, and visible incomplete-work diagnostics without automatic replay.
+- Strict schema-v1 execution/tool/security/context/system Runtime Event allowlists plus awaited redacted Tool permission/lifecycle and Context projection producers.
+- ADR-0017 documenting production Runtime Store lifecycle, fail-closed side-effect ordering, strict redaction, and report-only recovery.
 
 ### Changed
 
@@ -49,10 +57,14 @@ All notable changes to MORE MORE CODE are recorded here.
 - Native command execution now uses the Runtime workspace root and completes interruption/timeout through Tool Runtime with normalized cancellation status.
 - OpenAI model execution explicitly selects the Responses API through `openai.responses(...)` and derives `promptCacheKey` from the prompt-prefix fingerprint; `previousResponseId` remains outside canonical Session authority.
 - Provider cache read/write usage is retained as runtime diagnostics rather than semantic Session history.
+- `packages/database` is restored as the PostgreSQL cloud Session boundary; local Runtime Event models now live in the independent SQLite Runtime Store so Server Session types and migrations cannot be replaced by local recovery work.
+- CLI startup now opens one shared Local Runtime Store before rendering, and normal exit closes it after Session use.
+- Native Bash cancellation now terminates the monitored process group and waits for descendants, including on Windows/MSYS where killing only the outer `bash.exe` can leave grandchildren alive.
+- The real CLI launcher no longer contains a trailing executable identifier.
 
 ### Deferred
 
-- MCP transport/auth/remote tool execution, interactive permission approval UI, OS-level Sandbox enforcement, Local WAL/crash recovery, and Subagent runtime remain outside this stage.
+- MCP transport/auth/remote tool execution, interactive permission approval UI, consolidated/persisted permission policy, security audit projection, OS-level Sandbox enforcement, and Subagent runtime remain outside this delivery slice.
 
 ## [2.0.1] - 2026-08-13
 
@@ -109,5 +121,3 @@ All notable changes to MORE MORE CODE are recorded here.
 
 - Existing linear message snapshots and Session Tree v1 snapshots are upgraded to Session Tree v2 when restored by the CLI.
 - No Prisma schema migration is required for this release because versioned session state remains stored in the existing JSON field.
-### Stage 6.0 Security Foundation
-- Added SQLite RuntimeEvent persistence, RuntimeSnapshot recovery, EventStore abstraction, recovery replay, permission foundation, and ADR-0015.

@@ -14,6 +14,7 @@ import React, {
 } from 'react';
 import { useKeyboard, useRenderer } from '@opentui/react'; // 导入useKeyboard和useRenderer钩子函数
 import { resolveCtrlCExit } from '../../lib/ctrl-c-exit-guard';
+import { shutdownRuntimeEnvironment } from '../../lib/runtime-environment';
 
 type Responder = () => boolean;
 
@@ -90,7 +91,7 @@ export function KeyboardLayerProvider({ children }: { children: React.ReactNode 
         lastUnhandledCtrlCAt.current = decision.nextPressedAt;
 
         if (decision.shouldExit) {
-            renderer.destroy();
+            void shutdownRuntimeEnvironment().finally(() => renderer.destroy());
             return;
         }
 

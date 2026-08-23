@@ -68,5 +68,10 @@ Desktop.ini
 
 # Prisma generated client
 packages/database/generated/prisma/
+packages/runtime-store/generated/prisma/
+
+# Local Runtime Store data and SQLite sidecars
+packages/runtime-store/prisma/*.db
+packages/runtime-store/prisma/*.db-*
 
 .vscode/

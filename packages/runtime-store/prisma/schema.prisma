@@ -1,0 +1,33 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// `offset` is the global append-only cursor. It is assigned by SQLite, never
+// calculated in application code.
+model RuntimeEvent {
+  offset      Int      @id @default(autoincrement())
+  id          String   @unique @default(cuid())
+  sessionId   String
+  type        String
+  payloadJson String
+  createdAt   DateTime @default(now())
+
+  @@index([sessionId, offset])
+}
+
+model RuntimeSnapshot {
+  sequence    Int      @id @default(autoincrement())
+  id          String   @unique @default(cuid())
+  sessionId   String
+  eventOffset Int
+  stateJson   String
+  createdAt   DateTime @default(now())
+
+  @@index([sessionId, eventOffset])
+  @@index([sessionId, sequence])
+}

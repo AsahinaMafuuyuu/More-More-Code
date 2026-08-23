@@ -17,7 +17,12 @@ import { ToolRegistry } from "../src/lib/tool-registry";
 const tempRoots: string[] = [];
 
 afterEach(async () => {
-    await Promise.all(tempRoots.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+    await Promise.all(tempRoots.splice(0).map((path) => rm(path, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+    })));
 });
 
 async function createTempRoot(prefix: string) {
@@ -222,6 +227,7 @@ describe("agent bootstrap", () => {
             runId: "run-1",
             turnId: "turn-1",
             stepId: "step-1",
+            toolCallId: "tool-call-1",
             workspaceRoot: process.cwd(),
             mode: "BUILD" as const,
             signal: controller.signal,
@@ -271,6 +277,7 @@ describe("agent bootstrap", () => {
             runId: "run-shell",
             turnId: "turn-shell",
             stepId: "step-shell",
+            toolCallId: "tool-call-shell",
             workspaceRoot,
             mode: "BUILD" as const,
         };
@@ -307,6 +314,7 @@ describe("agent bootstrap", () => {
             runId: "run-1",
             turnId: "turn-1",
             stepId: "step-1",
+            toolCallId: "tool-call-1",
             workspaceRoot: process.cwd(),
             mode: "BUILD" as const,
             signal: new AbortController().signal,
@@ -339,6 +347,7 @@ describe("agent bootstrap", () => {
             runId: "run-1",
             turnId: "turn-1",
             stepId: "step-1",
+            toolCallId: "tool-call-1",
             workspaceRoot: process.cwd(),
             mode: "BUILD" as const,
             signal: new AbortController().signal,
@@ -360,5 +369,72 @@ describe("agent bootstrap", () => {
         expect(completed.durationMs).toBeGreaterThanOrEqual(0);
         expect(denied.status).toBe("denied");
         expect(calls).toBe(1);
+    });
+
+    test("awaits redacted Tool Runtime facts before executor side effects", async () => {
+        const registry = new ToolRegistry(mergeAgentConfig({}, {}));
+        const facts: unknown[] = [];
+        let executorCalls = 0;
+        const secret = "TOP-SECRET-COMMAND";
+        const runtime = new ToolRuntime({
+            registry,
+            executors: [{
+                source: "native",
+                async execute() {
+                    executorCalls += 1;
+                    expect((facts.at(-1) as { type?: string }).type).toBe("permission_decided");
+                    return { output: secret };
+                },
+            }],
+            observer(event) {
+                facts.push(structuredClone(event));
+            },
+        });
+        const context = {
+            sessionId: "session-observed",
+            runId: "run-observed",
+            turnId: "turn-observed",
+            stepId: "step-observed",
+            toolCallId: "tool-call-observed",
+            workspaceRoot: process.cwd(),
+            mode: "BUILD" as const,
+            signal: new AbortController().signal,
+        };
+
+        await runtime.run({
+            toolName: "readFile",
+            input: { path: secret },
+            context,
+        });
+
+        expect(executorCalls).toBe(1);
+        expect(facts.map((fact) => (fact as { type: string }).type)).toEqual([
+            "tool_requested",
+            "permission_decided",
+            "tool_completed",
+        ]);
+        expect(JSON.stringify(facts)).not.toContain(secret);
+
+        const failingRuntime = new ToolRuntime({
+            registry,
+            executors: [{
+                source: "native",
+                async execute() {
+                    executorCalls += 1;
+                    return null;
+                },
+            }],
+            observer(event) {
+                if (event.type === "tool_requested") {
+                    throw new Error("runtime store unavailable");
+                }
+            },
+        });
+        await expect(failingRuntime.run({
+            toolName: "readFile",
+            input: { path: "README.md" },
+            context,
+        })).rejects.toThrow("runtime store unavailable");
+        expect(executorCalls).toBe(1);
     });
 });

@@ -191,44 +191,70 @@
 - [ ] Cloud collaborative branch merge semantics
 
 
-# Stage 6.0 — Security Foundation
+# Stage 6.0 — Recoverable Runtime & Security Foundation
 
-**Status:** Planned — 2026-08-15.
+**Status:** In progress — Phases 1–3 foundation delivered 2026-08-22 and Phase 4 delivered 2026-08-23; Phases 5–6 remain.
 
-## Persistence & Recovery
+## Phase 1: Repair Persistence Boundaries
 
-- [ ] Add EventStore abstraction.
-- [ ] Add Prisma SQLite implementation.
-- [ ] Define unified RuntimeEvent schema.
-- [ ] Persist execution, tool, security, and context events.
-- [ ] Add memory projection cache over persistent events.
-- [ ] Implement snapshot creation strategy.
-- [ ] Implement crash recovery and session resume.
+- [x] Restore the PostgreSQL `Session` schema/client used by Server routes.
+- [x] Remove Runtime Event storage from the cloud database package.
+- [x] Add an independent SQLite Runtime Store workspace package.
+- [x] Declare and lock the Bun-compatible SQLite Prisma adapter and driver dependencies.
+- [x] Add a configurable local database URL and committed initial migration.
+- [x] Verify Server typecheck/build and both Prisma schemas.
 
-## Permission & Enforcement
+## Phase 2: Durable Runtime Event Store
 
-- [ ] Add Permission Engine with allow/deny/ask decisions.
-- [ ] Persist permission decisions as security events.
-- [ ] Add Capability based permission model.
-- [ ] Add rule constraints for commands, paths, and scopes.
-- [ ] Enforce permissions inside Tool Runtime.
+- [x] Finalize typed, session-scoped EventStore and RuntimeSnapshot contracts.
+- [x] Use database-assigned append-only event offsets.
+- [x] Map Prisma rows to Harness contracts without leaking ORM types.
+- [x] Add session-isolation and concurrent-append integration tests.
+- [x] Make the memory Projection Cache offset-aware and reject stale regressions.
 
-## Policy Management
+## Phase 3: Snapshot and Recovery
 
-- [ ] Add default security policy.
-- [ ] Add user policy overrides.
-- [ ] Generate effective policy during runtime.
+- [x] Finalize hybrid session-event-count/time SnapshotPolicy behavior.
+- [x] Save and load session-scoped Runtime Snapshots.
+- [x] Replay post-snapshot events through an explicit projection reducer.
+- [x] Verify full-replay and snapshot-plus-replay parity.
+- [x] Surface incomplete runs without automatically re-executing external work.
+- [x] Add Bun-native temporary-SQLite restart and recovery tests.
 
-## Audit & Validation
+## Phase 4: Production Runtime Wiring
 
-- [ ] Add security audit timeline.
+- [x] Create `~/.more-more-code/runtime/runtime.db` by default with an explicit environment override.
+- [x] Run embedded versioned migrations idempotently without requiring Prisma CLI at runtime.
+- [x] Bootstrap and close one shared Runtime Store from the CLI lifecycle.
+- [x] Remove the invalid trailing identifier from the real CLI launcher and cover it with a regression check.
+- [x] Define versioned strict-allowlist execution/tool/context/security/system Runtime Event payloads.
+- [x] Persist AgentLoop execution events through a write-ahead, fail-closed Runtime Session adapter.
+- [x] Restore snapshot-plus-replay projection state and warm Projection Cache per session.
+- [x] Emit awaited Tool request, permission, and terminal facts without raw input/output.
+- [x] Emit Context projection lifecycle metrics without prompts or message bodies.
+- [x] Persist session-open/recovery diagnostics and expose incomplete work without replay.
+- [x] Verify first-run/repeated-start migrations, write ordering, strict redaction, failure handling, restart recovery, and CLI notification.
+
+## Phase 5: Permission & Enforcement
+
+- [ ] Consolidate Harness and CLI `allow | deny | ask` contracts.
+- [ ] Add capability rules for commands, paths, resources, and scopes.
+- [ ] Generate effective policy from defaults plus persisted user overrides.
+- [ ] Enforce the effective decision inside Tool Runtime.
+- [ ] Persist permission requests and decisions as security Runtime Events.
+
+## Phase 6: Audit & Validation
+
+- [ ] Add a session-scoped security audit timeline projection.
 - [ ] Add replay verification for security decisions.
-- [ ] Add recovery scenario tests.
 - [ ] Add dangerous tool operation tests.
+- [x] Update ADR, README, CONTEXT, PROJECT_ANALYSIS, CHANGELOG, and Agent rules for the delivered foundation.
+- [x] Run foundation tests, typechecks, builds, Prisma validation/generation, migration deploy, and `git diff --check`.
 
 ## Deferred
 
-- [ ] PostgreSQL cloud adapter.
-- [ ] Sandbox runtime.
+- [ ] PostgreSQL synchronization of local Runtime Events.
+- [ ] Sandbox/container runtime.
+- [ ] Automatic restart of interrupted external processes.
 - [ ] Multi-agent framework.
 - [ ] Full OpenTelemetry integration.

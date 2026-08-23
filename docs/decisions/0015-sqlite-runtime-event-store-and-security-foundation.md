@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted; storage boundary amended by ADR-0016
 
 ## Date
 

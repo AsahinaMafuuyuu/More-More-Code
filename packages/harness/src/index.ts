@@ -173,9 +173,59 @@ export type {
   AgentTurnCause,
   AgentTurnStatus,
 } from "./types";
-export type { RuntimeEvent, RuntimeEventType, EventStore, RuntimeSnapshot } from "./event-store";
-export type { RuntimeSnapshotStore } from './recovery';
-export { recoverRuntime } from './recovery';
+export {
+  isRuntimeEventType,
+  isRuntimeEventPayload,
+  isRuntimeJsonValue,
+  RUNTIME_EVENT_SCHEMA_VERSION,
+  RUNTIME_EVENT_TYPES,
+} from "./event-store";
+export type {
+  EventStore,
+  PersistedExecutionEvent,
+  RuntimeContextEventPayload,
+  RuntimeEvent,
+  RuntimeEventInput,
+  RuntimeEventPayloadByType,
+  RuntimeExecutionEventPayload,
+  RuntimeEventType,
+  RuntimeJsonPrimitive,
+  RuntimeJsonValue,
+  RuntimeSecurityEventPayload,
+  RuntimeSnapshot,
+  RuntimeSnapshotInput,
+  RuntimeSnapshotStore,
+  RuntimeStore,
+  RuntimeSystemEventPayload,
+  RuntimeToolEventPayload,
+  RuntimeToolStatus,
+} from "./event-store";
+export { recoverRuntime } from "./recovery";
+export type {
+  PendingExternalOperation,
+  RecoveryDiagnostics,
+  RecoveryOptions,
+  RecoveryState,
+  RecoveryStore,
+  RuntimeProjectionReducer,
+} from "./recovery";
+export { ProjectionCache } from "./projection-cache";
+export { SnapshotPolicy } from "./snapshot-policy";
+export type { ProjectionCacheEntry } from "./projection-cache";
+export type { SnapshotPolicyOptions, SnapshotPolicyInput } from "./snapshot-policy";
+export {
+  createRuntimeSessionProjection,
+  isRuntimeSessionProjection,
+  reduceRuntimeSessionProjection,
+  RuntimeSession,
+  RuntimeSessionError,
+} from "./runtime-session";
+export type {
+  RuntimeSessionFactInput,
+  RuntimeSessionOptions,
+  RuntimeSessionProjection,
+  RuntimeSessionRecoveryReport,
+} from "./runtime-session";
 export {
   DefaultPermissionPolicy,
   canExecute,

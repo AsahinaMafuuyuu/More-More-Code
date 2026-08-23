@@ -10,6 +10,7 @@ export type ToolExecutionContext = {
     runId: string;
     turnId: string;
     stepId: string;
+    toolCallId: string;
     workspaceRoot: string;
     mode: ModeType;
     signal: AbortSignal;
@@ -56,7 +57,37 @@ export type ToolRuntimeOptions = {
     permissionPolicy?: ToolPermissionPolicy;
     defaultTimeoutMs?: number;
     now?: () => number;
+    observer?: ToolRuntimeObserver;
 };
+
+export type ToolRuntimeObserverEvent =
+    | {
+        type: "tool_requested";
+        toolName: string;
+        source: ToolSourceKind;
+        context: ToolRuntimeObservationContext;
+    }
+    | {
+        type: "permission_decided";
+        toolName: string;
+        decision: ToolPermissionEffect;
+        policy: "default" | "configured";
+        context: ToolRuntimeObservationContext;
+    }
+    | {
+        type: "tool_completed";
+        result: Omit<ToolExecutionResult, "output" | "error">;
+        context: ToolRuntimeObservationContext;
+    };
+
+export type ToolRuntimeObservationContext = Pick<
+    ToolExecutionContext,
+    "sessionId" | "runId" | "turnId" | "stepId" | "toolCallId" | "mode"
+>;
+
+export type ToolRuntimeObserver = (
+    event: ToolRuntimeObserverEvent,
+) => void | Promise<void>;
 
 const ALLOW_ALL_POLICY: ToolPermissionPolicy = {
     evaluate() {
@@ -87,6 +118,8 @@ export class ToolRuntime {
     private readonly permissionPolicy: ToolPermissionPolicy;
     private readonly defaultTimeoutMs: number;
     private readonly now: () => number;
+    private readonly observer?: ToolRuntimeObserver;
+    private readonly permissionPolicySource: "default" | "configured";
 
     constructor(options: ToolRuntimeOptions) {
         this.registry = options.registry;
@@ -94,6 +127,8 @@ export class ToolRuntime {
         this.permissionPolicy = options.permissionPolicy ?? ALLOW_ALL_POLICY;
         this.defaultTimeoutMs = options.defaultTimeoutMs ?? 120_000;
         this.now = options.now ?? Date.now;
+        this.observer = options.observer;
+        this.permissionPolicySource = options.permissionPolicy ? "configured" : "default";
     }
 
     async run(request: ToolExecutionRequest): Promise<ToolExecutionResult> {
@@ -105,13 +140,27 @@ export class ToolRuntime {
             return finishResult({ ...base, status: "cancelled", error: "Tool execution was cancelled" }, this.now);
         }
 
+        await this.observe({
+            type: "tool_requested",
+            toolName: request.toolName,
+            source,
+            context: redactToolExecutionContext(request.context),
+        });
+
         const tool = this.registry.getToolDefinition(request.toolName, request.context.mode, source);
         if (!tool) {
-            return finishResult({
+            await this.observe({
+                type: "permission_decided",
+                toolName: request.toolName,
+                decision: "deny",
+                policy: this.permissionPolicySource,
+                context: redactToolExecutionContext(request.context),
+            });
+            return this.finishAndObserve(request.context, {
                 ...base,
                 status: "denied",
                 error: `Tool ${request.toolName} is not available in ${request.context.mode} mode`,
-            }, this.now);
+            });
         }
 
         const permission = await this.permissionPolicy.evaluate({
@@ -119,37 +168,71 @@ export class ToolRuntime {
             input: request.input,
             context: request.context,
         });
+        await this.observe({
+            type: "permission_decided",
+            toolName: request.toolName,
+            decision: permission.effect,
+            policy: this.permissionPolicySource,
+            context: redactToolExecutionContext(request.context),
+        });
         if (permission.effect === "deny") {
-            return finishResult({
+            return this.finishAndObserve(request.context, {
                 ...base,
                 status: "denied",
                 error: permission.reason ?? `Permission denied for tool ${request.toolName}`,
-            }, this.now);
+            });
         }
         if (permission.effect === "ask") {
-            return finishResult({
+            return this.finishAndObserve(request.context, {
                 ...base,
                 status: "approval_required",
                 error: permission.reason ?? `Tool ${request.toolName} requires approval`,
-            }, this.now);
+            });
         }
 
         // Permission evaluation may be async. Re-check before installing the
         // executor abort bridge so an interrupt cannot be lost in that gap.
         if (request.context.signal.aborted) {
-            return finishResult({ ...base, status: "cancelled", error: "Tool execution was cancelled" }, this.now);
+            return this.finishAndObserve(request.context, {
+                ...base,
+                status: "cancelled",
+                error: "Tool execution was cancelled",
+            });
         }
 
         const executor = this.executors.get(source);
         if (!executor) {
-            return finishResult({
+            return this.finishAndObserve(request.context, {
                 ...base,
                 status: "failed",
                 error: `No executor is registered for tool source ${source}`,
-            }, this.now);
+            });
         }
 
-        return this.executeWithLifecycle(request, executor, base);
+        const result = await this.executeWithLifecycle(request, executor, base);
+        await this.observe({
+            type: "tool_completed",
+            result: redactToolExecutionResult(result),
+            context: redactToolExecutionContext(request.context),
+        });
+        return result;
+    }
+
+    private async finishAndObserve(
+        context: ToolExecutionContext,
+        base: Omit<ToolExecutionResult, "completedAt" | "durationMs">,
+    ): Promise<ToolExecutionResult> {
+        const result = finishResult(base, this.now);
+        await this.observe({
+            type: "tool_completed",
+            result: redactToolExecutionResult(result),
+            context: redactToolExecutionContext(context),
+        });
+        return result;
+    }
+
+    private async observe(event: ToolRuntimeObserverEvent): Promise<void> {
+        await this.observer?.(event);
     }
 
     private async executeWithLifecycle(
@@ -202,4 +285,30 @@ export class ToolRuntime {
             request.context.signal.removeEventListener("abort", propagateAbort);
         }
     }
+}
+
+function redactToolExecutionResult(
+    result: ToolExecutionResult,
+): Omit<ToolExecutionResult, "output" | "error"> {
+    return {
+        toolName: result.toolName,
+        source: result.source,
+        status: result.status,
+        startedAt: result.startedAt,
+        completedAt: result.completedAt,
+        durationMs: result.durationMs,
+    };
+}
+
+function redactToolExecutionContext(
+    context: ToolExecutionContext,
+): ToolRuntimeObservationContext {
+    return {
+        sessionId: context.sessionId,
+        runId: context.runId,
+        turnId: context.turnId,
+        stepId: context.stepId,
+        toolCallId: context.toolCallId,
+        mode: context.mode,
+    };
 }

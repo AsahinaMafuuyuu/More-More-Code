@@ -1,0 +1,26 @@
+{
+  "name": "@more-more-code/runtime-store",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "postinstall": "bun run db:generate",
+    "db:generate": "bunx prisma generate",
+    "db:validate": "bunx prisma validate",
+    "db:migrate:deploy": "bunx prisma migrate deploy",
+    "test": "bun run scripts/run-bun-integration-tests.ts",
+    "typecheck": "bunx tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.17.0",
+    "@more-more-code/harness": "workspace:*",
+    "@prisma/adapter-libsql": "7.9.0",
+    "@prisma/client": "^7.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "prisma": "^7.9.0"
+  }
+}

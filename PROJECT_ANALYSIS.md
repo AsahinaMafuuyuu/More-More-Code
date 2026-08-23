@@ -25,7 +25,8 @@ More More Code 是一个 local-first 的终端 Coding Agent 原型。CLI 是真�
 | `packages/cli` | React 19、OpenTUI、AI SDK、Provider SDK、Hono RPC Client | 本地应用层：UI、模型调用、消息编排、本地工具执行、云会话同步 |
 | `packages/harness` | TypeScript | Agent Loop、Execution Events/Event Store、Run / Turn / Step Lifecycle/Projection、steering/follow-up、Context/Session Runtime |
 | `packages/server` | Bun、Hono、Sentry | 云服务层：会话持久化、会话恢复数据、认证及外围账户 API |
-| `packages/database` | Prisma 7、PostgreSQL、`@prisma/adapter-pg` | 数据模型、Prisma Client、数据库连接 |
+| `packages/database` | Prisma 7、PostgreSQL、`@prisma/adapter-pg` | 云 Session Store 数据模型、Prisma Client、数据库连接 |
+| `packages/runtime-store` | Prisma 7、SQLite、`@prisma/adapter-libsql` | 本地 Runtime Event / Snapshot 持久化与恢复 adapter；兼容 Bun 运行时 |
 | `packages/shared` | TypeScript、Zod | 模型清单、价格信息、消息结构及流式事件协议 |
 
 根脚本提供两个主要开发入口：
@@ -69,6 +70,8 @@ PostgreSQL
 ```
 
 Harness 包位于 CLI 的执行路径中，负责显式驱动 Run → Turn → Step。Turn 定义为一次 Model response 加该 response 请求的全部 Tool Steps；后续 tool-result 推理会创建新的 Turn。AgentLoop 将 coarse-grained Run / Turn / Step 事实写成 append-only Execution Events，`AgentRun` 等状态通过 replay projection 得到，同时通过 awaited lifecycle stream 对外发送 `run_start/end`、`turn_start/end`、`step_start/update/end`。模型 Provider、System Prompt 与 `streamText()` 同样位于 CLI。Server 不参与 Agent Run，只接收会话快照用于云端恢复。
+
+Stage 6.0 将持久化边界拆为两个独立 Prisma store：`packages/database` 继续使用 PostgreSQL 服务云 Session；`packages/runtime-store` 使用 SQLite 保存本地 Runtime Event 与 Runtime Snapshot。二者拥有独立 schema/client/migration。Session Tree 是语义会话权威，Runtime Event 则为执行、安全、上下文和恢复事实；本地 store 不进入云同步关键路径。
 
 ## 4. 核心数据结构
 
@@ -191,9 +194,9 @@ Server 只通过 Session Store 接收会话树状态快照，因此云同步失�
 
 ### 5.5 流式中断与恢复
 
-CLI 通过 Escape 请求中断当前 Run；Model Step 可立即 abort，已启动但尚不支持 AbortSignal 的本地 Tool Step 会在返回后的最近安全点停止。Harness 依次追加对应 step/turn/run terminal execution events，并由事件 replay 得到中断状态。`run_end` lifecycle listeners 属于 settlement barrier，因此 Run projection 可能已 terminal，但 `isBusy` 会一直保持到 listeners 完成，`waitForIdle()` 才返回。
+CLI 通过 Escape 请求中断当前 Run；Model Step 可立即 abort，本地 Tool Step 由 Tool Runtime 传播同一个 AbortSignal。Bash executor 使用受监控的进程组，取消时会终止后代进程并等待命令组退出，避免 Tool 已返回但孙进程仍持有 workspace。Harness 依次追加对应 step/turn/run terminal execution events，并由事件 replay 得到中断状态。`run_end` lifecycle listeners 属于 settlement barrier，因此 Run projection 可能已 terminal，但 `isBusy` 会一直保持到 listeners 完成，`waitForIdle()` 才返回。
 
-Run 活跃期间，普通 Enter 将输入排入 steering queue；Alt+Enter 排入 follow-up queue。steering 在当前 Turn 完成后优先于自动 tool continuation，follow-up 只在 Run 原本将进入 idle 时消费。云端恢复仍基于 versioned Session Tree snapshot；进程内 `ExecutionEventStore` 与 deterministic execution projection 已完成，仍缺 Local WAL、crash recovery 与 cloud revision/conflict sync。
+Run 活跃期间，普通 Enter 将输入排入 steering queue；Alt+Enter 排入 follow-up queue。steering 在当前 Turn 完成后优先于自动 tool continuation，follow-up 只在 Run 原本将进入 idle 时消费。云端恢复仍基于 versioned Session Tree snapshot；本地执行恢复则默认使用 `~/.more-more-code/runtime/runtime.db` 中的 session-scoped Runtime Event/Snapshot。CLI 通过 `RuntimeSession` 在 Model/Tool 副作用前执行 awaited write-ahead append，恢复 snapshot 后的 event、预热 Projection Cache，并把未完成 Run/操作报告给 UI；它只重建状态，不自动重复外部调用。Cloud revision/conflict sync 仍未实现。
 
 ### 5.6 多模型抽象
 
@@ -266,12 +269,13 @@ CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为
 项目运行至少依赖：
 
 - Bun；
-- PostgreSQL；
+- PostgreSQL（云 Session Store）；
+- SQLite（本地 Runtime Store，无独立服务进程）；
 - `DATABASE_URL`；
 - 所选模型 Provider 对应的 API Key；
 - 可选的 `API_URL`。
 
-数据库代码在缺少 `DATABASE_URL` 时会在模块加载阶段直接抛错。Prisma Client 输出到 `packages/database/generated/prisma`，可通过数据库包的 `db:generate` 脚本重新生成。
+云数据库代码在缺少 `DATABASE_URL` 时会在模块加载阶段直接抛错。云端与本地 Prisma Client 分别输出到 `packages/database/generated/prisma` 和 `packages/runtime-store/generated/prisma`，必须通过各自包的 `db:generate` 脚本独立生成。
 
 ## 8. 当前实现边界与值得关注的问题
 
@@ -286,23 +290,23 @@ CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为
 3. **云 Session 已升级为 Session Entry Tree v3，但同步仍是 last-write-wins**
    v3 直接持久化 append-only `entries[]`；message、tool、runtime-state change、compaction 与 branch summary 都是可分支的 Session Entries，旧 linear/v1/v2 状态在 CLI 恢复时兼容升级。`POST /sessions/:id/state` 仍没有 revision / optimistic concurrency / conflict resolution。
 
-4. **Execution Events + 生命周期交互已建立，但仍只在进程内**
-   Run / Turn / Step 已经是 `ExecutionEvent[]` 的 projection，并拥有明确的 lifecycle/interaction boundary；默认由 `InMemoryExecutionEventStore` 保存。CLI 重启后仍不会恢复精确执行轨迹或尚未消费的 steering/follow-up queue。下一步需要 Local WAL / crash recovery，再考虑 cloud revision/conflict sync。
+4. **Durable Runtime Store 已成为 CLI 默认执行路径，权限策略仍待统一**
+   Run / Turn / Step 通过 `RuntimeSession` 写入本地 SQLite；Tool request/permission/terminal、Context projection 和 session-open/recovery diagnostics 也使用严格白名单的 v1 payload。关键写入失败会阻止下一外部副作用，恢复会报告但不重放未完成操作。下一步应统一 Harness 与 CLI 的 permission contract、引入持久化 override/effective policy，并建立 security audit projection。
 
-5. **Tool Step 的主动取消尚未完善**
-   Model Step 可以被 abort，Harness 也会停止后续 Step，但已启动的本地 shell/tool 还需要 Tool Runtime 级 cancellation。
+5. **Tool cancellation 已贯通，但仍不是 OS-level Sandbox**
+   Tool Runtime 已统一 timeout/cancellation，Bash 会终止受监控的进程组，支持 AbortSignal 的文件操作也会协作取消；路径检查与进程取消仍不能替代命令、网络、资源和权限范围的系统级隔离。
 
 6. **Context reduction 已形成 Tool Working Set + Branch Summary + semantic Compaction 三种独立语义，但 tokenizer 仍是显式估算器**
    Tool Result Working Set 先对过大的 warm/cold shell、test/build、search/grep、file-read、generic 输出做 model-facing `truncated/summary/reference` 投影，canonical `tool_result` 不变。Branch Summary 则在跨路径导航确实会丢失 source-only 语义知识时按 `ask | always | never` 做 lazy transfer；Carry 使用独立 bounded reducer（上限 `min(4096, 4% input budget)`），并以 provenance/coverage 去重，No Carry/Cancel 均不制造 Session branch。Active-path Branch Summary 作为 historical Context record 参与普通 Compaction；checkpoint 使用 generic record IDs 防止已吸收知识重复投影。历史 Compaction 仍按 80% soft / 92% hard / 70% target 和完整 group/Turn cut point运行，`/compact` 复用同一 checkpoint pipeline并执行安全 eligibility gate。Harness 同时提供 exact tokenizer adapter 接口，但当前模型家族仍使用明确标记为 `estimated` 的计数器。
 
 7. **云同步暂时是 best-effort**
-   同步失败不会让本地 Agent Run 失败，这是正确的故障域隔离；但目前只有日志，没有 retry queue、本地 WAL 或离线 Session Store。
+   同步失败不会让本地 Agent Run 失败，这是正确的故障域隔离；本地 Runtime Event 已持久化，但语义 Session 云同步仍只有日志，没有 retry queue、revision conflict resolution 或离线同步队列。
 
 8. **Server 仍保留 auth / billing 外围路由**
    它们不参与 Agent Runtime。如果最终要求 Server 严格只做 Session Storage，可进一步把 billing 拆为独立账户服务。
 
 9. **测试覆盖仍需扩展**
-   已有 AgentLoop、ExecutionEventStore/Projection、Run/Turn/Step lifecycle、steering/follow-up safe-point、ContextManager、Session Tree 和聊天提交回归测试，但还缺 LocalModelTransport、真实 Cloud Session Sync、CLI 键盘交互、节点跳转 UI 与真实多轮 Tool Loop 的端到端集成测试。
+   已有 AgentLoop、ExecutionEventStore/Projection、Runtime Store migration/restart、write-ahead/redaction/recovery、LocalModelTransport Context lifecycle、Tool Runtime 和 Session Tree 回归测试，但还缺真实 Cloud Session Sync、完整 CLI 键盘/节点跳转 UI 与真实多轮 Tool Loop 的端到端集成测试。
 
 10. **可观测性配置偏开发态**
     Sentry DSN 仍直接写在代码中，Trace 采样率较高，并保留测试异常路由，上线前应环境化。
@@ -319,10 +323,11 @@ CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为
 - Turn-safe steering / follow-up queue；
 - CLI 本地 Model Step 与 Tool Step；
 - 终端流式交互和中断；
-- 云端 Session 创建、读取和 event-backed Session Tree v2 snapshot 同步；
+- 云端 Session 创建、读取和 Session Entry Tree v3 snapshot 同步；
 - Session Entry Tree v3、任意 Entry 投影、lazy navigation 与 coverage-aware Branch Summary knowledge transfer；
 - Harness ContextManager、ModelContextProfile、Turn-aware token budget、retained tail、Tool Result Working Set 与 automatic/manual semantic Compaction；
 - 多 Provider 的本地抽象；
+- 默认启用的本地 SQLite Runtime Store、严格脱敏 Runtime Event、snapshot-plus-replay recovery 与未完成工作提示；
 - AgentLoop / lifecycle interaction / ExecutionEventStore / Execution Projection / ContextManager / Session Tree 确定性测试基础。
 
-下一阶段应优先补齐 **Local WAL + crash recovery**，随后再做 execution history 的 cloud revision/conflict sync、Tool Registry + cancellation、Permission/Sandbox；精确 tokenizer 可以作为 provider adapter 的增强项独立接入，之后再进入基于 Session Tree 的 Subagent。
+下一阶段应统一 Harness 与 CLI permission contract，生成并执行 defaults + persisted overrides 的有效策略，然后提供 session-scoped security audit projection 与 replay verification。Cloud revision/conflict sync、Sandbox 与 Subagent 继续后置；精确 tokenizer 可作为 provider adapter 的独立增强项。

@@ -71,6 +71,30 @@ export type ContextCompactionEvent = {
     retainedTailRecordIds: string[];
 };
 
+export type ContextProjectionLifecycleEvent =
+    | {
+        phase: "started";
+        operationId: string;
+        operation: "model-step" | "manual-compaction";
+        mode: ModeType;
+        model: SupportedChatModelId;
+    }
+    | {
+        phase: "completed";
+        operationId: string;
+        operation: "model-step" | "manual-compaction";
+        mode: ModeType;
+        model: SupportedChatModelId;
+        inputTokensBefore: number;
+        inputTokensAfter: number;
+        inputBudgetTokens: number;
+        toolResultTokensBefore: number;
+        toolResultTokensAfter: number;
+        prunedToolResultCount: number;
+        overBudget: boolean;
+        compactionTrigger?: ContextCompactionTrigger;
+    };
+
 export type PersistedContextCheckpoint = {
     summary: Message;
     compactedMessageIds?: string[];
@@ -92,6 +116,7 @@ type LocalModelTransportOptions = {
     getToolResultSourceEntryId?: (toolCallId: string) => string | undefined;
     getBranchSummaryContext?: () => BranchSummaryContextAnchor[];
     onProviderTelemetry?: (telemetry: ProviderCacheTelemetry) => void;
+    onContextEvent?: (event: ContextProjectionLifecycleEvent) => void | Promise<void>;
 };
 
 export type ManualContextCompactionOutcome = {
@@ -417,6 +442,7 @@ export class LocalModelTransport implements ChatTransport<Message> {
         model: SupportedChatModelId;
         abortSignal?: AbortSignal;
     }): Promise<ManualContextCompactionOutcome> {
+        const operationId = crypto.randomUUID();
         const environment = getAgentEnvironment();
         const tools = environment.tools.getModelTools(input.mode) as ToolContracts;
         const resolvedModel = resolveChatModel(input.model);
@@ -427,6 +453,13 @@ export class LocalModelTransport implements ChatTransport<Message> {
         });
         const systemPrompt = buildSystemPrompt({ mode: input.mode, environment });
         const checkpoint = this.options.getContextCheckpoint?.() ?? null;
+        await this.options.onContextEvent?.({
+            phase: "started",
+            operationId,
+            operation: "manual-compaction",
+            mode: input.mode,
+            model: input.model,
+        });
         let fallbackReason: ManualContextCompactionOutcome["fallbackReason"];
         const contextCompactor = createSemanticContextCompactor({
             profile: contextProfile,
@@ -468,6 +501,24 @@ export class LocalModelTransport implements ChatTransport<Message> {
             throw new Error("Manual context compaction did not return an eligibility result");
         }
 
+        await this.options.onContextEvent?.({
+            phase: "completed",
+            operationId,
+            operation: "manual-compaction",
+            mode: input.mode,
+            model: input.model,
+            inputTokensBefore: projected.inputTokensBefore,
+            inputTokensAfter: projected.projection.estimatedInputTokens,
+            inputBudgetTokens: projected.projection.inputBudgetTokens,
+            toolResultTokensBefore: projected.toolResultPruning.originalTokens,
+            toolResultTokensAfter: projected.toolResultPruning.projectedTokens,
+            prunedToolResultCount: projected.toolResultPruning.prunedResults,
+            overBudget: projected.toolResultPruning.overBudget,
+            ...(projected.projection.compaction
+                ? { compactionTrigger: projected.projection.compaction.trigger }
+                : {}),
+        });
+
         return {
             status: projected.manualResult.status,
             ...(projected.manualResult.status === "noop"
@@ -487,6 +538,7 @@ export class LocalModelTransport implements ChatTransport<Message> {
         messages,
         abortSignal,
     }: Parameters<ChatTransport<Message>["sendMessages"]>[0]) {
+        const operationId = crypto.randomUUID();
         const { mode, model } = resolveExecutionConfig(messages);
         const environment = getAgentEnvironment();
         const tools = environment.tools.getModelTools(mode) as ToolContracts;
@@ -526,7 +578,20 @@ export class LocalModelTransport implements ChatTransport<Message> {
                 return result.text;
             },
         });
-        const { projection, compactedSource, generatedSummaryId } = await projectMessages({
+        await this.options.onContextEvent?.({
+            phase: "started",
+            operationId,
+            operation: "model-step",
+            mode,
+            model,
+        });
+        const {
+            projection,
+            compactedSource,
+            generatedSummaryId,
+            toolResultPruning,
+            inputTokensBefore,
+        } = await projectMessages({
             messages: validatedMessages,
             systemPrompt,
             profile: contextProfile,
@@ -534,6 +599,21 @@ export class LocalModelTransport implements ChatTransport<Message> {
             compactor: contextCompactor,
             branchSummaries: this.options.getBranchSummaryContext?.() ?? [],
             resolveToolResultSourceEntryId: this.options.getToolResultSourceEntryId,
+        });
+        await this.options.onContextEvent?.({
+            phase: "completed",
+            operationId,
+            operation: "model-step",
+            mode,
+            model,
+            inputTokensBefore,
+            inputTokensAfter: projection.estimatedInputTokens,
+            inputBudgetTokens: projection.inputBudgetTokens,
+            toolResultTokensBefore: toolResultPruning.originalTokens,
+            toolResultTokensAfter: toolResultPruning.projectedTokens,
+            prunedToolResultCount: toolResultPruning.prunedResults,
+            overBudget: toolResultPruning.overBudget,
+            ...(projection.compaction ? { compactionTrigger: projection.compaction.trigger } : {}),
         });
         const modelMessages = await compileProjectedModelMessages(projection.records, tools);
 

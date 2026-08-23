@@ -50,6 +50,18 @@ When working on Context or model-provider code:
 - Workspace path validation is not OS-level Sandbox enforcement.
 - Session event and timestamp colors belong to semantic Theme tokens rather than component-specific colors.
 
+## Persistence Boundaries
+
+- Keep the cloud Session Store and local Runtime Store separate. `packages/database` is the PostgreSQL/Server boundary; `packages/runtime-store` is the SQLite/local-runtime boundary.
+- Each store owns its own Prisma schema, generated client, datasource configuration, dependencies, and migrations. Do not replace or merge one schema while implementing the other.
+- Session Tree is the semantic conversation authority. Runtime Events are execution/security/recovery facts and must not rewrite Session Entries.
+- Runtime Event and snapshot reads must be explicitly scoped by `sessionId`; SQLite-assigned event offsets are replay cursors, not per-Run execution sequence numbers.
+- Runtime Event payloads are versioned strict allowlists. Reject unknown fields and never persist prompts, messages, Tool input/output, command/file contents, or arbitrary error text.
+- Persist critical execution, Tool-request/permission, and Context-start facts before the corresponding external side effect. Runtime Store failure is fail-closed; do not silently substitute an in-memory store.
+- The installed CLI owns one shared per-user Runtime Store at `~/.more-more-code/runtime/runtime.db` unless `RUNTIME_STORE_DATABASE_URL` supplies an absolute `file:` URL. Runtime migrations must be embedded and idempotent; application startup must not invoke Prisma CLI.
+- Recovery may reconstruct and report incomplete execution, but must not automatically repeat external model/tool side effects.
+- Verify database changes with TypeScript checks and both Prisma schemas. A successful Bun bundle alone is not sufficient because bundling does not enforce the generated Prisma client types used by Server routes.
+
 ## Git Version Control
 
 - Each planned Stage must be developed on its own Git branch. Create/switch to a new Stage branch before beginning implementation for that Stage, and do not mix work from the next Stage into the previous Stage branch. Prefer descriptive names such as `stage/5.4-branch-summary`.

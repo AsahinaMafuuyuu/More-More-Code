@@ -76,6 +76,26 @@ The boundary that translates canonical model input and prefix identity into prov
 
 A runtime lifecycle fact about Run, Turn, or Step execution. Execution Events describe how the runtime executed; Session Entries describe the durable semantic history of the Session. They are related but distinct histories.
 
+## Runtime Event
+
+A JSON-safe, append-only local fact in one of the `execution`, `tool`, `security`, `context`, or `system` categories. Runtime Events use a SQLite-assigned global offset as their durable replay cursor and are always queried within an explicit Session scope. Payload schema v1 is a strict runtime allowlist: unknown fields are rejected, including inside nested Execution Events. Prompts, messages, Tool input/output, command/file content, and arbitrary error text are excluded. An Execution Event may be persisted inside an `execution` Runtime Event envelope, but its per-Run sequence and the durable database offset have different meanings.
+
+## Runtime Snapshot
+
+A session-scoped checkpoint of a Runtime projection at a specific durable event offset. Recovery loads the latest snapshot and applies later Runtime Events through an explicit reducer. Snapshots optimize replay; they do not become a second Session history authority and do not authorize automatic repetition of incomplete external work.
+
+## Cloud Session Store
+
+The PostgreSQL persistence boundary implemented by `packages/database` and consumed by `packages/server`. It stores account-scoped Session Tree state for cloud retrieval and remains outside the local Agent execution critical path.
+
+## Local Runtime Store
+
+The independent SQLite persistence boundary implemented by `packages/runtime-store`. It owns Runtime Event and Runtime Snapshot schema/client/migrations. The CLI defaults to `~/.more-more-code/runtime/runtime.db`, permits an absolute `file:` URL override through `RUNTIME_STORE_DATABASE_URL`, and applies embedded versioned migrations without Prisma CLI at application startup. Its Prisma datasource is intentionally separate from the Cloud Session Store so local recovery changes cannot migrate or remove cloud Session models.
+
+## Runtime Session
+
+The deep, session-scoped adapter between AgentLoop and the Local Runtime Store. It implements `ExecutionEventStore`, performs awaited write-ahead appends, reduces durable events into the open-Run/pending-Context recovery projection, applies Snapshot Policy, and warms Projection Cache. A critical append failure is fail-closed and never falls back to an in-memory execution path. Startup recovery reports incomplete external work but does not execute it.
+
 ## Agent Environment
 
 The resolved process-local coding-agent environment created before Session execution. It combines global/project configuration, the ordered Instruction Chain, the Skill Registry, and Tool Registry sources. It is execution context, not Session history.

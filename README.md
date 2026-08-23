@@ -33,7 +33,10 @@
 │        ▼                                                     │
 │  packages/harness ───────────────► LLM Provider              │
 │  AgentLoop → Lifecycle + Execution Events → Projections      │
-│        │                                                     │
+│        │                            │                        │
+│        │                            ▼                        │
+│        │                    packages/runtime-store           │
+│        │                    Prisma + local SQLite            │
 │        │ best-effort session sync                            │
 │        ▼                                                     │
 │  packages/server                                             │
@@ -116,11 +119,15 @@ MORE-MORE-CODE/
 │   │       ├── lib/            # 云服务相关基础设施
 │   │       └── index.ts        # Hono 服务入口；不执行 Agent/Model
 │   │
-│   ├── database/               # 数据持久层
+│   ├── database/               # 云 Session PostgreSQL 持久层
 │   │   ├── prisma/
-│   │   │   └── schema.prisma   # 数据库模型定义
+│   │   │   └── schema.prisma   # 云 Session 数据库模型
 │   │   └── src/
 │   │       └── client.ts       # Prisma 客户端初始化
+│   │
+│   ├── runtime-store/          # 本地 Runtime Event SQLite 持久层
+│   │   ├── prisma/             # 独立 schema 与 migration
+│   │   └── src/                # SQLite EventStore adapter
 │   │
 │   └── shared/                 # 共享类型与校验
 │       └── src/
@@ -321,7 +328,11 @@ Tools 通过 Tool Registry 按来源区分为 **native** 与 **MCP extension sou
 
 `messages` 字段当前作为兼容性的 JSON 状态容器。新 CLI 写入 **Session Entry Tree v3**：state 直接保存 `entries[]`，每个 durable semantic event 自身就是带 `id / parentId / type` 的树节点，不再使用 v2 的 checkpoint `nodes[] + eventIds[] + events[]` 双层结构。消息只是 Session Entry 的一个子集；tool call/result、error、model/mode/config change、compaction、branch summary 与 custom event 也可以被持久化。
 
-Harness 现在另有独立的 Run / Turn / Step `ExecutionEventStore`：AgentLoop 将执行事实记录为 append-only execution events，并通过 replay 投影出当前 `AgentRun`。Turn 的语义已经调整为“一次 Model response + 该 response 触发的 Tool executions”；工具结果继续调用模型时会开启新的 `tool-continuation` Turn。Harness 还提供 awaited lifecycle stream、`waitForIdle()`、steering/follow-up 队列与 Step progress。当前默认 Store 仍是**进程内 InMemory Store**，尚未写入 PostgreSQL/Cloud Session；Local WAL、crash recovery 与 cloud revision/conflict sync 已明确延后，不应把数据库调用塞回 AgentLoop。
+Harness 另有独立的 Run / Turn / Step `ExecutionEventStore`：AgentLoop 将执行事实记录为 append-only execution events，并通过 replay 投影出当前 `AgentRun`。Turn 的语义是“一次 Model response + 该 response 触发的 Tool executions”；工具结果继续调用模型时会开启新的 `tool-continuation` Turn。Harness 还提供 awaited lifecycle stream、`waitForIdle()`、steering/follow-up 队列与 Step progress。
+
+Stage 6.0 新增并启用了独立的 `packages/runtime-store` SQLite 持久化边界。CLI 启动时会在 `~/.more-more-code/runtime/runtime.db` 创建并幂等执行内嵌版本化 migration；测试或高级部署可通过绝对 `file:` URL 的 `RUNTIME_STORE_DATABASE_URL` 覆盖位置。它与 `packages/database` 的 PostgreSQL 云 Session Store 使用不同的 Prisma schema/client/migration：Session Tree 仍是语义会话权威，Runtime Events 只记录执行、安全、Context 与恢复事实。
+
+每个 CLI Session 使用 durable `RuntimeSession` 作为 AgentLoop 的 `ExecutionEventStore`，并复用进程级 SQLite adapter 与 Projection Cache。执行、Tool 请求/权限/终态、Context projection 与 session-open 事实采用严格白名单的 v1 payload；未知字段会被拒绝，prompt、message、Tool input/output、命令/文件内容和任意错误文本不会进入 Runtime Store。Model/Tool 外部副作用之前的关键事实必须先持久化，写入失败会阻止下一步而不会静默回退到内存。重启时按最新 snapshot + 后续 events 恢复、预热 cache，并在 UI 报告未完成 Run/操作，但不会自动重放模型或工具副作用。Cloud revision/conflict sync 仍属后续工作。
 
 ### 会话恢复与分支
 
@@ -342,7 +353,7 @@ Session Entry Tree 中每个 Entry 都是一个可恢复的语义历史点。CLI
 | **路由** | [React Router 8](https://reactrouter.com/) |
 | **后端框架** | [Hono](https://hono.dev/) |
 | **AI SDK** | [Vercel AI SDK](https://sdk.vercel.ai/docs) (`ai` v7) + provider adapters；OpenAI 显式使用 Responses API |
-| **数据库** | PostgreSQL + [Prisma](https://www.prisma.io/) v7 |
+| **数据库** | PostgreSQL（云 Session）+ SQLite（本地 Runtime）+ [Prisma](https://www.prisma.io/) v7 |
 | **数据校验** | [Zod](https://zod.dev/) v4 |
 | **错误监控** | [Sentry](https://sentry.io/) |
 
@@ -355,6 +366,9 @@ Session Entry Tree 中每个 Entry 都是一个可恢复的语义历史点。CLI
 | `bun dev:server` | 启动后端开发服务（hot reload） |
 | `bun dev:cli` | 启动 TUI 客户端（watch 模式） |
 | `bun run --cwd packages/database db:generate` | 重新生成 Prisma Client |
+| `bun run --cwd packages/runtime-store db:generate` | 重新生成本地 Runtime Store Prisma Client |
+| `bun run --cwd packages/runtime-store db:validate` | 校验本地 Runtime Store Prisma schema |
+| `bun run --cwd packages/runtime-store test` | 运行 SQLite Runtime Store 集成测试 |
 
 ---
 

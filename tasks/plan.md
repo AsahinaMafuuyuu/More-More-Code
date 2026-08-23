@@ -597,73 +597,261 @@ Expose Carry / No Carry / Cancel when `ask` applies and add the `ask | always | 
 - Remote/cloud collaborative branch merge semantics.
 
 
-# Stage 6.0 — Security Foundation
+# Stage 6.0 — Recoverable Runtime & Security Foundation
 
-**Status:** Planned — 2026-08-15.
+**Status:** In progress — persistence/recovery foundation delivered 2026-08-22 and production runtime wiring delivered 2026-08-23; permission and audit phases remain.
 
 ## Overview
 
-Upgrade Agent Runtime from executable automation into a secure, auditable, recoverable local-first runtime.
-
-Core decisions:
-- Local persistence uses Prisma + SQLite.
-- SQLite is the source of truth; Memory Projection Cache remains the execution hot path.
-- Runtime accesses storage through EventStore abstraction, not direct ORM calls.
-- Future cloud persistence uses a PostgreSQL adapter without changing runtime contracts.
-
-
-
-# Stage 6.0 Security Foundation
-
-**Status:** Planned — 2026-08-15.
-
-## Goal
-
-Upgrade Agent Runtime into a secure, auditable, recoverable local-first runtime.
+Upgrade the local Agent Runtime into a recoverable and auditable runtime without breaking the existing cloud Session Store. The first delivery slice restores the PostgreSQL Session boundary, moves local Runtime Events into an independent SQLite adapter, and proves snapshot-plus-replay recovery. Permission policy and audit work build on that durable event boundary instead of introducing a second incompatible authority.
 
 ## Architecture Decisions
 
-### Persistence
-- Use Prisma ORM with SQLite for local runtime persistence.
-- SQLite is the source of truth.
-- Memory Projection Cache remains the hot execution path.
-- Runtime accesses persistence only through EventStore abstraction.
-- Reserve PostgreSQL adapter for future cloud persistence.
+- `packages/database` remains the PostgreSQL-backed cloud Session Store used by `packages/server`.
+- Local Runtime Events and Runtime Snapshots use a separate SQLite Prisma schema/client so changing the local store cannot remove or migrate cloud Session tables.
+- Harness owns provider-independent Runtime Event, snapshot, recovery, and permission contracts; persistence adapters depend on those contracts, never the reverse.
+- Session Tree remains the semantic conversation authority. Runtime Events persist execution, tool, context, security, and system facts; they do not replace Session Entries.
+- Runtime Event offsets are database-assigned and append-only. Reads and snapshots are explicitly scoped by `sessionId`.
+- Recovery means: load the latest valid session snapshot, replay later events through a supplied projection reducer, and expose the resulting state plus replay diagnostics. It does not silently restart an incomplete tool or model request.
+- Memory Projection Cache is disposable hot state. SQLite is the durable local runtime source of truth.
+- CLI startup owns one per-user Runtime Store at `~/.more-more-code/runtime/runtime.db` and applies embedded versioned migrations without invoking Prisma CLI.
+- Runtime Event payloads are strict versioned allowlists; critical execution/Tool/Context start facts are durably appended before the corresponding external side effect, with no in-memory fallback.
+- Existing CLI Tool Runtime remains the final permission-enforcement boundary. A later slice will consolidate its policy contract with the Harness policy engine.
 
-### Event Store
-- Introduce unified RuntimeEvent model.
-- Event categories include execution, tool, security, context, and system.
-- Permission decisions are persisted as events for audit and replay.
+## Dependency Graph
 
-### Recovery
-- Introduce snapshot based recovery.
-- Use hybrid snapshot trigger: event count threshold or time threshold.
-- Restore by loading latest snapshot and replaying following events.
+```text
+Cloud Session schema restoration
+    -> Server type safety and cloud Session compatibility
 
-### Security Boundary
-- Harness owns permission decisions.
-- Tool Runtime owns final enforcement.
-- Capability model is the primary security model.
-- Rule matching provides additional constraints.
-- Do not introduce OPA/Rego in this stage.
+Harness Runtime Event contract
+    -> SQLite Runtime Store adapter + migrations
+        -> Snapshot policy + projection cache
+            -> Snapshot/replay recovery
+                -> Permission decision persistence
+                    -> Audit timeline and replay verification
+```
 
-### Policy Storage
-- Default policy is code-defined.
-- User overrides are persisted separately.
-- Effective policy is generated from both sources.
+## Phase 1: Repair Persistence Boundaries
 
-## Implementation Order
+### Task 1: Restore the cloud PostgreSQL Session Store
 
-1. EventStore interface and Prisma SQLite adapter.
-2. Runtime event persistence and projection cache.
-3. Snapshot creation and recovery.
-4. Permission Engine foundation.
-5. Capability model and enforcement.
-6. Security audit events and replay support.
+**Description:** Restore the Prisma PostgreSQL schema/client used by Server session routes and remove local Runtime Event concerns from that package.
+
+**Acceptance criteria:**
+- Server session routes typecheck against a generated `Session` model.
+- `packages/database` uses the PostgreSQL adapter and `DATABASE_URL` again.
+- RuntimeEvent/RuntimeSnapshot models are absent from the cloud schema.
+
+**Verification:** Server typecheck and build; Prisma schema validation.
+
+**Dependencies:** None.
+
+**Estimated scope:** Small.
+
+### Task 2: Create an isolated SQLite Runtime Store
+
+**Description:** Add a dedicated workspace package with its own Prisma schema, generated client, explicit SQLite dependencies, configurable database URL, and initial migration.
+
+**Acceptance criteria:**
+- A clean install can resolve the SQLite adapter and driver from declared dependencies.
+- Runtime Event and Snapshot tables can be created from committed migrations.
+- Database location is supplied explicitly rather than derived from an arbitrary process working directory.
+
+**Verification:** Prisma validate/generate plus a temporary-database integration test.
+
+**Dependencies:** Task 1.
+
+**Estimated scope:** Medium.
+
+## Checkpoint: Persistence Boundary
+
+- Cloud Server Session typecheck/build passes.
+- Local Runtime Store validates independently.
+- No Prisma client or datasource is shared between PostgreSQL and SQLite.
+
+## Phase 2: Durable Runtime Event and Recovery Slice
+
+### Task 3: Finalize provider-independent EventStore contracts
+
+**Description:** Replace the current loosely aligned interfaces with one typed, session-scoped contract for append, ordered reads, snapshots, and offsets.
+
+**Acceptance criteria:**
+- Event categories are a discriminated union or validated typed envelope rather than unconstrained database strings.
+- Event timestamps and database mappings have one documented representation.
+- `listAfter`, `latestSnapshot`, and snapshot writes require a `sessionId`.
+
+**Verification:** Harness typecheck and contract tests.
+
+**Dependencies:** Task 2.
+
+**Estimated scope:** Small.
+
+### Task 4: Implement atomic SQLite append and snapshot storage
+
+**Description:** Implement the Harness contract using database-assigned monotonic offsets and session-filtered reads, avoiding query-max-then-insert races.
+
+**Acceptance criteria:**
+- Concurrent appends cannot allocate the same event offset.
+- Recovery for one session never reads another session's events or snapshot.
+- Stored rows are mapped back to Harness Runtime Event/Snapshot types without `any` escaping the adapter boundary.
+
+**Verification:** SQLite integration tests for ordering, concurrency, and cross-session isolation.
+
+**Dependencies:** Task 3.
+
+**Estimated scope:** Medium.
+
+## Phase 3: Snapshot and Recovery
+
+### Task 5: Complete projection cache, snapshot policy, and replay recovery
+
+**Description:** Integrate the in-progress cache and hybrid snapshot policy with a generic recovery reducer that rebuilds runtime state from the latest snapshot plus later events.
+
+**Acceptance criteria:**
+- Recovery works both with and without an existing snapshot.
+- Replay produces the same projection as replaying the complete event stream.
+- Incomplete runs are surfaced as recovery state and are not automatically re-executed.
+
+**Verification:** Harness unit tests plus SQLite restart/recovery integration tests.
+
+**Dependencies:** Task 4.
+
+**Estimated scope:** Medium.
+
+## Checkpoint: Recovery Foundation
+
+- Harness and Runtime Store tests pass.
+- Snapshot-plus-replay parity is verified.
+- Server session behavior remains unchanged.
+
+## Phase 4: Production Runtime Wiring
+
+**Status:** Delivered — 2026-08-23.
+
+### Task 6: Bootstrap the per-user Runtime Store
+
+**Description:** Add one CLI bootstrap module that owns the stable local database location, embedded migration lifecycle, shared SQLite adapter, and shutdown cleanup. The default database is `~/.more-more-code/runtime/runtime.db`; `RUNTIME_STORE_DATABASE_URL` remains an explicit override for tests and advanced users.
+
+**Acceptance criteria:**
+- First launch creates the per-user directory and database without invoking Prisma CLI at runtime.
+- Repeated startup applies the embedded, versioned migrations idempotently and never derives the database path from `process.cwd()`.
+- Bootstrap failures stop startup with a clear error, the shared store is closed on normal shutdown, and the real CLI launcher contains no trailing executable garbage.
+
+**Verification:** Runtime Store bootstrap/migration integration tests; CLI typecheck/build; launcher regression check.
+
+**Dependencies:** Task 5.
+
+**Files likely touched:**
+- `packages/runtime-store/src/bootstrap.ts`
+- `packages/runtime-store/src/migrations.ts`
+- `packages/runtime-store/tests/bootstrap.test.ts`
+- `packages/cli/src/lib/runtime-environment.ts`
+- `packages/cli/src/index.tsx`
+
+**Estimated scope:** Medium.
+
+### Task 7: Persist AgentLoop execution facts before side effects
+
+**Description:** Introduce versioned, typed Runtime Event envelopes and a durable execution adapter that satisfies the existing `ExecutionEventStore` interface while hiding SQLite, replay, projection-cache, and snapshot-policy details behind one deep Runtime Session module.
+
+**Acceptance criteria:**
+- Execution events are validated and durably appended before AgentLoop advances to the corresponding model/tool side effect.
+- Store append failure is fail-closed and never silently falls back to in-memory execution.
+- Session startup restores snapshot-plus-replay state, warms Projection Cache, and reports incomplete runs without re-executing them.
+
+**Verification:** Harness adapter tests for write ordering/failure/recovery plus SQLite restart coverage.
+
+**Dependencies:** Task 6.
+
+**Files likely touched:**
+- `packages/harness/src/event-store.ts`
+- `packages/harness/src/runtime-session.ts`
+- `packages/harness/tests/runtime-session.test.ts`
+- `packages/cli/src/hooks/use-chat.ts`
+
+**Estimated scope:** Medium.
+
+## Checkpoint: Durable Execution
+
+- CLI first-run and repeated-start migration tests pass.
+- AgentLoop cannot begin an external step until its execution fact is durable.
+- Recovery reports but does not resume incomplete work.
+
+### Task 8: Emit redacted Tool and permission facts
+
+**Description:** Add an awaited Tool Runtime observer that records request, permission decision, and terminal status using allowlisted metadata only. Raw tool input, output, command text, file contents, prompts, and arbitrary error text are excluded from Runtime Events.
+
+**Acceptance criteria:**
+- Tool request and effective permission decision are durable before executor invocation.
+- Terminal status, source, timing, and correlation IDs are persisted without raw input/output.
+- Runtime Store failure prevents the next tool side effect and is surfaced as an execution failure.
+
+**Verification:** Tool Runtime ordering/redaction/failure tests and CLI integration tests.
+
+**Dependencies:** Task 7.
+
+**Files likely touched:**
+- `packages/cli/src/lib/tool-runtime.ts`
+- `packages/cli/src/hooks/use-chat.ts`
+- `packages/cli/tests/agent-bootstrap.test.ts`
+- `packages/harness/src/event-store.ts`
+
+**Estimated scope:** Medium.
+
+### Task 9: Emit Context and recovery-system facts
+
+**Description:** Record Context projection lifecycle and session recovery diagnostics as safe metrics and identifiers. These events make recovery observable without duplicating model-visible content or Session Tree payloads.
+
+**Acceptance criteria:**
+- Context projection start is durable before semantic-compaction/primary-model work; completion records only token/budget/pruning metrics.
+- Session-open and recovery-report system events include pending-operation counts but no conversation content.
+- The CLI exposes recovered incomplete work to the user and permits a new Run without automatic replay.
+
+**Verification:** LocalModelTransport callback tests, Runtime Session projection tests, and a CLI recovery-notification test.
+
+**Dependencies:** Tasks 7 and 8.
+
+**Files likely touched:**
+- `packages/cli/src/lib/local-model-transport.ts`
+- `packages/cli/src/hooks/use-chat.ts`
+- `packages/cli/src/screens/session.tsx`
+- `packages/cli/tests/local-model-context.test.ts`
+
+**Estimated scope:** Medium.
+
+## Checkpoint: Production Runtime Wiring
+
+- Typed Runtime Events contain no raw prompts, Tool input/output, file contents, command text, or arbitrary error text.
+- Runtime Store append failures stop subsequent external side effects.
+- Snapshot-plus-replay recovery warms Projection Cache and exposes incomplete work without replay.
+- Harness, CLI, and Runtime Store tests/typechecks pass; CLI build and `git diff --check` pass.
+
+## Phase 5: Permission Follow-up
+
+### Task 10: Consolidate permission contracts and persistence
+
+Unify Harness and CLI permission types, generate effective policy from code defaults plus user overrides, enforce it in Tool Runtime, and persist decisions as security Runtime Events.
+
+## Phase 6: Audit Follow-up
+
+### Task 11: Add security audit projection and validation
+
+Project a session-scoped security timeline, verify replayed decisions, and cover dangerous command/path/scope cases.
+
+## Final Verification
+
+- Harness, CLI, Runtime Store, and Server tests pass.
+- Shared/Harness/CLI/Server/Database/Runtime Store typechecks pass.
+- CLI and Server builds pass.
+- Both Prisma schemas validate and generate independently.
+- `git diff --check` passes.
+- README, CONTEXT, PROJECT_ANALYSIS, CHANGELOG, and ADRs reflect the two-store boundary and actual completion state.
 
 ## Deferred
 
-- PostgreSQL cloud synchronization.
-- Sandbox/container runtime.
-- Multi-agent execution.
+- PostgreSQL synchronization of local Runtime Events.
+- Sandbox/container enforcement.
+- Automatic restart of interrupted external processes.
+- Multi-agent execution framework.
 - Full OpenTelemetry integration.

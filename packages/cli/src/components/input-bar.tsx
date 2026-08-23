@@ -19,6 +19,7 @@ import { useTheme } from "../providers/theme";
 import { usePromptConfig } from "../providers/prompt-config";
 import type { ModeType, SupportedChatModelId } from "@more-more-code/shared";
 import type { ManualContextCompactionOutcome } from "../lib/local-model-transport";
+import { shutdownRuntimeEnvironment } from "../lib/runtime-environment";
 
 // 这些变量主要用于@提及功能的实现
 const MAX_VISIBLE_MENTIONS = 8; // 最大可见的提及数量
@@ -535,7 +536,9 @@ export default function InputBar({
         textarea.setText('') // 清空输入框
         if (command.action) {
             command.action({
-                exit: () => renderer.destroy(), // 销毁渲染器
+                exit: () => {
+                    void shutdownRuntimeEnvironment().finally(() => renderer.destroy());
+                }, // 先关闭本地 Runtime Store，再销毁渲染器
                 toast, // 显示toast
                 dialog,
                 navigate,
