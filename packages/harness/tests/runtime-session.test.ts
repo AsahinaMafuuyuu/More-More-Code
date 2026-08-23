@@ -20,6 +20,9 @@ class InMemoryRuntimeStore
   readonly events: RuntimeEvent[] = [];
   readonly snapshots: RuntimeSnapshot<RuntimeSessionProjection & RuntimeJsonValue>[] = [];
   failWhen?: (input: RuntimeEventInput) => boolean;
+  failSnapshot = false;
+  snapshotAttempts = 0;
+  delayWhen?: (input: RuntimeEventInput) => number;
 
   async append<TType extends RuntimeEventType>(
     input: RuntimeEventInput<TType>,
@@ -27,6 +30,8 @@ class InMemoryRuntimeStore
     if (this.failWhen?.(input as RuntimeEventInput)) {
       throw new Error("runtime store unavailable");
     }
+    const delayMs = this.delayWhen?.(input as RuntimeEventInput) ?? 0;
+    if (delayMs > 0) await Bun.sleep(delayMs);
 
     const event = {
       ...structuredClone(input),
@@ -47,6 +52,8 @@ class InMemoryRuntimeStore
   async saveSnapshot(
     input: RuntimeSnapshotInput<RuntimeSessionProjection & RuntimeJsonValue>,
   ): Promise<RuntimeSnapshot<RuntimeSessionProjection & RuntimeJsonValue>> {
+    this.snapshotAttempts += 1;
+    if (this.failSnapshot) throw new Error("snapshot store unavailable");
     const snapshot = {
       ...structuredClone(input),
       id: `snapshot-${this.snapshots.length + 1}`,
@@ -220,5 +227,108 @@ describe("RuntimeSession", () => {
       "non-allowlisted durable fields",
     );
     expect(JSON.stringify(store.events)).not.toContain("TOP-SECRET-PROMPT");
+  });
+
+  test("does not reject a committed event when derived snapshot storage fails", async () => {
+    const store = new InMemoryRuntimeStore();
+    store.failSnapshot = true;
+    let now = 10_000;
+    const runtimeSession = new RuntimeSession({
+      sessionId: "session-one",
+      store,
+      snapshotPolicy: { maxEvents: 2, maxAgeMs: 60_000 },
+      now: () => now,
+    });
+    await runtimeSession.ready();
+    let modelCalls = 0;
+
+    const run = await new AgentLoop({ eventStore: runtimeSession }).run({
+      sessionId: "session-one",
+      adapter: {
+        async runModelStep() {
+          modelCalls += 1;
+          return { toolCalls: [] };
+        },
+        async runToolStep() {},
+      },
+    });
+
+    expect(modelCalls).toBe(1);
+    expect(run.status).toBe("completed");
+    expect(store.snapshots).toHaveLength(0);
+    expect(store.snapshotAttempts).toBe(1);
+    expect(runtimeSession.getSnapshotDiagnostics()).toEqual({
+      consecutiveFailures: 1,
+      lastFailureAt: 10_000,
+      nextRetryAt: 11_000,
+    });
+    expect(store.events.some((event) =>
+      event.type === "execution" && event.payload.event.type === "run.completed"),
+    ).toBe(true);
+
+    store.failSnapshot = false;
+    now = 11_000;
+    await runtimeSession.record({
+      type: "tool",
+      payload: {
+        schemaVersion: 1,
+        kind: "tool.lifecycle",
+        phase: "requested",
+        toolName: "readFile",
+        source: "native",
+        toolCallId: "tool-retry",
+      },
+    });
+    expect(store.snapshotAttempts).toBe(2);
+    expect(store.snapshots).toHaveLength(1);
+    expect(runtimeSession.getSnapshotDiagnostics()).toEqual({ consecutiveFailures: 0 });
+  });
+
+  test("serializes concurrent records before applying their projections", async () => {
+    const store = new InMemoryRuntimeStore();
+    const operationId = "context-operation";
+    store.delayWhen = (input) => input.type === "context"
+      && input.payload.phase === "started"
+      ? 20
+      : 0;
+    const cache = new ProjectionCache<RuntimeSessionProjection>();
+    const runtimeSession = new RuntimeSession({
+      sessionId: "session-one",
+      store,
+      projectionCache: cache,
+    });
+    await runtimeSession.ready();
+
+    await Promise.all([
+      runtimeSession.record({
+        type: "context",
+        payload: {
+          schemaVersion: 1,
+          kind: "context.projection",
+          phase: "started",
+          operationId,
+          operation: "model-step",
+          mode: "BUILD",
+          model: "test-model",
+        },
+      }),
+      runtimeSession.record({
+        type: "context",
+        payload: {
+          schemaVersion: 1,
+          kind: "context.projection",
+          phase: "completed",
+          operationId,
+          operation: "model-step",
+          mode: "BUILD",
+          model: "test-model",
+        },
+      }),
+    ]);
+
+    expect(cache.get("session-one")?.state.pendingContexts).toEqual({});
+    expect(store.events.map((event) => event.offset)).toEqual(
+      store.events.map((_, index) => index + 1),
+    );
   });
 });

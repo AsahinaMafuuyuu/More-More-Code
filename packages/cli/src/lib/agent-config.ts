@@ -2,6 +2,11 @@ import { mkdir, readFile, writeFile } from "fs/promises";
 import { homedir } from "os";
 import { join, resolve } from "path";
 import { z } from "zod";
+import type {
+    PermissionEffect,
+    PermissionRule,
+    PermissionScope,
+} from "@more-more-code/harness";
 
 export const MORE_MORE_CODE_DIR = ".more-more-code";
 export const AGENT_CONFIG_FILE = "config.json";
@@ -16,6 +21,23 @@ const mcpServerSchema = z.object({
     args: z.array(z.string()).optional(),
     url: z.string().optional(),
     env: z.record(z.string(), z.string()).optional(),
+});
+
+const permissionEffectSchema = z.enum(["allow", "deny", "ask"]);
+const permissionScopeSchema = z.enum([
+    "workspace",
+    "outside-workspace",
+    "agent-config",
+    "external",
+]);
+const permissionPatternsSchema = z.array(z.string().trim().min(1)).min(1);
+const permissionRuleSchema = z.object({
+    effect: permissionEffectSchema,
+    capabilities: permissionPatternsSchema.optional(),
+    commands: permissionPatternsSchema.optional(),
+    paths: permissionPatternsSchema.optional(),
+    resources: permissionPatternsSchema.optional(),
+    scopes: z.array(permissionScopeSchema).min(1).optional(),
 });
 
 const agentConfigFileSchema = z.object({
@@ -38,9 +60,14 @@ const agentConfigFileSchema = z.object({
     session: z.object({
         branchSummaryOnJump: z.enum(["ask", "always", "never"]).optional(),
     }).optional(),
+    permissions: z.object({
+        default: permissionEffectSchema.optional(),
+        rules: z.array(permissionRuleSchema).optional(),
+    }).optional(),
 });
 
 export type McpServerConfig = z.infer<typeof mcpServerSchema>;
+export type PermissionRuleConfig = z.infer<typeof permissionRuleSchema>;
 export type AgentConfigFile = z.infer<typeof agentConfigFileSchema>;
 
 export type ResolvedAgentConfig = {
@@ -62,6 +89,10 @@ export type ResolvedAgentConfig = {
     };
     session: {
         branchSummaryOnJump: "ask" | "always" | "never";
+    };
+    permissions: {
+        default: PermissionEffect;
+        rules: Array<PermissionRule & { policy: "configured" }>;
     };
 };
 
@@ -103,6 +134,10 @@ const DEFAULT_CONFIG: ResolvedAgentConfig = {
     session: {
         branchSummaryOnJump: "ask",
     },
+    permissions: {
+        default: "allow",
+        rules: [],
+    },
 };
 
 const DEFAULT_GLOBAL_INSTRUCTIONS = `# MORE-MORE-CODE Global Instructions
@@ -122,7 +157,12 @@ function cloneDefaultConfig(): ResolvedAgentConfig {
 }
 
 function serializeDefaultConfig() {
-    return `${JSON.stringify(cloneDefaultConfig(), null, 2)}\n`;
+    return `${JSON.stringify({
+        ...cloneDefaultConfig(),
+        // An omitted default means the code-owned policy remains authoritative;
+        // only explicit user values become configured catch-all overrides.
+        permissions: { rules: [] },
+    }, null, 2)}\n`;
 }
 
 async function writeIfMissing(path: string, content: string) {
@@ -217,6 +257,19 @@ export function mergeAgentConfig(
         }
         if (config.session?.branchSummaryOnJump !== undefined) {
             resolved.session.branchSummaryOnJump = config.session.branchSummaryOnJump;
+        }
+        if (config.permissions?.default !== undefined) {
+            resolved.permissions.rules.push({
+                effect: config.permissions.default,
+                policy: "configured",
+            });
+        }
+        if (config.permissions?.rules) {
+            resolved.permissions.rules.push(...config.permissions.rules.map((rule) => ({
+                ...structuredClone(rule),
+                scopes: rule.scopes as PermissionScope[] | undefined,
+                policy: "configured" as const,
+            })));
         }
     };
 

@@ -1,8 +1,15 @@
 import type { ModeType } from "@more-more-code/shared";
+import {
+    DefaultPermissionPolicy,
+    isPermissionDecision,
+    type PermissionDecision,
+    type PermissionEffect,
+    type PermissionPolicy,
+    type PermissionResourceKind,
+    type PermissionScope,
+} from "@more-more-code/harness";
 import type { RegisteredToolDefinition, ToolRegistry, ToolSourceKind } from "./tool-registry";
 
-export type ToolPermissionEffect = "allow" | "deny" | "ask";
-export type ToolPermissionDecision = { effect: ToolPermissionEffect; reason?: string };
 export type ToolExecutionStatus = "completed" | "failed" | "cancelled" | "timed_out" | "denied" | "approval_required";
 
 export type ToolExecutionContext = {
@@ -22,16 +29,6 @@ export type ToolExecutionRequest = {
     input: unknown;
     source?: ToolSourceKind;
     context: ToolExecutionContext;
-};
-
-export type ToolPermissionRequest = {
-    tool: RegisteredToolDefinition;
-    input: unknown;
-    context: ToolExecutionContext;
-};
-
-export type ToolPermissionPolicy = {
-    evaluate(request: ToolPermissionRequest): ToolPermissionDecision | Promise<ToolPermissionDecision>;
 };
 
 export type ToolExecutor = {
@@ -54,7 +51,7 @@ export type ToolExecutionResult = {
 export type ToolRuntimeOptions = {
     registry: ToolRegistry;
     executors: ToolExecutor[];
-    permissionPolicy?: ToolPermissionPolicy;
+    permissionPolicy?: PermissionPolicy;
     defaultTimeoutMs?: number;
     now?: () => number;
     observer?: ToolRuntimeObserver;
@@ -68,9 +65,20 @@ export type ToolRuntimeObserverEvent =
         context: ToolRuntimeObservationContext;
     }
     | {
+        type: "permission_requested";
+        toolName: string;
+        capability: string;
+        resourceKind: PermissionResourceKind;
+        scope: PermissionScope;
+        context: ToolRuntimeObservationContext;
+    }
+    | {
         type: "permission_decided";
         toolName: string;
-        decision: ToolPermissionEffect;
+        capability: string;
+        resourceKind: PermissionResourceKind;
+        scope: PermissionScope;
+        decision: PermissionEffect;
         policy: "default" | "configured";
         context: ToolRuntimeObservationContext;
     }
@@ -89,11 +97,7 @@ export type ToolRuntimeObserver = (
     event: ToolRuntimeObserverEvent,
 ) => void | Promise<void>;
 
-const ALLOW_ALL_POLICY: ToolPermissionPolicy = {
-    evaluate() {
-        return { effect: "allow" };
-    },
-};
+const ALLOW_ALL_POLICY = new DefaultPermissionPolicy();
 
 function errorMessage(error: unknown) {
     return error instanceof Error ? error.message : String(error);
@@ -115,11 +119,10 @@ function finishResult(
 export class ToolRuntime {
     private readonly registry: ToolRegistry;
     private readonly executors: Map<ToolSourceKind, ToolExecutor>;
-    private readonly permissionPolicy: ToolPermissionPolicy;
+    private readonly permissionPolicy: PermissionPolicy;
     private readonly defaultTimeoutMs: number;
     private readonly now: () => number;
     private readonly observer?: ToolRuntimeObserver;
-    private readonly permissionPolicySource: "default" | "configured";
 
     constructor(options: ToolRuntimeOptions) {
         this.registry = options.registry;
@@ -128,7 +131,6 @@ export class ToolRuntime {
         this.defaultTimeoutMs = options.defaultTimeoutMs ?? 120_000;
         this.now = options.now ?? Date.now;
         this.observer = options.observer;
-        this.permissionPolicySource = options.permissionPolicy ? "configured" : "default";
     }
 
     async run(request: ToolExecutionRequest): Promise<ToolExecutionResult> {
@@ -149,13 +151,6 @@ export class ToolRuntime {
 
         const tool = this.registry.getToolDefinition(request.toolName, request.context.mode, source);
         if (!tool) {
-            await this.observe({
-                type: "permission_decided",
-                toolName: request.toolName,
-                decision: "deny",
-                policy: this.permissionPolicySource,
-                context: redactToolExecutionContext(request.context),
-            });
             return this.finishAndObserve(request.context, {
                 ...base,
                 status: "denied",
@@ -163,26 +158,15 @@ export class ToolRuntime {
             });
         }
 
-        const permission = await this.permissionPolicy.evaluate({
-            tool,
-            input: request.input,
-            context: request.context,
-        });
-        await this.observe({
-            type: "permission_decided",
-            toolName: request.toolName,
-            decision: permission.effect,
-            policy: this.permissionPolicySource,
-            context: redactToolExecutionContext(request.context),
-        });
-        if (permission.effect === "deny") {
+        const permission = await this.evaluatePermissions(tool, request);
+        if (permission?.effect === "deny") {
             return this.finishAndObserve(request.context, {
                 ...base,
                 status: "denied",
                 error: permission.reason ?? `Permission denied for tool ${request.toolName}`,
             });
         }
-        if (permission.effect === "ask") {
+        if (permission?.effect === "ask") {
             return this.finishAndObserve(request.context, {
                 ...base,
                 status: "approval_required",
@@ -216,6 +200,54 @@ export class ToolRuntime {
             context: redactToolExecutionContext(request.context),
         });
         return result;
+    }
+
+    private async evaluatePermissions(
+        tool: RegisteredToolDefinition,
+        request: ToolExecutionRequest,
+    ): Promise<PermissionDecision | null> {
+        const permissionRequests = await this.registry.getPermissionRequests(
+            tool,
+            request.input,
+            request.context.workspaceRoot,
+        );
+        let blockingDecision: PermissionDecision | null = null;
+
+        for (const permissionRequest of permissionRequests) {
+            const resource = permissionRequest.resource ?? {
+                kind: "resource" as const,
+                value: `tool:${request.toolName}`,
+                scope: "workspace" as const,
+            };
+            const observation = {
+                toolName: request.toolName,
+                capability: permissionRequest.capability,
+                resourceKind: resource.kind,
+                scope: resource.scope,
+                context: redactToolExecutionContext(request.context),
+            };
+            await this.observe({
+                type: "permission_requested",
+                ...observation,
+            });
+            const decision = await this.permissionPolicy.decide(permissionRequest);
+            if (!isPermissionDecision(decision)) {
+                throw new Error("Permission policy returned an invalid decision");
+            }
+            await this.observe({
+                type: "permission_decided",
+                ...observation,
+                decision: decision.effect,
+                policy: decision.policy,
+            });
+
+            if (decision.effect === "deny"
+                || (decision.effect === "ask" && blockingDecision?.effect !== "deny")) {
+                blockingDecision = decision;
+            }
+        }
+
+        return blockingDecision;
     }
 
     private async finishAndObserve(

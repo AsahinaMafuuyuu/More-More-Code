@@ -237,11 +237,11 @@
 
 ## Phase 5: Permission & Enforcement
 
-- [ ] Consolidate Harness and CLI `allow | deny | ask` contracts.
-- [ ] Add capability rules for commands, paths, resources, and scopes.
-- [ ] Generate effective policy from defaults plus persisted user overrides.
-- [ ] Enforce the effective decision inside Tool Runtime.
-- [ ] Persist permission requests and decisions as security Runtime Events.
+- [x] Consolidate Harness and CLI `allow | deny | ask` contracts.
+- [x] Add capability rules for commands, paths, resources, and scopes.
+- [x] Generate effective policy from defaults plus persisted user overrides.
+- [x] Enforce the effective decision inside Tool Runtime.
+- [x] Persist permission requests and decisions as security Runtime Events.
 
 ## Phase 6: Audit & Validation
 

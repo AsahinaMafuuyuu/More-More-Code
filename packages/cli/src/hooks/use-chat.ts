@@ -11,6 +11,7 @@ import {
 import {
     AgentLoop,
     RUNTIME_EVENT_SCHEMA_VERSION,
+    RUNTIME_SECURITY_EVENT_SCHEMA_VERSION,
     appendSessionEntry,
     appendSessionTreeMessages,
     getParentSessionEntry,
@@ -50,6 +51,7 @@ import {
 } from "../lib/branch-navigation";
 import type { BranchSummaryReductionOutcome } from "../lib/branch-summary-reducer";
 import { getRuntimeSession } from "../lib/runtime-environment";
+import { createEffectivePermissionPolicy } from "../lib/permission-policy";
 
 export type { Message } from "../lib/chat-types";
 
@@ -107,6 +109,7 @@ function createLocalToolRuntime(runtimeSession: RuntimeSession) {
         workspaceRoot: environment.config.paths.workspaceRoot,
         runtime: new ToolRuntime({
             registry: environment.tools,
+            permissionPolicy: createEffectivePermissionPolicy(environment.config.resolved),
             executors: [{
                 source: "native",
                 execute(toolName, input, context) {
@@ -140,13 +143,31 @@ function createLocalToolRuntime(runtimeSession: RuntimeSession) {
                     });
                     return;
                 }
+                if (event.type === "permission_requested") {
+                    await runtimeSession.record({
+                        type: "security",
+                        payload: {
+                            schemaVersion: RUNTIME_SECURITY_EVENT_SCHEMA_VERSION,
+                            kind: "permission.lifecycle",
+                            phase: "requested",
+                            capability: event.capability,
+                            resourceKind: event.resourceKind,
+                            scope: event.scope,
+                            ...correlation,
+                        },
+                    });
+                    return;
+                }
                 if (event.type === "permission_decided") {
                     await runtimeSession.record({
                         type: "security",
                         payload: {
-                            schemaVersion: RUNTIME_EVENT_SCHEMA_VERSION,
-                            kind: "permission.decision",
-                            capability: `tool.${event.toolName}`,
+                            schemaVersion: RUNTIME_SECURITY_EVENT_SCHEMA_VERSION,
+                            kind: "permission.lifecycle",
+                            phase: "decided",
+                            capability: event.capability,
+                            resourceKind: event.resourceKind,
+                            scope: event.scope,
                             decision: event.decision,
                             policy: event.policy,
                             ...correlation,
@@ -850,6 +871,12 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
                                         ...metadata,
                                     });
                                 }
+                                // Executor outcomes are normalized by ToolRuntime. A thrown
+                                // error before any result therefore means policy/observer/
+                                // Runtime Store infrastructure failed; propagate it so
+                                // AgentLoop records a failed step/run and cannot continue to
+                                // another external side effect.
+                                if (!toolRuntimeResult) throw resolved;
                             }
                         },
                         abortModelStep: stopModelStep,

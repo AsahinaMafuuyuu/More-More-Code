@@ -178,6 +178,7 @@ export {
   isRuntimeEventPayload,
   isRuntimeJsonValue,
   RUNTIME_EVENT_SCHEMA_VERSION,
+  RUNTIME_SECURITY_EVENT_SCHEMA_VERSION,
   RUNTIME_EVENT_TYPES,
 } from "./event-store";
 export type {
@@ -192,6 +193,8 @@ export type {
   RuntimeJsonPrimitive,
   RuntimeJsonValue,
   RuntimeSecurityEventPayload,
+  RuntimeSecurityEventPayloadV1,
+  RuntimeSecurityEventPayloadV2,
   RuntimeSnapshot,
   RuntimeSnapshotInput,
   RuntimeSnapshotStore,
@@ -225,15 +228,26 @@ export type {
   RuntimeSessionOptions,
   RuntimeSessionProjection,
   RuntimeSessionRecoveryReport,
+  RuntimeSessionSnapshotDiagnostics,
 } from "./runtime-session";
 export {
   DefaultPermissionPolicy,
   canExecute,
+  isPermissionDecision,
+  matchesPermissionRule,
+  RulePermissionPolicy,
 } from './permission';
 export type {
   Capability,
   PermissionDecision,
+  PermissionEffect,
   PermissionPolicy,
+  PermissionPolicySource,
   PermissionRequest,
+  PermissionResource,
+  PermissionResourceKind,
+  PermissionRule,
+  PermissionScope,
+  RulePermissionPolicyOptions,
   SecurityEvent,
 } from './permission';

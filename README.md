@@ -297,6 +297,32 @@ CLI 会在渲染 UI 和创建 Agent Run 之前完成一次 Agent Bootstrap：
 
 `/settings` 可查看当前解析出的全局/项目路径、兼容 `.agents` Skill 路径、instruction/skill/tool source 数量以及 Branch Summary 跳转策略，打开两级 `config.json` / `AGENTS.md` 或 `.agents/skills` 后可以执行 reload。当前配置格式为 JSON。`session.branchSummaryOnJump` 支持 `ask | always | never`，默认 `ask`。
 
+权限策略同样从两级 `config.json` 按 **代码默认值 → global → project → 不可覆盖的 workspace containment** 生成。普通规则按声明顺序匹配，最后一个匹配规则生效；`capabilities`、`commands`、`paths`、`resources` 与 `scopes` 在同一规则中是 AND 约束，数组内部按 glob pattern 做 OR 匹配。路径 pattern 中 `*` 不跨目录、`**` 可跨目录；Windows 路径匹配不区分大小写。例如：
+
+```json
+{
+  "permissions": {
+    "default": "allow",
+    "rules": [
+      {
+        "effect": "ask",
+        "capabilities": ["filesystem.write"],
+        "paths": ["secrets/**"],
+        "scopes": ["workspace"]
+      },
+      {
+        "effect": "deny",
+        "capabilities": ["process.execute"],
+        "commands": ["rm *", "git push*"],
+        "scopes": ["workspace"]
+      }
+    ]
+  }
+}
+```
+
+支持的 effect 为 `allow | deny | ask`，scope 为 `workspace | outside-workspace | agent-config | external`。Tool Runtime 会在 executor 调用前对注册 Tool 的每个 capability 执行最终策略；`deny` 返回 denied，`ask` 当前返回 `approval_required`。文件策略分类与 native executor 共享 canonical path resolver：既有 symlink/junction 会解析真实目标，新建文件会解析最近存在父目录；实际目标落在 workspace 外时始终拒绝，配置不能覆盖。该检查仍不能消除检查后链接被替换的 TOCTOU，也不等于交互式审批 UI 或 OS-level Sandbox。
+
 ## 🛠️ AI 工具系统
 
 Tools 通过 Tool Registry 按来源区分为 **native** 与 **MCP extension source**。当前实际执行面仍以 native tools 为默认；MCP server 可以在 `.more-more-code/config.json` 中配置，但 MCP transport/auth/remote tool execution 将在后续阶段接入。
@@ -332,7 +358,7 @@ Harness 另有独立的 Run / Turn / Step `ExecutionEventStore`：AgentLoop 将�
 
 Stage 6.0 新增并启用了独立的 `packages/runtime-store` SQLite 持久化边界。CLI 启动时会在 `~/.more-more-code/runtime/runtime.db` 创建并幂等执行内嵌版本化 migration；测试或高级部署可通过绝对 `file:` URL 的 `RUNTIME_STORE_DATABASE_URL` 覆盖位置。它与 `packages/database` 的 PostgreSQL 云 Session Store 使用不同的 Prisma schema/client/migration：Session Tree 仍是语义会话权威，Runtime Events 只记录执行、安全、Context 与恢复事实。
 
-每个 CLI Session 使用 durable `RuntimeSession` 作为 AgentLoop 的 `ExecutionEventStore`，并复用进程级 SQLite adapter 与 Projection Cache。执行、Tool 请求/权限/终态、Context projection 与 session-open 事实采用严格白名单的 v1 payload；未知字段会被拒绝，prompt、message、Tool input/output、命令/文件内容和任意错误文本不会进入 Runtime Store。Model/Tool 外部副作用之前的关键事实必须先持久化，写入失败会阻止下一步而不会静默回退到内存。重启时按最新 snapshot + 后续 events 恢复、预热 cache，并在 UI 报告未完成 Run/操作，但不会自动重放模型或工具副作用。Cloud revision/conflict sync 仍属后续工作。
+每个 CLI Session 使用 durable `RuntimeSession` 作为 AgentLoop 的 `ExecutionEventStore`，并复用进程级 SQLite adapter 与 Projection Cache。执行、Tool、Context 与 session-open 事实继续采用严格白名单的 v1 payload；权限安全事实使用独立的 v2 `requested | decided` lifecycle，同时兼容读取旧 v1 decision。持久化事件只包含 capability、resource kind、scope、decision/source 与 correlation ID，不包含 prompt、message、Tool input/output、原始命令/路径/文件内容或任意错误文本。Model/Tool 外部副作用之前的关键事实必须先持久化，写入失败会让 AgentLoop 失败并阻止下一步，不会静默回退到内存。RuntimeSession 串行应用同一 Session 的 durable events；snapshot 是派生加速结构，snapshot 写入失败会保留已提交事件、记录进程内诊断并按 bounded backoff 重试，而不会把成功的 write-ahead append 误报为失败或对每个后续 event 制造重试风暴。重启时按最新 snapshot + 后续 events 恢复、预热 cache，并在 UI 报告未完成 Run/操作，但不会自动重放模型或工具副作用。Cloud revision/conflict sync 仍属后续工作。
 
 ### 会话恢复与分支
 

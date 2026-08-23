@@ -20,6 +20,7 @@ export const RUNTIME_EVENT_TYPES = [
 export type RuntimeEventType = (typeof RUNTIME_EVENT_TYPES)[number];
 
 export const RUNTIME_EVENT_SCHEMA_VERSION = 1 as const;
+export const RUNTIME_SECURITY_EVENT_SCHEMA_VERSION = 2 as const;
 
 type RuntimeCorrelation = {
   runId?: string;
@@ -66,7 +67,7 @@ export type RuntimeToolEventPayload = RuntimeToolEventBase & (
   | { phase: "completed"; status: RuntimeToolStatus; durationMs: number }
 );
 
-export type RuntimeSecurityEventPayload = {
+export type RuntimeSecurityEventPayloadV1 = {
   schemaVersion: typeof RUNTIME_EVENT_SCHEMA_VERSION;
   kind: "permission.decision";
   capability: string;
@@ -74,6 +75,28 @@ export type RuntimeSecurityEventPayload = {
   policy: "default" | "configured";
   toolCallId: string;
 } & RuntimeCorrelation;
+
+type RuntimePermissionLifecycleBase = {
+  schemaVersion: typeof RUNTIME_SECURITY_EVENT_SCHEMA_VERSION;
+  kind: "permission.lifecycle";
+  capability: string;
+  resourceKind: "path" | "command" | "resource";
+  scope: "workspace" | "outside-workspace" | "agent-config" | "external";
+  toolCallId: string;
+} & RuntimeCorrelation;
+
+export type RuntimeSecurityEventPayloadV2 = RuntimePermissionLifecycleBase & (
+  | { phase: "requested" }
+  | {
+      phase: "decided";
+      decision: "allow" | "deny" | "ask";
+      policy: "default" | "configured";
+    }
+);
+
+export type RuntimeSecurityEventPayload =
+  | RuntimeSecurityEventPayloadV1
+  | RuntimeSecurityEventPayloadV2;
 
 export type RuntimeContextEventPayload = {
   schemaVersion: typeof RUNTIME_EVENT_SCHEMA_VERSION;
@@ -171,7 +194,10 @@ export function isRuntimeEventPayload<TType extends RuntimeEventType>(
   type: TType,
   value: unknown,
 ): value is RuntimeEventPayloadByType[TType] {
-  if (!isRecord(value) || value.schemaVersion !== RUNTIME_EVENT_SCHEMA_VERSION) {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (type !== "security" && value.schemaVersion !== RUNTIME_EVENT_SCHEMA_VERSION) {
     return false;
   }
 
@@ -199,16 +225,7 @@ export function isRuntimeEventPayload<TType extends RuntimeEventType>(
             && isRuntimeToolStatus(value.status)
             && isNonNegativeNumber(value.durationMs));
     case "security":
-      return hasOnlyKeys(value, [
-        "schemaVersion", "kind", "capability", "decision", "policy", "toolCallId",
-        "runId", "turnId", "stepId",
-      ])
-        && value.kind === "permission.decision"
-        && isNonEmptyString(value.capability)
-        && (value.decision === "allow" || value.decision === "deny" || value.decision === "ask")
-        && (value.policy === "default" || value.policy === "configured")
-        && isNonEmptyString(value.toolCallId)
-        && hasValidCorrelation(value);
+      return isRuntimeSecurityEventPayload(value);
     case "context":
       return value.kind === "context.projection"
         && (value.phase === "started" || value.phase === "completed")
@@ -246,6 +263,48 @@ export function isRuntimeEventPayload<TType extends RuntimeEventType>(
         && isNonNegativeSafeInteger(value.incompleteRunCount)
         && isNonNegativeSafeInteger(value.pendingExternalOperationCount);
   }
+}
+
+function isRuntimeSecurityEventPayload(
+  value: Record<string, unknown>,
+): value is RuntimeSecurityEventPayload {
+  if (value.schemaVersion === RUNTIME_EVENT_SCHEMA_VERSION) {
+    return hasOnlyKeys(value, [
+      "schemaVersion", "kind", "capability", "decision", "policy", "toolCallId",
+      "runId", "turnId", "stepId",
+    ])
+      && value.kind === "permission.decision"
+      && isNonEmptyString(value.capability)
+      && isPermissionEffect(value.decision)
+      && isPermissionPolicySource(value.policy)
+      && isNonEmptyString(value.toolCallId)
+      && hasValidCorrelation(value);
+  }
+
+  if (value.schemaVersion !== RUNTIME_SECURITY_EVENT_SCHEMA_VERSION
+    || value.kind !== "permission.lifecycle"
+    || (value.phase !== "requested" && value.phase !== "decided")
+    || !isNonEmptyString(value.capability)
+    || !isPermissionResourceKind(value.resourceKind)
+    || !isPermissionScope(value.scope)
+    || !isNonEmptyString(value.toolCallId)
+    || !hasValidCorrelation(value)) {
+    return false;
+  }
+
+  if (value.phase === "requested") {
+    return hasOnlyKeys(value, [
+      "schemaVersion", "kind", "phase", "capability", "resourceKind", "scope",
+      "toolCallId", "runId", "turnId", "stepId",
+    ]);
+  }
+
+  return hasOnlyKeys(value, [
+    "schemaVersion", "kind", "phase", "capability", "resourceKind", "scope",
+    "decision", "policy", "toolCallId", "runId", "turnId", "stepId",
+  ])
+    && isPermissionEffect(value.decision)
+    && isPermissionPolicySource(value.policy);
 }
 
 export function isRuntimeJsonValue(value: unknown): value is RuntimeJsonValue {
@@ -390,6 +449,25 @@ function optionalCompactionTrigger(value: unknown): boolean {
     || value === "hard-limit"
     || value === "overflow"
     || value === "manual";
+}
+
+function isPermissionEffect(value: unknown): boolean {
+  return value === "allow" || value === "deny" || value === "ask";
+}
+
+function isPermissionPolicySource(value: unknown): boolean {
+  return value === "default" || value === "configured";
+}
+
+function isPermissionResourceKind(value: unknown): boolean {
+  return value === "path" || value === "command" || value === "resource";
+}
+
+function isPermissionScope(value: unknown): boolean {
+  return value === "workspace"
+    || value === "outside-workspace"
+    || value === "agent-config"
+    || value === "external";
 }
 
 function hasOnlyExecutionKeys(

@@ -829,15 +829,93 @@ Harness Runtime Event contract
 
 ## Phase 5: Permission Follow-up
 
-### Task 10: Consolidate permission contracts and persistence
+**Status:** Delivered — 2026-08-23. Unified policy, persisted overrides, Tool Runtime enforcement, redacted permission lifecycle, and RuntimeSession fail-closed consistency fixes are implemented and verified.
 
-Unify Harness and CLI permission types, generate effective policy from code defaults plus user overrides, enforce it in Tool Runtime, and persist decisions as security Runtime Events.
+### Task 10: Consolidate the permission contract and rule engine
+
+**Description:** Replace the duplicate Harness `decide()` and CLI `evaluate()` shapes with one provider-independent permission interface. Keep capability/resource matching and precedence inside one deep Harness module so Tool Runtime only submits requests and enforces returned decisions.
+
+**Acceptance criteria:**
+- `allow | deny | ask`, request, decision, rule, resource-kind, and scope types have one Harness authority.
+- Rules can match capabilities together with command, path, generic-resource, and scope constraints.
+- Configured rules deterministically override code defaults, and `deny` / `ask` remain distinguishable outcomes.
+
+**Verification:** Harness permission-policy tests and Harness typecheck.
+
+**Dependencies:** Task 9.
+
+**Files likely touched:**
+- `packages/harness/src/permission.ts`
+- `packages/harness/src/index.ts`
+- `packages/harness/tests/permission.test.ts`
+
+**Estimated scope:** Medium.
+
+### Task 11: Resolve persisted overrides and Tool permission requests
+
+**Description:** Extend global/project Agent config with permission defaults and rules, merge persisted overrides in stable global-to-project order, and translate registered Tool capabilities plus ephemeral input into typed path/command/resource requests without persisting raw values.
+
+**Acceptance criteria:**
+- Existing config files remain valid when `permissions` is absent.
+- Global and project overrides produce one deterministic effective policy.
+- Native Tools classify workspace/outside-workspace paths, shell commands, and Agent resources for policy evaluation.
+
+**Verification:** Agent config merge/load tests and Tool Registry request-classification tests.
+
+**Dependencies:** Task 10.
+
+**Files likely touched:**
+- `packages/cli/src/lib/agent-config.ts`
+- `packages/cli/src/lib/permission-policy.ts`
+- `packages/cli/src/lib/tool-registry.ts`
+- `packages/cli/tests/agent-bootstrap.test.ts`
+
+**Estimated scope:** Medium.
+
+### Task 12: Enforce decisions and persist a redacted permission lifecycle
+
+**Description:** Make Tool Runtime evaluate every registered capability before executor invocation and emit awaited permission-request and permission-decision observations. Version the security Runtime Event payload independently so existing version-1 events remain recoverable while new events record only safe capability/resource-kind/scope metadata.
+
+**Acceptance criteria:**
+- No Tool executor runs after an effective `deny` or `ask` decision.
+- Permission request and decision facts are durably appended before executor invocation, and append failure remains fail-closed.
+- Security events never contain raw commands, paths, Tool input/output, file contents, or arbitrary policy reasons.
+
+**Verification:** Tool Runtime ordering/enforcement/redaction tests, Runtime Event validation tests, CLI and Harness typechecks.
+
+**Dependencies:** Tasks 10 and 11.
+
+**Files likely touched:**
+- `packages/cli/src/lib/tool-runtime.ts`
+- `packages/cli/src/hooks/use-chat.ts`
+- `packages/harness/src/event-store.ts`
+- `packages/harness/tests/runtime-session.test.ts`
+- `packages/cli/tests/agent-bootstrap.test.ts`
+
+**Estimated scope:** Medium.
+
+### Task 13: Document and verify the permission phase
+
+**Description:** Update the Stage 6.0 ADR/current-state documentation and task status, then run focused and integration verification without claiming the separate audit phase is complete.
+
+**Acceptance criteria:**
+- Documentation explains rule precedence, config shape, enforcement seam, redacted event versioning, and the deferred approval UI/sandbox boundary.
+- Phase 5 checklist is complete while Phase 6 remains open.
+- Focused tests, required typechecks/builds, both Prisma validations, and `git diff --check` pass.
+
+**Verification:** Stage 6.0 Final Verification commands.
+
+**Dependencies:** Task 12.
+
+**Estimated scope:** Small.
 
 ## Phase 6: Audit Follow-up
 
-### Task 11: Add security audit projection and validation
+### Task 14: Add security audit projection and validation
 
 Project a session-scoped security timeline, verify replayed decisions, and cover dangerous command/path/scope cases.
+
+**Dependencies:** Task 13.
 
 ## Final Verification
 

@@ -290,8 +290,8 @@ CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为
 3. **云 Session 已升级为 Session Entry Tree v3，但同步仍是 last-write-wins**
    v3 直接持久化 append-only `entries[]`；message、tool、runtime-state change、compaction 与 branch summary 都是可分支的 Session Entries，旧 linear/v1/v2 状态在 CLI 恢复时兼容升级。`POST /sessions/:id/state` 仍没有 revision / optimistic concurrency / conflict resolution。
 
-4. **Durable Runtime Store 已成为 CLI 默认执行路径，权限策略仍待统一**
-   Run / Turn / Step 通过 `RuntimeSession` 写入本地 SQLite；Tool request/permission/terminal、Context projection 和 session-open/recovery diagnostics 也使用严格白名单的 v1 payload。关键写入失败会阻止下一外部副作用，恢复会报告但不重放未完成操作。下一步应统一 Harness 与 CLI 的 permission contract、引入持久化 override/effective policy，并建立 security audit projection。
+4. **Durable Runtime Store 与有效权限策略已成为 CLI 默认执行路径，安全审计投影仍待完成**
+   Run / Turn / Step 通过 `RuntimeSession` 串行写入并投影本地 SQLite events；snapshot failure 不再把已提交 append 误报为失败。Tool Runtime 使用 Harness 的统一 `allow | deny | ask` contract，把 code defaults、global config 与 project config 合成为 last-match-wins effective policy，并按 command/path/resource/scope 在 executor 前执行。Tool/Context/system 使用严格白名单 v1 payload；permission lifecycle 使用可兼容旧 decision 的 v2 request/decision payload。关键写入或 observer/policy 基础设施失败会让 AgentLoop 失败并阻止下一外部副作用。下一步是 session-scoped security audit projection 与 replay verification。
 
 5. **Tool cancellation 已贯通，但仍不是 OS-level Sandbox**
    Tool Runtime 已统一 timeout/cancellation，Bash 会终止受监控的进程组，支持 AbortSignal 的文件操作也会协作取消；路径检查与进程取消仍不能替代命令、网络、资源和权限范围的系统级隔离。
@@ -328,6 +328,7 @@ CLI 通过 AI SDK 将模型 ID 解析为具体 Provider 实例。默认模型为
 - Harness ContextManager、ModelContextProfile、Turn-aware token budget、retained tail、Tool Result Working Set 与 automatic/manual semantic Compaction；
 - 多 Provider 的本地抽象；
 - 默认启用的本地 SQLite Runtime Store、严格脱敏 Runtime Event、snapshot-plus-replay recovery 与未完成工作提示；
+- Harness 统一 permission policy、global/project persisted overrides、Tool Runtime capability enforcement 与脱敏 permission lifecycle；
 - AgentLoop / lifecycle interaction / ExecutionEventStore / Execution Projection / ContextManager / Session Tree 确定性测试基础。
 
-下一阶段应统一 Harness 与 CLI permission contract，生成并执行 defaults + persisted overrides 的有效策略，然后提供 session-scoped security audit projection 与 replay verification。Cloud revision/conflict sync、Sandbox 与 Subagent 继续后置；精确 tokenizer 可作为 provider adapter 的独立增强项。
+下一阶段应提供 session-scoped security audit projection、旧 v1 / 新 v2 permission lifecycle replay verification 与危险操作策略覆盖。Cloud revision/conflict sync、交互式 approval、OS-level Sandbox 与产品级 Subagent runtime 继续后置；精确 tokenizer 可作为 provider adapter 的独立增强项。

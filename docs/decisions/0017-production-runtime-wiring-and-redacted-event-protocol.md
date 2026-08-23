@@ -23,7 +23,7 @@ The CLI owns one process-wide Local Runtime Store lifecycle.
 - CLI startup bootstraps the store before rendering a Session, reuses one adapter and Projection Cache, and closes them during normal exit.
 - One `RuntimeSession` deep module implements the existing `ExecutionEventStore` seam and owns durable append, replay reduction, cache warming, snapshot policy, and recovery reporting.
 
-Runtime Events use schema version 1 and strict allowlists for `execution`, `tool`, `security`, `context`, and `system` payloads. Validation rejects unknown fields at every persisted envelope, including nested execution events. Durable events may contain identifiers, lifecycle status, duration, permission outcome/source, and bounded numeric Context metrics. They must not contain prompts, messages, Tool input/output, command text, file contents, or arbitrary error strings. Execution failures persist the fixed code `execution_failed`.
+Runtime Events initially use schema version 1 and strict allowlists for `execution`, `tool`, `security`, `context`, and `system` payloads. Validation rejects unknown fields at every persisted envelope, including nested execution events. Durable events may contain identifiers, lifecycle status, duration, permission outcome/source, and bounded numeric Context metrics. They must not contain prompts, messages, Tool input/output, command text, file contents, or arbitrary error strings. Execution failures persist the fixed code `execution_failed`. ADR-0019 subsequently versions permission security events independently while retaining v1 read compatibility.
 
 Write ordering is fail-closed at side-effect boundaries:
 
@@ -34,6 +34,8 @@ context projection started -> durable append -> compaction/model projection work
 ```
 
 An awaited Runtime Store append failure prevents the next external side effect; there is no silent in-memory fallback. Terminal and metric facts are also awaited so the durable order remains observable.
+
+RuntimeSession serializes append, projection, cache, and snapshot work within a Session so concurrent callers cannot apply returned offsets out of order. A snapshot is derived replay acceleration rather than part of the write-ahead commit: if snapshot storage fails after an event append succeeds, the committed event remains successful, transient diagnostics retain failure count/timing, and later retries use bounded backoff. Conversely, an observer/policy/Runtime Store error before Tool Runtime produces a normalized executor result is propagated through the CLI adapter so AgentLoop fails the active Step/Run instead of continuing external work.
 
 Recovery loads the latest valid snapshot, replays later session-scoped events, warms the disposable Projection Cache, records a content-free `runtime.session_opened` fact, and reports incomplete Runs or Context operations to the UI. It never automatically replays a model call, Tool execution, or other external operation. The user may start a new Run after acknowledging the report.
 
@@ -65,4 +67,4 @@ Rejected because replay cannot determine whether an interrupted external side ef
 - Runtime Event schema changes require a new explicit version and validator/migration compatibility work; adding a TypeScript property alone is insufficient.
 - Runtime telemetry is intentionally less detailed than Session history or ephemeral error UI. Rich content remains in its appropriate semantic or transient boundary.
 - SQLite is the durable runtime authority while Projection Cache and snapshots are derived acceleration structures.
-- Permission policy consolidation and the session-scoped security audit projection remain follow-up work built on the same strict event protocol.
+- ADR-0019 completes permission-policy consolidation and the redacted request/decision lifecycle. The session-scoped security audit projection remains follow-up work built on the same strict event protocol.

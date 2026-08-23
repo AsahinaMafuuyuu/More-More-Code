@@ -1052,19 +1052,27 @@ Runtime State Projection = 当前 branch 恢复出的 model / mode / config
 Cloud Snapshot           = 跨进程/设备恢复什么
 ```
 
-**仍未完成的是 Execution Events 的 durable persistence**：当前默认 Store 只存在 CLI 进程内，尚无 Local WAL、crash recovery 或 cloud execution-event sync。
+Stage 6.0 已将 Execution Events 的本地 durable persistence 接入默认 CLI 路径：`RuntimeSession` 使用独立 SQLite Runtime Store 做 write-ahead append、snapshot + replay recovery 与 Projection Cache warming。Cloud execution-event sync 仍未实现；恢复只报告未完成外部工作，不自动重放。
 
 ### 16.5 Permission Engine
 
-当前已形成统一接口：
+Harness 现在是权限语义的唯一接口权威：
 
 ```text
-allow
-deny
-ask
+PermissionRequest(capability, ephemeral resource kind/value/scope)
+  ↓
+RulePermissionPolicy(code defaults → global overrides → project overrides)
+  ↓
+PermissionDecision(allow | deny | ask, default | configured)
+  ↓
+Tool Runtime enforcement
 ```
 
-权限决策机制；交互式审批界面仍未实现。
+规则支持 capability、command、path、generic resource 与 `workspace | outside-workspace | agent-config | external` scope；同一规则内各维度为 AND，pattern 数组为 OR，普通规则按声明顺序 last-match-wins。最终不可覆盖的 `outside-workspace` deny 保持 policy 与 native executor 一致。路径 glob 中 `*` 不跨 segment、`**` 可跨 segment，Windows 按不区分大小写匹配。Tool Registry 与 native filesystem executor 共享 canonical resolver：既有 symlink/junction 解析真实目标，新建目标解析最近存在父目录。Tool Runtime 对每个 capability 逐项 awaited evaluation，并在 executor 前执行最终结果。
+
+权限 Runtime Event 使用独立的 schema v2 `requested | decided` lifecycle，同时兼容读取旧 v1 decision。持久化内容只有 capability、resource kind、scope、decision/source 与 correlation IDs；原始命令、路径、Tool input/output 和 policy reason 不进入 Runtime Store。
+
+`ask` 当前规范化为 `approval_required`；交互式审批界面和 OS-level Sandbox 仍未实现，也不由 Permission Engine 假装提供。
 
 ### 16.6 Sandbox
 
@@ -1243,6 +1251,12 @@ Provider usage 会规范化成诊断 telemetry：input/output tokens、cache rea
 
 CLI `runToolStep` 已将 Harness 提供的 Run/Turn/Step `AbortSignal` 传入 Tool Runtime。filesystem read/write、grep 与 bash 路径都能够消费该 signal。Stage 6.1 已补齐 native shell cancellation：bash 使用 Runtime workspace root，运行中的 shell 与输出读取会响应 interrupt；bash 的 command timeout 也通过 executor timeout resolver 交由 Tool Runtime 统一生成 normalized `timed_out` outcome，不再由 native implementation 维护第二套 timer。
 
+### 16.12 Recoverable Runtime Permission Enforcement：Stage 6.0 Phase 5
+
+Phase 5 已完成 Harness/CLI permission contract 收口、两级 persisted override、Tool capability/resource classification、canonical workspace containment、Tool Runtime enforcement 与 redacted request/decision persistence。RuntimeSession 同时补齐两条 write-ahead 一致性：同一 Session 的 append/reduce/cache/snapshot 操作串行执行，避免并发返回导致 offset 倒序应用；snapshot 属于派生加速，写入失败不会让已经成功持久化的 event append 对 AgentLoop 假失败，失败次数/时间保留为进程内诊断并采用 bounded backoff 重试。
+
+CLI Tool Step 现在区分 normalized executor outcome 与 permission/observer/Runtime Store infrastructure exception。前者作为 Tool Result 返回模型；后者在记录 UI/Session error 后重新抛给 AgentLoop，使 Step/Run failed 并阻止后续外部副作用。
+
 ---
 
 ## 17. 当前需要特别避免的架构回退
@@ -1295,7 +1309,7 @@ Cloud persistence 应保持外围能力。
 
 ## 18. 当前阶段边界与后续候选
 
-Stage 4.1 Agent Bootstrap、Stage 4.2 Skill Registry、Stage 5 Context & Provider Runtime、Stage 5.1 Session/Context 语义收口、Stage 6 Tool Runtime 第一版，以及 Stage 6.1 native shell cancellation 收尾均已完成。当前从启动到 Model Step / Tool Step 的链路已经形成：
+Stage 4.1 Agent Bootstrap、Stage 4.2 Skill Registry、Stage 5 Context & Provider Runtime、Stage 5.1 Session/Context 语义收口、Stage 6 Tool Runtime 第一版、Stage 6.1 native shell cancellation，以及 Stage 6.0 的 recoverable runtime / permission enforcement 均已完成。当前从启动到 Model Step / Tool Step 的链路已经形成：
 
 ```text
 CLI bootstrap
@@ -1312,10 +1326,12 @@ Provider Adapter / Model Step
   ↓
 AgentLoop Tool Step
   ↓
-Tool Runtime → Registry / Permission / Timeout / Source Adapter
+Tool Runtime → Registry / Effective Permission Policy / Timeout / Source Adapter
+  ↓
+Redacted Runtime Events → SQLite snapshot + replay
 ```
 
-这一轮明确不继续实现 WAL，也暂不进入 Permission/Sandbox 重构。后续可以在现有边界上独立选择 MCP transport adapter、Permission/Sandbox、Local WAL、exact tokenizer 或 Subagent；其中任何一项都不应重新把职责塞入 `AgentLoop`、`ContextManager` 或 OpenAI-specific adapter。
+下一阶段是 session-scoped security audit timeline、v1/v2 permission replay verification 与 dangerous-operation validation。MCP transport adapter、交互式 approval UI、OS-level Sandbox、cloud Runtime Event sync、exact tokenizer 或产品级 Subagent runtime 仍应作为独立后续能力；其中任何一项都不应重新把职责塞入 `AgentLoop`、`ContextManager` 或 OpenAI-specific adapter。
 
 当前关键边界已经分离：
 
@@ -1351,7 +1367,15 @@ docs/decisions/
 ├── 0008-session-entry-tree-and-semantic-session-history.md
 ├── 0009-agent-bootstrap-instructions-skills-and-tool-sources.md
 ├── 0010-cache-aware-context-and-provider-runtime.md
-└── 0011-session-runtime-invariants.md
+├── 0011-session-runtime-invariants.md
+├── 0012-semantic-context-compaction.md
+├── 0013-tool-result-working-set-and-manual-compaction.md
+├── 0014-lazy-branch-knowledge-transfer.md
+├── 0015-sqlite-runtime-event-store-and-security-foundation.md
+├── 0016-separate-cloud-session-and-local-runtime-stores.md
+├── 0017-production-runtime-wiring-and-redacted-event-protocol.md
+├── 0018-governed-multi-agent-collaboration.md
+└── 0019-effective-permission-policy-and-redacted-lifecycle.md
 ```
 
 其中：
@@ -1367,5 +1391,10 @@ docs/decisions/
 - ADR-0010 记录 stable→dynamic Context ordering、Tool/Prompt prefix fingerprint、persisted compaction checkpoint reuse、Provider Adapter 与 OpenAI Responses/cache 边界；
 - ADR-0011 记录 append-only Session、compaction supersession、restore authority、semantic Theme tokens 与 Tool Runtime 边界。
 - ADR-0012 记录 soft/hard proactive compaction、atomic cut point、incremental semantic state reducer、deterministic fallback 与 richer checkpoint diagnostics。
+- ADR-0013 记录 Tool Result Working Set、manual compaction eligibility 与职责分离。
+- ADR-0014 记录 lazy Branch Summary knowledge transfer、coverage/provenance 与 navigation 语义。
+- ADR-0015/0016/0017 记录 SQLite Runtime security foundation、两套 persistence store 分离与 production write-ahead/redaction/recovery wiring。
+- ADR-0018 记录仓库级受治理多代理协作规则。
+- ADR-0019 记录 effective permission policy、Tool Runtime enforcement 与 redacted schema-v2 permission lifecycle。
 
 本文件属于近期工程状态快照，不替代正式 ADR。

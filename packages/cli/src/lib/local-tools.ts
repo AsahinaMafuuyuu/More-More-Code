@@ -1,8 +1,9 @@
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "path";
+import { dirname, join, relative, resolve } from "path";
 import { toolInputSchemas } from "@more-more-code/shared";
 import { getAgentEnvironment } from "./agent-environment";
+import { resolveWorkspacePath } from "./workspace-path";
 
 const MAX_FILE_SIZE = 10_000;
 const MAX_RESULTS = 200;
@@ -10,16 +11,15 @@ const MAX_MATCHES = 50;
 const MAX_OUTPUT = 20_000;
 const DEFAULT_TIMEOUT = 30_000;
 
-function resolveInsideWorkspace(workspaceRoot: string, path: string) {
-    const cwd = resolve(workspaceRoot);
-    const resolved = resolve(cwd, path); // 转换成绝对路径
-    const rel = relative(cwd, resolved); // 转换成相对路径
-
-    if (rel.startsWith("..") || isAbsolute(rel)) {
+async function resolveInsideWorkspace(workspaceRoot: string, path: string) {
+    const resolution = await resolveWorkspacePath(workspaceRoot, path);
+    if (resolution.scope === "outside-workspace") {
         throw new Error("Path is outside the project directory");
     }
-
-    return { cwd, resolved };
+    return {
+        cwd: resolution.workspaceRoot,
+        resolved: resolution.resolvedPath,
+    };
 }
 
 function truncate(value: string, limit: number) {
@@ -80,7 +80,7 @@ export async function executeNativeTool(
     switch (toolName) {
         case "readFile": {
             const { path } = toolInputSchemas.readFile.parse(input);
-            const { resolved } = resolveInsideWorkspace(context.workspaceRoot, path);
+            const { resolved } = await resolveInsideWorkspace(context.workspaceRoot, path);
             const content = await readFile(resolved, { encoding: "utf-8", signal: context.signal });
 
             return content.length > MAX_FILE_SIZE
@@ -93,7 +93,7 @@ export async function executeNativeTool(
         }
         case "listDirectory": {
             const { path } = toolInputSchemas.listDirectory.parse(input);
-            const { cwd, resolved } = resolveInsideWorkspace(context.workspaceRoot, path);
+            const { cwd, resolved } = await resolveInsideWorkspace(context.workspaceRoot, path);
             const entries = await readdir(resolved); // 读取目录内容
             const results: {
                 name: string;
@@ -131,7 +131,7 @@ export async function executeNativeTool(
 
         case "glob": {
             const { pattern, path } = toolInputSchemas.glob.parse(input);
-            const { cwd, resolved } = resolveInsideWorkspace(context.workspaceRoot, path);
+            const { cwd, resolved } = await resolveInsideWorkspace(context.workspaceRoot, path);
             const glob = new Bun.Glob(pattern);
             const files: string[] = [];
             let truncated = false; // 未截断
@@ -162,7 +162,7 @@ export async function executeNativeTool(
 
         case "grep": {
             const { pattern, path, includes } = toolInputSchemas.grep.parse(input);
-            const { cwd, resolved } = resolveInsideWorkspace(context.workspaceRoot, path);
+            const { cwd, resolved } = await resolveInsideWorkspace(context.workspaceRoot, path);
 
             const args = [
                 "-rn",
@@ -247,7 +247,7 @@ export async function executeNativeTool(
 
         case "writeFile": {
             const { path, content } = toolInputSchemas.writeFile.parse(input);
-            const { cwd, resolved } = resolveInsideWorkspace(context.workspaceRoot, path);
+            const { cwd, resolved } = await resolveInsideWorkspace(context.workspaceRoot, path);
 
             await mkdir(dirname(resolved), { recursive: true });
             throwIfAborted(context.signal);
@@ -262,7 +262,7 @@ export async function executeNativeTool(
 
         case "editFile": {
             const { path, oldString, newString } = toolInputSchemas.editFile.parse(input);
-            const { cwd, resolved } = resolveInsideWorkspace(context.workspaceRoot, path);
+            const { cwd, resolved } = await resolveInsideWorkspace(context.workspaceRoot, path);
             const content = await readFile(resolved, { encoding: "utf-8", signal: context.signal });
             const occurrences = content.split(oldString).length - 1;
 
@@ -278,7 +278,7 @@ export async function executeNativeTool(
 
         case "bash": {
             const { command } = toolInputSchemas.bash.parse(input);
-            const workspaceRoot = resolveInsideWorkspace(context.workspaceRoot, ".").resolved;
+            const workspaceRoot = (await resolveInsideWorkspace(context.workspaceRoot, ".")).resolved;
             const shellStateDirectory = await mkdtemp(join(tmpdir(), "more-more-code-shell-"));
             const cancellationFile = join(shellStateDirectory, "cancel");
             const cancellationFileExpression = process.platform === "win32"

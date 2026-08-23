@@ -78,7 +78,7 @@ A runtime lifecycle fact about Run, Turn, or Step execution. Execution Events de
 
 ## Runtime Event
 
-A JSON-safe, append-only local fact in one of the `execution`, `tool`, `security`, `context`, or `system` categories. Runtime Events use a SQLite-assigned global offset as their durable replay cursor and are always queried within an explicit Session scope. Payload schema v1 is a strict runtime allowlist: unknown fields are rejected, including inside nested Execution Events. Prompts, messages, Tool input/output, command/file content, and arbitrary error text are excluded. An Execution Event may be persisted inside an `execution` Runtime Event envelope, but its per-Run sequence and the durable database offset have different meanings.
+A JSON-safe, append-only local fact in one of the `execution`, `tool`, `security`, `context`, or `system` categories. Runtime Events use a SQLite-assigned global offset as their durable replay cursor and are always queried within an explicit Session scope. Execution/tool/context/system payloads use strict schema v1 allowlists. Security payload v2 adds separate permission `requested` / `decided` lifecycle facts while the validator retains v1 decision compatibility. Unknown fields are rejected. Prompts, messages, Tool input/output, raw commands/paths/file content, policy reasons, and arbitrary error text are excluded. An Execution Event may be persisted inside an `execution` Runtime Event envelope, but its per-Run sequence and the durable database offset have different meanings.
 
 ## Runtime Snapshot
 
@@ -94,7 +94,7 @@ The independent SQLite persistence boundary implemented by `packages/runtime-sto
 
 ## Runtime Session
 
-The deep, session-scoped adapter between AgentLoop and the Local Runtime Store. It implements `ExecutionEventStore`, performs awaited write-ahead appends, reduces durable events into the open-Run/pending-Context recovery projection, applies Snapshot Policy, and warms Projection Cache. A critical append failure is fail-closed and never falls back to an in-memory execution path. Startup recovery reports incomplete external work but does not execute it.
+The deep, session-scoped adapter between AgentLoop and the Local Runtime Store. It implements `ExecutionEventStore`, serializes same-Session append/reduce/cache/snapshot operations, performs awaited write-ahead appends, reduces durable events into the open-Run/pending-Context recovery projection, applies Snapshot Policy, and warms Projection Cache. A critical append failure is fail-closed and never falls back to an in-memory execution path. Snapshot persistence is derived acceleration: failure does not invalidate an already committed event, records transient failure-count/timing diagnostics, retries with bounded backoff, and cannot regress the durable projection. Startup recovery reports incomplete external work but does not execute it.
 
 ## Agent Environment
 
@@ -119,3 +119,7 @@ The local boundary between AgentLoop Tool Steps and concrete Tool Sources. It ap
 ## Tool Capability
 
 A semantic capability label attached to a registered Tool, such as `filesystem.read`, `filesystem.write`, `process.execute`, or `agent.skill.read`. Capability metadata is intended for policy evaluation and is distinct from the model-facing input schema.
+
+## Permission Policy
+
+The provider-independent Harness module that decides `allow | deny | ask` for one Tool capability and its ephemeral typed resource. Resource kinds are `path | command | resource`; scopes are `workspace | outside-workspace | agent-config | external`. Code defaults are evaluated first, followed by persisted global then project rules, with the last matching ordinary rule winning; a final non-overridable workspace-containment rule keeps policy aligned with native filesystem execution. Path globs are segment-aware and use platform path casing. Tool Registry and native file execution share a canonical resolver that follows existing symlinks/junctions and canonicalizes the nearest existing ancestor for create targets. Tool Runtime enforces every capability decision before executor invocation, and only redacted request/decision metadata crosses the Runtime Event seam. `ask` currently yields `approval_required`; canonical path validation still has a TOCTOU window and is not OS-level sandboxing.

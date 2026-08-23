@@ -44,6 +44,12 @@ export type RuntimeSessionRecoveryReport = {
   pendingExternalOperations: readonly PendingExternalOperation[];
 };
 
+export type RuntimeSessionSnapshotDiagnostics = {
+  consecutiveFailures: number;
+  lastFailureAt?: number;
+  nextRetryAt?: number;
+};
+
 type NonExecutionRuntimeEventType = Exclude<RuntimeEventType, "execution">;
 
 export type RuntimeSessionFactInput<TType extends NonExecutionRuntimeEventType = NonExecutionRuntimeEventType> = {
@@ -85,6 +91,10 @@ export class RuntimeSession implements ExecutionEventStore {
   private previousSnapshotAt: number | undefined;
   private unsnapshottedEventCount = 0;
   private firstUnsnappedEventAt: number | undefined;
+  private operationQueue: Promise<void> = Promise.resolve();
+  private snapshotDiagnostics: RuntimeSessionSnapshotDiagnostics = {
+    consecutiveFailures: 0,
+  };
 
   constructor(private readonly options: RuntimeSessionOptions) {
     if (!options.sessionId.trim()) {
@@ -115,53 +125,61 @@ export class RuntimeSession implements ExecutionEventStore {
     return this.memoryStore.getRunEvents(runId);
   }
 
+  getSnapshotDiagnostics(): RuntimeSessionSnapshotDiagnostics {
+    return { ...this.snapshotDiagnostics };
+  }
+
   async append(event: ExecutionEvent): Promise<void> {
     await this.readyPromise;
-    if (event.sessionId !== this.options.sessionId) {
-      throw new RuntimeSessionError(
-        `Execution event session mismatch: expected ${this.options.sessionId}, received ${event.sessionId}`,
-      );
-    }
+    await this.enqueueOperation(async () => {
+      if (event.sessionId !== this.options.sessionId) {
+        throw new RuntimeSessionError(
+          `Execution event session mismatch: expected ${this.options.sessionId}, received ${event.sessionId}`,
+        );
+      }
 
-    // Validate the append against a disposable projection before durable I/O.
-    // Once SQLite accepts the fact, the in-memory projection can no longer be
-    // the source of a validation-only failure.
-    const nextMemoryStore = new InMemoryExecutionEventStore(this.memoryStore.getEvents());
-    nextMemoryStore.append(event);
-    const payload = {
-      schemaVersion: RUNTIME_EVENT_SCHEMA_VERSION,
-      kind: "execution.lifecycle",
-      event: redactExecutionEvent(event),
-    } as const;
-    if (!isRuntimeEventPayload("execution", payload)) {
-      throw new RuntimeSessionError("Execution event contains non-allowlisted durable fields");
-    }
-    const durableEvent = await this.options.store.append({
-      sessionId: this.options.sessionId,
-      type: "execution",
-      payload,
+      // Validate the append against a disposable projection before durable I/O.
+      // Once SQLite accepts the fact, the in-memory projection can no longer be
+      // the source of a validation-only failure.
+      const nextMemoryStore = new InMemoryExecutionEventStore(this.memoryStore.getEvents());
+      nextMemoryStore.append(event);
+      const payload = {
+        schemaVersion: RUNTIME_EVENT_SCHEMA_VERSION,
+        kind: "execution.lifecycle",
+        event: redactExecutionEvent(event),
+      } as const;
+      if (!isRuntimeEventPayload("execution", payload)) {
+        throw new RuntimeSessionError("Execution event contains non-allowlisted durable fields");
+      }
+      const durableEvent = await this.options.store.append({
+        sessionId: this.options.sessionId,
+        type: "execution",
+        payload,
+      });
+
+      this.memoryStore = nextMemoryStore;
+      await this.applyDurableEvent(durableEvent as RuntimeEvent);
     });
-
-    this.memoryStore = nextMemoryStore;
-    await this.applyDurableEvent(durableEvent as RuntimeEvent);
   }
 
   async record<TType extends NonExecutionRuntimeEventType>(
     input: RuntimeSessionFactInput<TType>,
   ): Promise<RuntimeEvent<TType>> {
     await this.readyPromise;
-    if (!isRuntimeEventPayload(input.type, input.payload)) {
-      throw new RuntimeSessionError(
-        `${input.type} Runtime Event contains non-allowlisted durable fields`,
-      );
-    }
-    const durableEvent = await this.options.store.append({
-      sessionId: this.options.sessionId,
-      type: input.type,
-      payload: input.payload,
-    } as RuntimeEventInput<TType>);
-    await this.applyDurableEvent(durableEvent as RuntimeEvent);
-    return durableEvent;
+    return this.enqueueOperation(async () => {
+      if (!isRuntimeEventPayload(input.type, input.payload)) {
+        throw new RuntimeSessionError(
+          `${input.type} Runtime Event contains non-allowlisted durable fields`,
+        );
+      }
+      const durableEvent = await this.options.store.append({
+        sessionId: this.options.sessionId,
+        type: input.type,
+        payload: input.payload,
+      } as RuntimeEventInput<TType>);
+      await this.applyDurableEvent(durableEvent as RuntimeEvent);
+      return durableEvent;
+    });
   }
 
   private async initialize(): Promise<RuntimeSessionRecoveryReport> {
@@ -231,26 +249,59 @@ export class RuntimeSession implements ExecutionEventStore {
       event.offset,
     );
 
+    const snapshotNow = this.now();
+    if (this.snapshotDiagnostics.nextRetryAt !== undefined
+      && snapshotNow < this.snapshotDiagnostics.nextRetryAt) {
+      return;
+    }
+
     if (!this.snapshotPolicy.shouldSnapshot({
       currentEventOffset: event.offset,
       previousSnapshotOffset: this.previousSnapshotOffset,
       unsnapshottedEventCount: this.unsnapshottedEventCount,
       previousSnapshotAt: this.previousSnapshotAt,
       firstUnsnappedEventAt: this.firstUnsnappedEventAt,
-      now: this.now(),
+      now: snapshotNow,
     })) {
       return;
     }
 
-    const snapshot = await this.options.store.saveSnapshot({
-      sessionId: this.options.sessionId,
-      eventOffset: event.offset,
-      state: structuredClone(this.projection) as RuntimeSessionProjection & RuntimeJsonValue,
-    });
-    this.previousSnapshotOffset = snapshot.eventOffset;
-    this.previousSnapshotAt = snapshot.timestamp;
-    this.unsnapshottedEventCount = 0;
-    this.firstUnsnappedEventAt = undefined;
+    try {
+      const snapshot = await this.options.store.saveSnapshot({
+        sessionId: this.options.sessionId,
+        eventOffset: event.offset,
+        state: structuredClone(this.projection) as RuntimeSessionProjection & RuntimeJsonValue,
+      });
+      this.previousSnapshotOffset = snapshot.eventOffset;
+      this.previousSnapshotAt = snapshot.timestamp;
+      this.unsnapshottedEventCount = 0;
+      this.firstUnsnappedEventAt = undefined;
+      this.snapshotDiagnostics = { consecutiveFailures: 0 };
+    } catch {
+      // The event is already durable and the in-memory projection has advanced.
+      // Snapshotting is derived acceleration, so leave the counters intact and
+      // retry with bounded backoff instead of misreporting the committed append
+      // as a write-ahead failure or amplifying a persistent snapshot outage.
+      const consecutiveFailures = this.snapshotDiagnostics.consecutiveFailures + 1;
+      const retryDelayMs = Math.min(
+        60_000,
+        1_000 * (2 ** Math.min(consecutiveFailures - 1, 6)),
+      );
+      this.snapshotDiagnostics = {
+        consecutiveFailures,
+        lastFailureAt: snapshotNow,
+        nextRetryAt: snapshotNow + retryDelayMs,
+      };
+    }
+  }
+
+  private enqueueOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.operationQueue.then(operation);
+    this.operationQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 }
 

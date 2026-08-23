@@ -3,8 +3,14 @@ import {
     Mode,
     getToolContracts as getNativeToolContracts,
     type ModeType,
+    toolInputSchemas,
 } from "@more-more-code/shared";
+import type {
+    PermissionRequest,
+    PermissionResource,
+} from "@more-more-code/harness";
 import type { McpServerConfig, ResolvedAgentConfig } from "./agent-config";
+import { resolveWorkspacePath } from "./workspace-path";
 
 export type ToolSourceKind = "native" | "mcp";
 
@@ -116,6 +122,27 @@ export class ToolRegistry {
         };
     }
 
+    async getPermissionRequests(
+        tool: RegisteredToolDefinition,
+        input: unknown,
+        workspaceRoot: string,
+    ): Promise<PermissionRequest[]> {
+        const resource = await resolveToolPermissionResource(
+            tool.name,
+            tool.source,
+            input,
+            workspaceRoot,
+        );
+        const capabilities = tool.capabilities.length > 0
+            ? tool.capabilities
+            : [`tool.${tool.name}`];
+
+        return capabilities.map((capability) => ({
+            capability,
+            resource,
+        }));
+    }
+
     listSources(): ToolSourceDescriptor[] {
         const sources: ToolSourceDescriptor[] = [
             {
@@ -139,4 +166,62 @@ export class ToolRegistry {
 
         return sources;
     }
+}
+
+const PATH_TOOL_NAMES = new Set([
+    "readFile",
+    "listDirectory",
+    "glob",
+    "grep",
+    "writeFile",
+    "editFile",
+]);
+
+async function resolveToolPermissionResource(
+    toolName: string,
+    source: ToolSourceKind,
+    input: unknown,
+    workspaceRoot: string,
+): Promise<PermissionResource> {
+    if (source === "native" && PATH_TOOL_NAMES.has(toolName)) {
+        const schema = toolInputSchemas[toolName as keyof typeof toolInputSchemas];
+        const parsed = schema.safeParse(input);
+        if (parsed.success && "path" in parsed.data && typeof parsed.data.path === "string") {
+            const resolved = await resolveWorkspacePath(workspaceRoot, parsed.data.path);
+            return {
+                kind: "path",
+                value: resolved.resourcePath,
+                scope: resolved.scope,
+                caseSensitive: process.platform !== "win32",
+            };
+        }
+    }
+
+    if (source === "native" && toolName === "bash") {
+        const parsed = toolInputSchemas.bash.safeParse(input);
+        if (parsed.success) {
+            return {
+                kind: "command",
+                value: parsed.data.command,
+                scope: "workspace",
+            };
+        }
+    }
+
+    if (source === "native" && toolName === "loadSkill") {
+        const parsed = toolInputSchemas.loadSkill.safeParse(input);
+        if (parsed.success) {
+            return {
+                kind: "resource",
+                value: `skill:${parsed.data.name}`,
+                scope: "agent-config",
+            };
+        }
+    }
+
+    return {
+        kind: "resource",
+        value: `tool:${toolName}`,
+        scope: source === "mcp" ? "external" : "workspace",
+    };
 }

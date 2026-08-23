@@ -39,6 +39,11 @@ All notable changes to MORE MORE CODE are recorded here.
 - Durable `RuntimeSession` wiring for AgentLoop write-ahead execution events, snapshot/replay recovery, Projection Cache warming, and visible incomplete-work diagnostics without automatic replay.
 - Strict schema-v1 execution/tool/security/context/system Runtime Event allowlists plus awaited redacted Tool permission/lifecycle and Context projection producers.
 - ADR-0017 documenting production Runtime Store lifecycle, fail-closed side-effect ordering, strict redaction, and report-only recovery.
+- Unified Harness permission request/decision/rule contracts with deterministic capability, command, path, resource, and scope matching.
+- Global-to-project persisted permission overrides, Tool Registry resource classification, and Tool Runtime enforcement before executor invocation.
+- Shared canonical workspace path resolution for policy and native filesystem execution, including symlink/junction escape rejection and segment-aware platform path globs.
+- Independently versioned schema-v2 permission request/decision lifecycle events with schema-v1 decision compatibility and strict raw command/path rejection.
+- ADR-0019 documenting effective permission policy precedence, the Tool Runtime enforcement seam, and redacted lifecycle persistence.
 
 ### Changed
 
@@ -61,10 +66,12 @@ All notable changes to MORE MORE CODE are recorded here.
 - CLI startup now opens one shared Local Runtime Store before rendering, and normal exit closes it after Session use.
 - Native Bash cancellation now terminates the monitored process group and waits for descendants, including on Windows/MSYS where killing only the outer `bash.exe` can leave grandchildren alive.
 - The real CLI launcher no longer contains a trailing executable identifier.
+- RuntimeSession now serializes same-Session append/projection work; derived snapshot failure preserves committed event success and records bounded-backoff retry diagnostics.
+- CLI Tool Step infrastructure failures now propagate to AgentLoop instead of being converted into ordinary Tool outcomes that permit later side effects.
 
 ### Deferred
 
-- MCP transport/auth/remote tool execution, interactive permission approval UI, consolidated/persisted permission policy, security audit projection, OS-level Sandbox enforcement, and Subagent runtime remain outside this delivery slice.
+- MCP transport/auth/remote tool execution, interactive permission approval UI, security audit projection, OS-level Sandbox enforcement, and product-level Subagent runtime remain outside this delivery slice.
 
 ## [2.0.1] - 2026-08-13
 

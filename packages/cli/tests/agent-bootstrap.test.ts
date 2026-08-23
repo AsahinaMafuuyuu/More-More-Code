@@ -322,7 +322,7 @@ describe("agent bootstrap", () => {
         const createRuntime = (effect: "deny" | "ask") => new ToolRuntime({
             registry,
             executors: [{ source: "native", async execute() { return null; } }],
-            permissionPolicy: { evaluate: () => ({ effect }) },
+            permissionPolicy: { decide: () => ({ effect, policy: "configured" }) },
         });
 
         expect((await createRuntime("deny").run({ toolName: "readFile", input: { path: "README.md" }, context })).status).toBe("denied");
@@ -410,6 +410,7 @@ describe("agent bootstrap", () => {
         expect(executorCalls).toBe(1);
         expect(facts.map((fact) => (fact as { type: string }).type)).toEqual([
             "tool_requested",
+            "permission_requested",
             "permission_decided",
             "tool_completed",
         ]);
