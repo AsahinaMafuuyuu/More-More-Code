@@ -259,3 +259,41 @@
 - [ ] Automatic restart of interrupted external processes.
 - [ ] Multi-agent framework.
 - [ ] Full OpenTelemetry integration.
+
+# Stage 6.2 — Interactive Approval & Permission UX
+
+## Phase 1: Approval Contract & Durable Protocol
+
+- [ ] Add provider-independent Tool-call approval transaction contracts in Harness.
+- [ ] Add redacted independently versioned `approval.lifecycle` Runtime Events with v1/v2 compatibility.
+- [ ] Verify raw command/path/resource values cannot cross the durable approval event seam.
+
+## Phase 2: Tool Runtime & Interactive Broker
+
+- [ ] Refactor Tool Runtime to evaluate all capabilities before prompting and batch all ask requirements into one Tool-call approval.
+- [ ] Continue the same Tool Step after `Allow once`; block executor on deny/cancel/timeout.
+- [ ] Implement process-local `InteractiveApprovalBroker` with subscription, exact resolution, and abort cleanup.
+- [ ] Make approval waiting independently timeout-aware and Run-interruptible.
+
+## Phase 3: Audit Compatibility & CLI UX
+
+- [ ] Extend security audit replay to validate approval lifecycle and interactive ask outcomes.
+- [ ] Add CLI approval dialog showing ephemeral operation details with `Allow once` and `Deny` only.
+- [ ] Treat Escape/dialog dismissal and Session unmount as approval cancellation with no stranded Tool Step.
+- [ ] Verify approval actions never persist global/project permission overrides.
+
+## Phase 4: Documentation & Delivery
+
+- [ ] Add/update ADR, README, CONTEXT, PROJECT_ANALYSIS, CHANGELOG, and current-state documentation for Stage 6.2.
+- [ ] Run approval-focused and full Harness/CLI/Runtime Store tests.
+- [ ] Run Shared/Harness/CLI/Server/Database/Runtime Store typechecks.
+- [ ] Run CLI/Server builds, both Prisma validate/generate paths, and `git diff --check`.
+- [ ] Complete integrated security review with no residual P0/P1 and commit Stage 6.2.
+
+## Explicitly Deferred from Stage 6.2
+
+- [ ] Allow-for-session / allow-for-project persistent approval rules.
+- [ ] OS-level Sandbox enforcement.
+- [ ] Shell-AST-aware command authorization.
+- [ ] MCP transport/auth/remote Tool execution.
+- [ ] Cloud synchronization of approval/runtime events.

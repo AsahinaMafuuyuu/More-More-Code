@@ -960,3 +960,225 @@ Reconcile ADR/current-state documentation with implemented audit semantics, run 
 - Automatic restart of interrupted external processes.
 - Multi-agent execution framework.
 - Full OpenTelemetry integration.
+
+
+# Stage 6.2 — Interactive Approval & Permission UX
+
+**Status:** In progress — planned 2026-08-23.
+
+## Overview
+
+Turn the existing fail-closed `ask -> approval_required` policy outcome into a real human approval transaction without moving interactive state into `PermissionPolicy` or AgentLoop. The policy engine continues to answer whether a Tool capability is `allow | deny | ask`; a separate Approval Broker owns the ephemeral human decision. A Tool Step that reaches `ask` must remain the same Tool Step while it waits, then either continue to the original executor after an explicit one-time approval or terminate without execution after deny/cancel/timeout.
+
+This Stage deliberately ships **Allow once** and **Deny** only. It does not persist permanent user overrides, does not introduce session/project auto-approval, and does not claim OS-level sandboxing.
+
+## Architecture Decisions
+
+- Harness owns provider-independent approval transaction contracts; CLI owns the interactive broker adapter and terminal UI.
+- Approval is a **Tool-call-level transaction**. Tool Runtime first evaluates every registered capability. Any `deny` blocks immediately; only a Tool Call with no deny and at least one `ask` creates one approval transaction containing all ask requirements.
+- Approval requests may carry raw command/path/resource values ephemerally so the human can make an informed decision. Durable Runtime Events retain only allowlisted capability/resource-kind/scope metadata and correlation IDs.
+- Tool Runtime awaits the Approval Broker inside the original Tool Step. The model does not receive an `approval_required` result and does not need to issue a second Tool Call after approval.
+- Approval waiting has independent cancellation/timeout semantics. User deny is a normal `denied` Tool outcome; Run interruption is `cancelled`; approval timeout is `timed_out`. Infrastructure failures in the broker or durable observer remain fail-closed exceptions.
+- Security Runtime Events gain a separately versioned approval lifecycle rather than mutating permission schema v2. Existing v1/v2 events remain readable.
+- The derived security audit projector must understand approval lifecycle events so `permission=ask` can be reconciled with `approval allow/deny/cancel/timeout` and the eventual Tool terminal.
+- Closing or escaping the approval dialog cancels the pending approval; approval UI must never disappear while leaving the Tool Step waiting forever.
+
+## Dependency Graph
+
+```text
+Harness approval contract
+    -> CLI InteractiveApprovalBroker
+        -> ToolRuntime ask sequencing
+            -> approval Runtime Event lifecycle
+                -> security audit replay compatibility
+                    -> CLI approval dialog
+                        -> Stage 6.2 integration verification
+```
+
+## Phase 1: Approval Contract & Durable Protocol
+
+### Task 1: Add provider-independent approval transaction contracts
+
+**Description:** Add the Harness approval seam used by Tool Runtime and interactive adapters. A request identifies the Tool Call and includes the ask-only `PermissionRequest` set; a resolution is an explicit one-time `allow | deny`. The broker receives an AbortSignal so interruption and approval timeout do not require a second cancellation interface.
+
+**Acceptance criteria:**
+- One approval request can represent multiple ask capabilities for one Tool Call.
+- Raw resource values remain ephemeral approval input and are not defined as durable event fields.
+- Broker request cancellation is observable through the supplied AbortSignal and cannot leave an unresolved transaction contractually valid.
+
+**Verification:** Harness typecheck plus focused contract/broker tests through the public interface.
+
+**Dependencies:** None.
+
+**Files likely touched:**
+- `packages/harness/src/approval.ts`
+- `packages/harness/src/index.ts`
+- `packages/harness/tests/approval.test.ts`
+
+**Estimated scope:** Small.
+
+### Task 2: Add redacted approval Runtime Event lifecycle
+
+**Description:** Introduce an independently versioned security payload for `approval.lifecycle` with requested and terminal phases. Persist approval ID, Tool correlation, and redacted ask requirements; terminal facts record `allow | deny | cancelled | timed_out` without command/path/resource values.
+
+**Acceptance criteria:**
+- Existing security schema v1 permission decisions and v2 permission lifecycle remain valid.
+- Approval payload validation rejects raw resource values, arbitrary reasons, and unknown fields.
+- Requested facts are durable before the interactive broker is awaited; terminal facts are durable before executor invocation or Tool completion proceeds.
+
+**Verification:** Harness Runtime Event validation tests and RuntimeSession record tests.
+
+**Dependencies:** Task 1.
+
+**Files likely touched:**
+- `packages/harness/src/event-store.ts`
+- `packages/harness/tests/permission-runtime-events.test.ts`
+- `packages/harness/src/runtime-session.ts`
+
+**Estimated scope:** Medium.
+
+## Checkpoint: Approval Protocol
+
+- Approval contracts are provider-independent and UI-free.
+- Durable approval events contain no raw command/path/resource values.
+- Existing Runtime Event recovery remains backward compatible.
+
+## Phase 2: Tool Runtime & Interactive Broker
+
+### Task 3: Await one Tool-call approval inside Tool Runtime
+
+**Description:** Refactor permission evaluation into two stages: evaluate and durably observe every capability first, then fail immediately on any deny or batch all ask decisions into one Approval Broker transaction. After explicit allow, continue the same Tool Step and executor invocation; after deny/cancel/timeout, do not execute.
+
+**Acceptance criteria:**
+- A later deny prevents an earlier ask from prompting the user.
+- Multiple ask capabilities create exactly one approval transaction for the Tool Call.
+- Allow resumes the same Tool Step; deny/cancel/timeout invoke the executor zero times.
+- Approval wait time is independent from executor timeout and is interruptible by the Run signal.
+
+**Verification:** Tool Runtime tests for allow, deny, mixed allow/ask, ask+deny, multiple ask, cancellation, timeout, and broker failure.
+
+**Dependencies:** Tasks 1 and 2.
+
+**Files likely touched:**
+- `packages/cli/src/lib/tool-runtime.ts`
+- `packages/cli/tests/agent-bootstrap.test.ts`
+- `packages/cli/tests/permission-policy.test.ts`
+
+**Estimated scope:** Medium.
+
+### Task 4: Implement the process-local InteractiveApprovalBroker
+
+**Description:** Add one CLI broker adapter that exposes pending approval snapshots to React, resolves `allow | deny` exactly once, and removes pending transactions when their signal aborts. The broker remains process-local; it does not edit config or Session history.
+
+**Acceptance criteria:**
+- Pending transactions are observable/subscribable without exposing mutable broker internals.
+- Resolve is idempotent/fail-safe and cannot resolve the wrong approval ID.
+- Abort/timeout removes the pending request and rejects the waiting Tool Runtime promise.
+
+**Verification:** Dedicated CLI broker tests including subscriber ordering and abort cleanup.
+
+**Dependencies:** Task 1.
+
+**Files likely touched:**
+- `packages/cli/src/lib/interactive-approval-broker.ts`
+- `packages/cli/tests/interactive-approval-broker.test.ts`
+
+**Estimated scope:** Small.
+
+## Checkpoint: Runtime Approval Flow
+
+- Policy evaluation remains separate from human approval.
+- `ask` no longer returns a dead-end result to the model when interactive approval is available.
+- A Tool executor cannot run before both the policy and approval lifecycle are durably recorded.
+
+## Phase 3: Audit Compatibility & CLI UX
+
+### Task 5: Extend security audit replay for approval lifecycle
+
+**Description:** Extend the derived security audit projection with approval transactions and update ask invariants. An `ask` permission may proceed only when a matching approval resolves `allow`; deny/cancel/timeout must reconcile with the corresponding Tool terminal. Missing/duplicate/orphan approval events remain auditable inconsistencies or pending state.
+
+**Acceptance criteria:**
+- v1/v2 permission-only history remains replayable without approval facts.
+- v3 approval history correlates by Session/Run/Turn/Step/Tool Call and approval ID.
+- `ask + approval allow + completed` is valid; mismatched deny/cancel/timeout terminals are flagged.
+
+**Verification:** Harness security-audit replay tests covering legacy and interactive approval histories.
+
+**Dependencies:** Tasks 2 and 3.
+
+**Files likely touched:**
+- `packages/harness/src/security-audit.ts`
+- `packages/harness/tests/security-audit.test.ts`
+
+**Estimated scope:** Medium.
+
+### Task 6: Add CLI approval dialog and Session integration
+
+**Description:** Surface the broker's active request in the existing Dialog layer. Show Tool name plus ephemeral capability/resource details and offer only `Allow once` and `Deny`. Escape/dialog dismissal cancels the approval. Resolving the dialog must wake the same Tool Step without creating a new model Tool Call or mutating permanent permission config.
+
+**Acceptance criteria:**
+- An ask decision opens a modal with enough ephemeral information to identify the operation.
+- `Allow once` continues the current Tool Step; `Deny` blocks it; Escape/dismiss cancels it.
+- Closing/unmounting the Session cancels pending approvals and cannot strand the AgentLoop.
+- No approval action writes global/project permission overrides.
+
+**Verification:** UI state tests where practical plus integration tests at the broker/useChat seam; CLI build passes.
+
+**Dependencies:** Tasks 3 and 4.
+
+**Files likely touched:**
+- `packages/cli/src/hooks/use-chat.ts`
+- `packages/cli/src/screens/session.tsx`
+- `packages/cli/src/components/dialogs/approval-dialog.tsx`
+- `packages/cli/src/components/dialogs/index.tsx`
+
+**Estimated scope:** Medium.
+
+## Phase 4: Documentation & Delivery
+
+### Task 7: Document Stage 6.2 approval semantics
+
+**Description:** Record the policy/approval separation, one-time scope, lifecycle redaction, cancellation/timeout behavior, and explicit deferral of persistent approval rules and OS Sandbox.
+
+**Acceptance criteria:**
+- ADR/current-state docs explain `PermissionPolicy != ApprovalBroker`.
+- Documentation states that approval is one-time and never silently edits config.
+- Audit semantics and remaining Sandbox/MCP boundaries are current.
+
+**Verification:** Documentation review and `git diff --check`.
+
+**Dependencies:** Tasks 5 and 6.
+
+**Estimated scope:** Small.
+
+### Task 8: Complete Stage 6.2 delivery
+
+**Description:** Run the complete regression matrix, review the integrated diff for security/order regressions, update task status, and commit the Stage on `stage/6.2-interactive-approval` with no residual P0/P1 findings.
+
+**Acceptance criteria:**
+- Harness, CLI, and Runtime Store tests pass.
+- Six package typechecks, CLI/Server builds, both Prisma validate/generate paths, and `git diff --check` pass.
+- No pending approval can survive cancellation/unmount and no executor can run before durable approval allow.
+
+**Verification:** Stage 6.2 Final Verification commands.
+
+**Dependencies:** Task 7.
+
+**Estimated scope:** Small.
+
+## Stage 6.2 Final Verification
+
+- Harness, CLI, and Runtime Store test suites pass; Server currently has no test suite and must pass typecheck/build.
+- Shared/Harness/CLI/Server/Database/Runtime Store typechecks pass.
+- CLI and Server builds pass.
+- Both Prisma schemas validate and generate independently.
+- `git diff --check` passes.
+- Approval-specific tests prove allow-once, deny, cancel, timeout, multi-capability batching, fail-closed observer/broker errors, and audit replay consistency.
+
+## Explicitly Deferred
+
+- `Allow for session`, `Allow for project`, or any automatic persistence of permission overrides.
+- OS-level process/filesystem/network Sandbox enforcement.
+- Shell-AST-aware command authorization.
+- MCP transport/auth/remote Tool execution.
+- Cloud synchronization of approval/runtime events.
