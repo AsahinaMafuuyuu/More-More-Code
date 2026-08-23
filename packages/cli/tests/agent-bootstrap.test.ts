@@ -12,11 +12,18 @@ import {
 } from "../src/lib/system-prompt";
 import { createPromptPrefixIdentity } from "../src/lib/cache-identity";
 import { executeNativeTool, resolveNativeToolTimeoutMs } from "../src/lib/local-tools";
+import { ProcessSandbox } from "../src/lib/process-sandbox";
 import { ToolRuntime } from "../src/lib/tool-runtime";
 import { ToolRegistry } from "../src/lib/tool-registry";
 
 const tempRoots: string[] = [];
 const allowAllPermissionPolicy = new DefaultPermissionPolicy();
+const directProcessSandbox = new ProcessSandbox({
+    mode: "off",
+    network: "inherit",
+    environment: "inherit",
+    envAllow: [],
+});
 const allowApprovalBroker = {
     async request() {
         return { decision: "allow" as const };
@@ -44,6 +51,12 @@ describe("agent bootstrap", () => {
             {
                 skills: { enabled: false },
                 session: { branchSummaryOnJump: "never" },
+                sandbox: {
+                    mode: "required",
+                    network: "deny",
+                    environment: "inherit",
+                    envAllow: ["GLOBAL_ONLY"],
+                },
                 tools: {
                     mcp: {
                         servers: {
@@ -55,6 +68,11 @@ describe("agent bootstrap", () => {
             {
                 skills: { enabled: true, directories: ["project-skills"] },
                 session: { branchSummaryOnJump: "always" },
+                sandbox: {
+                    mode: "auto",
+                    environment: "safe",
+                    envAllow: ["PROJECT_ONLY"],
+                },
                 tools: {
                     mcp: {
                         servers: {
@@ -69,10 +87,56 @@ describe("agent bootstrap", () => {
         expect(merged.skills.directories).toEqual(["project-skills"]);
         expect(merged.session.branchSummaryOnJump).toBe("always");
         expect(Object.keys(merged.tools.mcp.servers).sort()).toEqual(["globalDocs", "projectTools"]);
+        expect(merged.sandbox).toEqual({
+            mode: "auto",
+            network: "deny",
+            environment: "safe",
+            envAllow: ["PROJECT_ONLY"],
+        });
     });
 
     test("defaults Branch Summary navigation policy to ask", () => {
         expect(mergeAgentConfig({}, {}).session.branchSummaryOnJump).toBe("ask");
+    });
+
+    test("defaults subprocess sandbox policy to auto with a safe environment", () => {
+        expect(mergeAgentConfig({}, {}).sandbox).toEqual({
+            mode: "auto",
+            network: "inherit",
+            environment: "safe",
+            envAllow: [],
+        });
+    });
+
+    test("rejects unknown sandbox configuration fields instead of silently weakening policy", async () => {
+        const root = await createTempRoot("more-more-code-invalid-sandbox-");
+        const home = join(root, "home");
+        const workspace = join(root, "workspace");
+        const globalConfigDir = join(home, ".more-more-code");
+        const projectConfigDir = join(workspace, ".more-more-code");
+
+        await Promise.all([
+            mkdir(globalConfigDir, { recursive: true }),
+            mkdir(projectConfigDir, { recursive: true }),
+        ]);
+        await Promise.all([
+            writeFile(join(globalConfigDir, "AGENTS.md"), "global"),
+            writeFile(join(projectConfigDir, "AGENTS.md"), "project"),
+            writeFile(join(globalConfigDir, "config.json"), JSON.stringify({ version: 1 }, null, 2)),
+            writeFile(join(projectConfigDir, "config.json"), JSON.stringify({
+                version: 1,
+                sandbox: {
+                    mode: "required",
+                    netwrok: "deny",
+                },
+            }, null, 2)),
+        ]);
+
+        await expect(loadAgentEnvironment({
+            workspaceRoot: workspace,
+            globalHome: home,
+            ensureLayout: false,
+        })).rejects.toThrow("Invalid MORE-MORE-CODE config");
     });
 
     test("loads global then project instructions and progressively discovers skills", async () => {
@@ -281,6 +345,7 @@ describe("agent bootstrap", () => {
                     return executeNativeTool(toolName, input, {
                         workspaceRoot: context.workspaceRoot,
                         signal: context.signal,
+                        processSandbox: directProcessSandbox,
                     });
                 },
                 resolveTimeoutMs(toolName, input) {

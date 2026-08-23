@@ -8,6 +8,7 @@ import {
     reloadAgentEnvironment,
     type AgentEnvironment,
 } from "../../lib/agent-environment";
+import { ProcessSandbox } from "../../lib/process-sandbox";
 import { useToast } from "../../providers/toast";
 
 const ACTIONS = [
@@ -24,6 +25,7 @@ type SettingsAction = (typeof ACTIONS)[number];
 function SettingsSummary({ environment }: { environment: AgentEnvironment }) {
     const native = environment.tools.listSources().find((source) => source.kind === "native");
     const mcp = environment.tools.listSources().filter((source) => source.kind === "mcp");
+    const sandbox = new ProcessSandbox(environment.config.resolved.sandbox).getStatus();
 
     return (
         <box flexDirection="column" gap={1}>
@@ -45,6 +47,12 @@ function SettingsSummary({ environment }: { environment: AgentEnvironment }) {
             <text>
                 branch summary on jump: {environment.config.resolved.session.branchSummaryOnJump}
             </text>
+            <text>
+                process sandbox: {sandbox.mode} · provider {sandbox.provider} · network {sandbox.network} · env {sandbox.environment}
+            </text>
+            {sandbox.reason ? (
+                <text attributes={TextAttributes.DIM}>sandbox note: {sandbox.reason}</text>
+            ) : null}
             <text attributes={TextAttributes.DIM}>
                 Project config overrides global config. Edit the files, then reload here.
             </text>

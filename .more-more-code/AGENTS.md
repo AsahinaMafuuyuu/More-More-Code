@@ -48,6 +48,9 @@ When working on Context or model-provider code:
 - Keep AgentLoop source-agnostic: it owns Run/Turn/Step orchestration, while Tool Runtime owns registry visibility, permission decisions, cancellation/timeout propagation, source selection, and normalized outcomes.
 - Permission decisions use `allow | deny | ask`; interactive approval remains a separate UI concern.
 - Workspace path validation is not OS-level Sandbox enforcement.
+- Every native child process must cross the CLI `ProcessSandbox` seam. Do not call `Bun.spawn` from individual native Tools.
+- Sandbox `required` and explicit hard restrictions such as `network=deny` are fail-closed. Never describe the `auto` direct fallback, sanitized child environment, canonical workspace path, or `cwd` alone as OS isolation.
+- Keep Permission Policy, Approval Broker, Tool Runtime, and Process Sandbox separate: they respectively answer authorization, one-time human consent, Tool lifecycle orchestration, and subprocess execution constraints.
 - Session event and timestamp colors belong to semantic Theme tokens rather than component-specific colors.
 
 ## Persistence Boundaries

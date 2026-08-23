@@ -39,6 +39,12 @@ const permissionRuleSchema = z.object({
     resources: permissionPatternsSchema.optional(),
     scopes: z.array(permissionScopeSchema).min(1).optional(),
 });
+const sandboxModeSchema = z.enum(["off", "auto", "required"]);
+const sandboxNetworkSchema = z.enum(["inherit", "deny"]);
+const sandboxEnvironmentSchema = z.enum(["inherit", "safe"]);
+const environmentVariableNameSchema = z.string()
+    .trim()
+    .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "Expected an environment variable name");
 
 const agentConfigFileSchema = z.object({
     version: z.literal(1).optional(),
@@ -64,6 +70,12 @@ const agentConfigFileSchema = z.object({
         default: permissionEffectSchema.optional(),
         rules: z.array(permissionRuleSchema).optional(),
     }).optional(),
+    sandbox: z.object({
+        mode: sandboxModeSchema.optional(),
+        network: sandboxNetworkSchema.optional(),
+        environment: sandboxEnvironmentSchema.optional(),
+        envAllow: z.array(environmentVariableNameSchema).optional(),
+    }).strict().optional(),
 });
 
 export type McpServerConfig = z.infer<typeof mcpServerSchema>;
@@ -93,6 +105,12 @@ export type ResolvedAgentConfig = {
     permissions: {
         default: PermissionEffect;
         rules: Array<PermissionRule & { policy: "configured" }>;
+    };
+    sandbox: {
+        mode: z.infer<typeof sandboxModeSchema>;
+        network: z.infer<typeof sandboxNetworkSchema>;
+        environment: z.infer<typeof sandboxEnvironmentSchema>;
+        envAllow: string[];
     };
 };
 
@@ -137,6 +155,12 @@ const DEFAULT_CONFIG: ResolvedAgentConfig = {
     permissions: {
         default: "allow",
         rules: [],
+    },
+    sandbox: {
+        mode: "auto",
+        network: "inherit",
+        environment: "safe",
+        envAllow: [],
     },
 };
 
@@ -270,6 +294,18 @@ export function mergeAgentConfig(
                 scopes: rule.scopes as PermissionScope[] | undefined,
                 policy: "configured" as const,
             })));
+        }
+        if (config.sandbox?.mode !== undefined) {
+            resolved.sandbox.mode = config.sandbox.mode;
+        }
+        if (config.sandbox?.network !== undefined) {
+            resolved.sandbox.network = config.sandbox.network;
+        }
+        if (config.sandbox?.environment !== undefined) {
+            resolved.sandbox.environment = config.sandbox.environment;
+        }
+        if (config.sandbox?.envAllow !== undefined) {
+            resolved.sandbox.envAllow = [...config.sandbox.envAllow];
         }
     };
 

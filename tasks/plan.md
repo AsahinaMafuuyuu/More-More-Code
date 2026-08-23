@@ -1186,7 +1186,7 @@ Harness approval contract
 
 # Stage 6.3 — Sandbox Execution Foundation & Process Hardening
 
-**Status:** In progress — 2026-08-23.
+**Status:** Delivered — 2026-08-23.
 
 ## Overview
 
@@ -1380,6 +1380,18 @@ Agent Config sandbox contract
 - Both Prisma schemas validate/generate independently.
 - `git diff --check`.
 - Security review confirms `required` and hard restrictions fail closed before spawn; direct fallback is never labeled isolated.
+
+### Delivery Evidence — 2026-08-23
+
+- CLI regression: **89 passed / 0 failed** across 21 files.
+- Harness regression: **99 passed / 0 failed** across 14 files.
+- Runtime Store integration: **8 passed / 0 failed** across 2 files.
+- Shared, Harness, CLI, Server, Database, and Runtime Store TypeScript checks all passed.
+- CLI and Server production builds passed.
+- PostgreSQL Cloud Session Store and SQLite Runtime Store Prisma schemas both validated and generated independently.
+- `git diff --check` passed; only repository line-ending conversion warnings were emitted on Windows.
+- Integrated review found no residual P0/P1 issue. During review, a pre-existing Windows native `grep` ENOENT path was exposed by the new integration test and fixed by resolving Git-for-Windows `usr/bin/grep.exe` when it is not on the host PATH.
+- The current Windows host has no Bubblewrap provider, so Linux Bubblewrap behavior is verified through deterministic launch-plan/provider tests rather than a local live Bubblewrap execution. Windows direct fallback is explicitly reported as unisolated, while `required` and unenforceable `network=deny` remain fail-closed before spawn.
 
 ## Explicitly Deferred
 

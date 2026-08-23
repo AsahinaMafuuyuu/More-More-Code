@@ -53,6 +53,7 @@ import {
 import type { BranchSummaryReductionOutcome } from "../lib/branch-summary-reducer";
 import { getRuntimeSession } from "../lib/runtime-environment";
 import { createEffectivePermissionPolicy } from "../lib/permission-policy";
+import { ProcessSandbox } from "../lib/process-sandbox";
 import { InteractiveApprovalBroker } from "../lib/interactive-approval-broker";
 
 export type { Message } from "../lib/chat-types";
@@ -110,6 +111,7 @@ function createLocalToolRuntime(
     approvalBroker: InteractiveApprovalBroker,
 ) {
     const environment = getAgentEnvironment();
+    const processSandbox = new ProcessSandbox(environment.config.resolved.sandbox);
     return {
         workspaceRoot: environment.config.paths.workspaceRoot,
         runtime: new ToolRuntime({
@@ -122,6 +124,7 @@ function createLocalToolRuntime(
                     return executeNativeTool(toolName, input, {
                         workspaceRoot: context.workspaceRoot,
                         signal: context.signal,
+                        processSandbox,
                     });
                 },
                 resolveTimeoutMs(toolName, input) {

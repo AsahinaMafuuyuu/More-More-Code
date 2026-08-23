@@ -1271,6 +1271,16 @@ Stage 6.2 将 `ask` 从 fail-closed 的产品死路升级为真实的一次性�
 
 Stage 6.0 的 derived security audit projector 已扩展到 v3 approval：旧 v1/v2 permission-only history 仍保持兼容；新历史允许 `ask + approval allow -> executor terminal`，并检查 approval deny/cancel/timeout 与 Tool terminal 的一致性。Stage 6.2 只提供 `Allow once / Deny`，不会自动写 global/project permission config；allow-for-session/project、shell-AST-aware command authorization、MCP authorization 与 OS-level Sandbox 继续独立后置。
 
+### 16.15 Sandbox Execution Foundation & Process Hardening：Stage 6.3
+
+Stage 6.3 在 native Tool executor 下增加独立 `ProcessSandbox` 深模块。PermissionPolicy 继续回答“能否执行”，ApprovalBroker 回答“人类是否对这一次 Tool Call 同意”，Tool Runtime 继续负责 Tool lifecycle/timeout/cancellation；ProcessSandbox 只负责“已获授权的子进程如何被启动和约束”。`bash` 与 `grep` 已不再直接创建进程，CLI 中唯一 `Bun.spawn` 收口到这个 seam。
+
+两级 Agent Config 新增 strict `sandbox` 对象：`mode=off|auto|required`、`network=inherit|deny`、`environment=inherit|safe`、`envAllow[]`。未知字段直接拒绝，避免安全配置拼写错误被静默降级。默认 `auto + network inherit + environment safe`；safe environment 只保留 PATH/temp/locale/shell 等运行变量及显式 `envAllow`，不把 ambient Provider/API credentials 自动传给 shell。`required` 没有 provider 时在 spawn 前 fail-closed；`network=deny` 也不能在 `auto` 中无提示降级为 direct networking。
+
+Linux provider 使用可发现的 Bubblewrap：host root 只读 bind，canonical workspace root 单独可写 bind，home 通过 tmpfs 遮蔽，`/tmp` 私有，并启用 PID/IPC/UTS namespace；`network=deny` 再加入 network namespace。ProcessSandbox 的接口显式区分 `workspaceRoot` 与 `cwd`，并在模块内部验证 `cwd ⊆ workspaceRoot`，因此未来新增 process-backed Tool 不能只靠调用约定决定可写范围。该 profile 的目标是 workspace-write/process/network isolation，不宣称完全 host-read confidentiality。
+
+当前 Windows 开发环境没有 Bubblewrap/nsjail/firejail 类型 provider，Stage 6.3 不把 safe environment、cwd 或 canonical path 包装成伪 Sandbox：`auto` 只在没有硬约束时报告 unisolated direct fallback，`required` 则拒绝 spawn。后续 Windows AppContainer/restricted-token/Job-object adapter 可直接实现同一 seam，而不改 AgentLoop/ToolRuntime/native Tool 调用面。`/settings` 已显示实际 Sandbox provider 和 fallback/unavailable 原因。
+
 ---
 
 ## 17. 当前需要特别避免的架构回退
@@ -1323,7 +1333,7 @@ Cloud persistence 应保持外围能力。
 
 ## 18. 当前阶段边界与后续候选
 
-Stage 4.1 Agent Bootstrap、Stage 4.2 Skill Registry、Stage 5 Context & Provider Runtime、Stage 5.1 Session/Context 语义收口、Stage 6 Tool Runtime 第一版、Stage 6.1 native shell cancellation、Stage 6.0 recoverable runtime / permission enforcement / security audit validation，以及 Stage 6.2 interactive approval 均已完成。当前从启动到 Model Step / Tool Step 的链路已经形成：
+Stage 4.1 Agent Bootstrap、Stage 4.2 Skill Registry、Stage 5 Context & Provider Runtime、Stage 5.1 Session/Context 语义收口、Stage 6 Tool Runtime 第一版、Stage 6.1 native shell cancellation、Stage 6.0 recoverable runtime / permission enforcement / security audit validation、Stage 6.2 interactive approval，以及 Stage 6.3 process Sandbox foundation 均已完成。当前从启动到 Model Step / Tool Step 的链路已经形成：
 
 ```text
 CLI bootstrap
@@ -1345,11 +1355,13 @@ Tool Runtime → Registry / Effective Permission Policy
 Interactive Approval Broker → Allow once / Deny
   ↓ allow
 Tool Executor / Timeout / Source Adapter
+  ↓ native process-backed Tool
+ProcessSandbox → provider / safe env / workspace-write constraint
   ↓
 Redacted Runtime Events → SQLite snapshot + replay
 ```
 
-Stage 6.2 已补齐一次性交互式 approval，并将 v3 approval lifecycle 纳入安全审计。下一安全阶段优先考虑 OS-level Sandbox / process isolation，以补齐当前 canonical-path + command-policy 无法提供的 no-follow、进程、网络与系统资源隔离；之后再扩大 MCP remote Tool trust boundary 更稳妥。Cloud Runtime Event sync、allow-for-session/project、exact tokenizer 或产品级 Subagent runtime 仍可独立推进；其中任何一项都不应重新把职责塞入 `AgentLoop`、`ContextManager` 或 OpenAI-specific adapter。
+Stage 6.3 已把 native process creation 收口到 ProcessSandbox，并在 Linux/Bubblewrap 可用时提供 workspace-write/process/network isolation；当前最重要的安全缺口转为 Windows native isolation adapter 与真实跨平台 provider 集成测试。之后再扩大 MCP remote Tool trust boundary 更稳妥。Cloud Runtime Event sync、allow-for-session/project、shell-AST-aware authorization、exact tokenizer 或产品级 Subagent runtime 仍可独立推进；其中任何一项都不应重新把职责塞入 `AgentLoop`、`ContextManager` 或 OpenAI-specific adapter。
 
 当前关键边界已经分离：
 
@@ -1360,6 +1372,7 @@ Context Projection       = 当前 Model Step 发给模型什么，以及 stable�
 Provider Runtime         = provider-specific model/options/cache telemetry 编译
 Tool Runtime             = tool visibility / capability / policy / cancellation / timeout / normalized result
 Approval Broker          = process-local human approval transaction / Allow once / Deny
+Process Sandbox          = native subprocess provider / environment / writable workspace / OS isolation policy
 Message / UI Projection  = 当前 branch 显示哪些聊天/树信息
 Runtime State Projection = 当前 branch 恢复哪些 model / mode / config
 Agent Environment        = 当前进程加载了哪些 global/project instructions、skills 与 tool sources
@@ -1396,7 +1409,8 @@ docs/decisions/
 ├── 0018-governed-multi-agent-collaboration.md
 ├── 0019-effective-permission-policy-and-redacted-lifecycle.md
 ├── 0020-derived-security-audit-and-lifecycle-replay.md
-└── 0021-interactive-tool-approval-transactions.md
+├── 0021-interactive-tool-approval-transactions.md
+└── 0022-sandbox-execution-seam-and-linux-bubblewrap.md
 ```
 
 其中：
@@ -1419,5 +1433,6 @@ docs/decisions/
 - ADR-0019 记录 effective permission policy、Tool Runtime enforcement 与 redacted schema-v2 permission lifecycle。
 - ADR-0020 记录 derived security audit timeline、lifecycle consistency replay 与 application policy / OS Sandbox 边界。
 - ADR-0021 记录 Tool-call approval transaction、PermissionPolicy/ApprovalBroker 职责分离、same-Step resume 与 redacted schema-v3 approval lifecycle。
+- ADR-0022 记录 native subprocess ProcessSandbox seam、strict fallback semantics、safe child environment、Linux Bubblewrap profile 与 Windows native isolation 缺口。
 
 本文件属于近期工程状态快照，不替代正式 ADR。

@@ -5,8 +5,16 @@ import { join, resolve } from "node:path";
 import { mergeAgentConfig } from "../src/lib/agent-config";
 import { executeNativeTool } from "../src/lib/local-tools";
 import { createEffectivePermissionPolicy } from "../src/lib/permission-policy";
+import { ProcessSandbox } from "../src/lib/process-sandbox";
 import { ToolRegistry } from "../src/lib/tool-registry";
 import { ToolRuntime } from "../src/lib/tool-runtime";
+
+const directProcessSandbox = new ProcessSandbox({
+  mode: "off",
+  network: "inherit",
+  environment: "inherit",
+  envAllow: [],
+});
 
 const allowApprovalBroker = {
   async request() {
@@ -241,6 +249,7 @@ describe("ToolRegistry permission request classification", () => {
       const context = {
         workspaceRoot: workspace,
         signal: new AbortController().signal,
+        processSandbox: directProcessSandbox,
       };
       await expect(executeNativeTool(
         "readFile",

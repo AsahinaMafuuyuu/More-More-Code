@@ -1,8 +1,10 @@
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "path";
 import { toolInputSchemas } from "@more-more-code/shared";
 import { getAgentEnvironment } from "./agent-environment";
+import type { ProcessSandbox, SandboxedProcess } from "./process-sandbox";
 import { resolveWorkspacePath } from "./workspace-path";
 
 const MAX_FILE_SIZE = 10_000;
@@ -28,9 +30,30 @@ function truncate(value: string, limit: number) {
         : value;
 }
 
+function resolveNativeExecutable(command: "bash" | "grep") {
+    const direct = Bun.which(command);
+    if (direct) return direct;
+
+    // Git for Windows places GNU utilities such as grep in usr/bin while
+    // exposing bash from bin. That usr/bin directory is not necessarily on
+    // the Windows PATH used by Bun.spawn, even though the same executable is
+    // visible after entering Git Bash.
+    if (process.platform === "win32" && command === "grep") {
+        const bash = Bun.which("bash");
+        if (bash) {
+            const gitRoot = dirname(dirname(bash));
+            const gitGrep = join(gitRoot, "usr", "bin", "grep.exe");
+            if (existsSync(gitGrep)) return gitGrep;
+        }
+    }
+
+    return command;
+}
+
 type NativeToolExecutionContext = {
     workspaceRoot: string;
     signal: AbortSignal;
+    processSandbox: ProcessSandbox;
 };
 
 function throwIfAborted(signal: AbortSignal) {
@@ -175,10 +198,11 @@ export async function executeNativeTool(
             if (includes) args.push(`--include=${includes}`);
             args.push(pattern, resolved);
 
-            const proc = Bun.spawn(["grep", ...args], {
+            const proc = context.processSandbox.spawn({
+                command: [resolveNativeExecutable("grep"), ...args],
+                workspaceRoot: cwd,
                 cwd,
-                stdout: "pipe",
-                stderr: "pipe",
+                env: process.env,
             });
             const cancel = () => proc.kill();
             context.signal.addEventListener("abort", cancel, { once: true });
@@ -279,8 +303,13 @@ export async function executeNativeTool(
         case "bash": {
             const { command } = toolInputSchemas.bash.parse(input);
             const workspaceRoot = (await resolveInsideWorkspace(context.workspaceRoot, ".")).resolved;
-            const shellStateDirectory = await mkdtemp(join(tmpdir(), "more-more-code-shell-"));
-            const cancellationFile = join(shellStateDirectory, "cancel");
+            const sandboxProvider = context.processSandbox.getStatus().provider;
+            const shellStateDirectory = sandboxProvider === "bubblewrap"
+                ? null
+                : await mkdtemp(join(tmpdir(), "more-more-code-shell-"));
+            const cancellationFile = shellStateDirectory
+                ? join(shellStateDirectory, "cancel")
+                : "/tmp/.more-more-code-unused-cancel";
             const cancellationFileExpression = process.platform === "win32"
                 ? '"$(cygpath -u "$1")"'
                 : '"$1"';
@@ -301,34 +330,44 @@ export async function executeNativeTool(
                 "done",
                 'wait "$child"',
             ].join("\n");
-            const proc = Bun.spawn([
-                "bash",
-                "-c",
-                shellWrapper,
-                "more-more-code-shell",
-                cancellationFile,
-                command,
-            ], {
-                cwd: workspaceRoot,
-                stdout: "pipe",
-                stderr: "pipe",
-                env: { ...process.env, TERM: "dumb" },
-            });
-
+            let proc: SandboxedProcess | null = null;
             let cancellation: Promise<void> | null = null;
             const cancel = () => {
+                if (!proc) return;
+                if (sandboxProvider === "bubblewrap") {
+                    // Bubblewrap owns a private PID namespace. Killing the
+                    // sandbox supervisor tears down the isolated process tree;
+                    // the host-side cancellation-file bridge is only needed
+                    // for direct/MSYS execution where grandchildren can outlive
+                    // the visible bash.exe process.
+                    proc.kill();
+                    return;
+                }
                 // The Bash wrapper owns the POSIX process group. Signalling it
                 // through a file works on Windows/MSYS too, where killing only
                 // the visible bash.exe process can leave grandchildren alive.
                 cancellation ??= writeFile(cancellationFile, "cancel", "utf8")
-                    .then(async () => { await proc.exited; });
+                    .then(async () => { await proc!.exited; });
             };
-            context.signal.addEventListener("abort", cancel, { once: true });
-            if (context.signal.aborted) cancel();
             let stdout: string;
             let stderr: string;
             let exitCode: number;
             try {
+                proc = context.processSandbox.spawn({
+                    command: [
+                        resolveNativeExecutable("bash"),
+                        "-c",
+                        shellWrapper,
+                        "more-more-code-shell",
+                        cancellationFile,
+                        command,
+                    ],
+                    workspaceRoot,
+                    cwd: workspaceRoot,
+                    env: { ...process.env, TERM: "dumb" },
+                });
+                context.signal.addEventListener("abort", cancel, { once: true });
+                if (context.signal.aborted) cancel();
                 [stdout, stderr, exitCode] = await Promise.all([
                     readProcessOutput(proc.stdout, context.signal),
                     readProcessOutput(proc.stderr, context.signal),
@@ -337,7 +376,9 @@ export async function executeNativeTool(
             } finally {
                 context.signal.removeEventListener("abort", cancel);
                 if (cancellation) await cancellation;
-                await rm(shellStateDirectory, { recursive: true, force: true });
+                if (shellStateDirectory) {
+                    await rm(shellStateDirectory, { recursive: true, force: true });
+                }
             }
             throwIfAborted(context.signal);
 

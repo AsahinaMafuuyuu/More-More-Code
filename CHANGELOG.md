@@ -53,6 +53,12 @@ All notable changes to MORE MORE CODE are recorded here.
 - Independently versioned schema-v3 `approval.lifecycle` Runtime Events with strict redaction and schema-v1/v2 backward compatibility.
 - Approval-aware security audit replay correlating `ask` permission decisions, human approval outcomes, and Tool terminals.
 - ADR-0021 documenting Permission Policy / Approval Broker separation, same-Tool-Step resume, write-ahead approval ordering, and one-time approval scope.
+- Layered process Sandbox configuration with strict `off | auto | required` mode, `inherit | deny` network policy, `inherit | safe` child environment policy, and explicit `envAllow` names.
+- Deep CLI `ProcessSandbox` execution seam that owns native child-process launch, provider discovery/status, writable workspace/cwd containment, and fail-closed hard-restriction handling.
+- Safe child-process environment projection that prevents ambient provider/API credentials from entering native shell processes unless explicitly allowlisted.
+- Linux Bubblewrap launch-plan adapter with read-only host root, writable workspace, masked home/private temp, process namespaces, and optional network isolation.
+- Sandbox status in `/settings`, including explicit direct fallback/unavailable reasons rather than treating unsupported hosts as isolated.
+- ADR-0022 documenting Process Sandbox semantics, Linux Bubblewrap isolation, safe environment policy, and the unresolved Windows native isolation boundary.
 
 ### Changed
 
@@ -80,10 +86,12 @@ All notable changes to MORE MORE CODE are recorded here.
 - Tool Runtime construction now requires an explicit `PermissionPolicy`; the implicit allow-all fallback was removed from the security enforcement seam.
 - Tool Runtime now evaluates all capabilities before prompting, batches all asks for one Tool Call into one approval transaction, and resumes the original Tool Step only after an awaited durable `Allow once` resolution.
 - Approval request/resolution observer failures are fail-closed: broker interaction cannot start before a durable request fact, and executor invocation cannot start before a durable approval-allow fact.
+- Native `bash` and `grep` subprocesses now share the `ProcessSandbox` seam; `local-tools.ts` no longer creates child processes directly, while existing Bash descendant cancellation remains intact for direct/MSYS execution.
+- Native `grep` now resolves Git-for-Windows' `usr/bin/grep.exe` when GNU grep is available inside Git Bash but not exposed on the Windows process PATH, eliminating the previous `ENOENT` path on that setup.
 
 ### Deferred
 
-- MCP transport/auth/remote tool execution, persistent allow-for-session/project rules, OS-level Sandbox enforcement, and product-level Subagent runtime remain outside this delivery slice.
+- Windows/macOS native OS Sandbox adapters, MCP transport/auth/remote tool execution, persistent allow-for-session/project rules, and product-level Subagent runtime remain outside this delivery slice.
 
 ## [2.0.1] - 2026-08-13
 

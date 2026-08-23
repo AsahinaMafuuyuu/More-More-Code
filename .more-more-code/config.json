@@ -19,5 +19,11 @@
   },
   "session": {
     "branchSummaryOnJump": "ask"
+  },
+  "sandbox": {
+    "mode": "auto",
+    "network": "inherit",
+    "environment": "safe",
+    "envAllow": []
   }
 }

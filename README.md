@@ -323,6 +323,21 @@ CLI 会在渲染 UI 和创建 Agent Run 之前完成一次 Agent Bootstrap：
 
 支持的 effect 为 `allow | deny | ask`，scope 为 `workspace | outside-workspace | agent-config | external`。Tool Runtime 会先对注册 Tool 的全部 capability 执行最终策略：任一 `deny` 立即阻止 Tool；若没有 deny 但存在一个或多个 `ask`，这些 ask 会聚合为**同一个 Tool Call 的一次交互式审批**。CLI 弹窗只提供 `Allow once` 与 `Deny`：Allow 会在原 Tool Step 内继续原 executor，不要求模型重新发起 Tool Call；Deny、Escape/关闭弹窗、Run interrupt 或审批超时均不会执行 Tool。审批不会修改 global/project permission config，也不会产生永久授权。文件策略分类与 native executor 共享 canonical path resolver：既有 symlink/junction 会解析真实目标，新建文件会解析最近存在父目录；实际目标落在 workspace 外时始终拒绝，配置不能覆盖。该检查仍不能消除检查后链接被替换的 TOCTOU，也不等于 OS-level Sandbox。
 
+Stage 6.3 在 Permission/Approval 之下新增独立的 **Process Sandbox** 执行层。`bash`、`grep` 等 native 子进程不再直接调用 `Bun.spawn`，而是统一经过 `ProcessSandbox`。Sandbox 配置同样按 global → project 覆盖：
+
+```json
+{
+  "sandbox": {
+    "mode": "auto",
+    "network": "inherit",
+    "environment": "safe",
+    "envAllow": []
+  }
+}
+```
+
+`mode` 支持 `off | auto | required`：`off` 明确为未隔离的 direct execution；`auto` 优先使用当前平台可用的 OS provider；`required` 在没有 provider 时会在 spawn 前 fail-closed。`network=deny` 是硬约束，没有能执行网络隔离的 provider 时不会静默回退。`environment=safe` 是默认值，只向子进程投影 PATH/temp/locale/shell 等运行所需变量和 `envAllow` 中明确列出的变量，避免模型 Provider/API credentials 被 ambient inheritance 带入 shell；如确实需要完整宿主环境，可显式改为 `environment=inherit`。Linux 在发现 `bwrap` 时使用 Bubblewrap：host root 只读、workspace 可写、home 被遮蔽、`/tmp` 私有，并隔离 PID/IPC/UTS；`network=deny` 额外隔离网络。当前 Windows 尚无 AppContainer/restricted-token/Job-object adapter，因此 `auto` 会明确报告 direct fallback，不能把它称为 OS Sandbox；`required` 则拒绝执行。`/settings` 会显示实际 mode/provider/network/environment 状态及 fallback 原因。
+
 ## 🛠️ AI 工具系统
 
 Tools 通过 Tool Registry 按来源区分为 **native** 与 **MCP extension source**。当前实际执行面仍以 native tools 为默认；MCP server 可以在 `.more-more-code/config.json` 中配置，但 MCP transport/auth/remote tool execution 将在后续阶段接入。
@@ -340,7 +355,7 @@ Tools 通过 Tool Registry 按来源区分为 **native** 与 **MCP extension sou
 | `editFile` | 精准替换文件内容 | ❌ PLAN / ✅ BUILD |
 | `bash` | 执行 shell 命令 | ❌ PLAN / ✅ BUILD |
 
-所有文件操作工具都带有**路径安全检查**，防止逃逸到项目目录之外。
+所有文件操作工具都带有**路径安全检查**，防止逃逸到项目目录之外；所有 native 子进程则统一经过 `ProcessSandbox`。路径检查、Permission Policy、Interactive Approval 与 Process Sandbox 是四个不同安全层，不互相冒充。
 
 ---
 
