@@ -2410,10 +2410,13 @@ Delivered.
 
 # Stage 6.5 UI Track — Agent Runtime Workbench
 
-**Status:** Planned — roadmap approved for detailed per-slice design. No
-production UI behavior is changed by this planning entry.
+**Status:** In progress — UI Slice 1 / P0 Runtime Activity Foundation delivered
+on 2026-08-27. UI Slice 2 and later roadmap work remains planned.
 
 **Roadmap:** `docs/UI-RUNTIME-WORKBENCH-ROADMAP.md`
+
+**P0 design/test/delivery:** `docs/UI-RUNTIME-ACTIVITY-DESIGN.md`,
+`docs/UI-RUNTIME-ACTIVITY-TEST.md`, `docs/UI-RUNTIME-ACTIVITY-DELIVERY.md`.
 
 ## Overview
 
@@ -2451,11 +2454,11 @@ Turn / Step state so the presentation layer receives already-interpreted model
 and Tool activity.
 
 **Acceptance criteria:**
-- [ ] Projection distinguishes Run/Turn/Step status and Turn cause.
-- [ ] Model and Tool Steps are represented without Provider prompt/content.
-- [ ] Active Step, duration and available progress can be presented directly.
-- [ ] React does not traverse raw Harness structures to derive semantics.
-- [ ] No Harness/Runtime/Session persistence contract changes are required.
+- [x] Projection distinguishes Run/Turn/Step status and Turn cause.
+- [x] Model and Tool Steps are represented without Provider prompt/content.
+- [x] Active Step, duration and available progress can be presented directly.
+- [x] React does not traverse raw Harness structures to derive semantics.
+- [x] No Harness/Runtime/Session persistence contract changes are required.
 
 **Verification:** projection test contract defined before implementation.
 
@@ -2466,11 +2469,11 @@ Conversation and Input, preserving terminal-width usability and keeping the
 Conversation as the primary surface.
 
 **Acceptance criteria:**
-- [ ] Active execution is visible without relying only on the spinner.
-- [ ] Completed/failed/interrupted current-Run Steps remain understandable.
-- [ ] Steering/follow-up/interrupt hints remain consistent with actual Run
+- [x] Active execution is visible without relying only on the spinner.
+- [x] Completed/failed/interrupted current-Run Steps remain understandable.
+- [x] Steering/follow-up/interrupt hints remain consistent with actual Run
   state.
-- [ ] Narrow terminals degrade without requiring a permanent side panel.
+- [x] Narrow terminals degrade without requiring a permanent side panel.
 
 **Dependencies:** UI-1.
 
@@ -2480,11 +2483,11 @@ Conversation as the primary surface.
 expandable semantic ToolUse component driven by existing Tool projection/state.
 
 **Acceptance criteria:**
-- [ ] Running/completed/failed/cancelled/timed-out/denied states are distinct.
-- [ ] Approval-waiting state is represented when it exists ephemerally.
-- [ ] Command/input detail and output detail are progressively disclosed.
-- [ ] No second durable Tool terminal state is created by UI code.
-- [ ] Incomplete historical Tool diagnostics remain fail-closed and explicit.
+- [x] Running/completed/failed/cancelled/timed-out/denied states are distinct.
+- [x] Approval-waiting state is represented when it exists ephemerally.
+- [x] Command/input detail and output detail are progressively disclosed.
+- [x] No second durable Tool terminal state is created by UI code.
+- [x] Incomplete historical Tool diagnostics remain fail-closed and explicit.
 
 **Dependencies:** UI-1.
 
@@ -2493,10 +2496,10 @@ expandable semantic ToolUse component driven by existing Tool projection/state.
 **Description:** Finalize P0 layout after Activity and ToolUse integration.
 
 **Acceptance criteria:**
-- [ ] Conversation -> Activity -> Input -> StatusBar hierarchy is stable.
-- [ ] Context/Usage/Security detail is not dumped into the transcript.
-- [ ] Theme and keyboard-layer behavior remain consistent.
-- [ ] P0 focused tests, CLI typecheck/build and existing relevant regressions
+- [x] Conversation -> Activity -> Input -> StatusBar hierarchy is stable.
+- [x] Context/Usage/Security detail is not dumped into the transcript.
+- [x] Theme and keyboard-layer behavior remain consistent.
+- [x] P0 focused tests, CLI typecheck/build and existing relevant regressions
   pass.
 
 **Dependencies:** UI-2, UI-3.

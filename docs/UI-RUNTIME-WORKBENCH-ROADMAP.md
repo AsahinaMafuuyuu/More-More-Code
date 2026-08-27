@@ -1,6 +1,7 @@
 # UI Runtime Workbench Roadmap
 
-**Status:** Planned — UI-only roadmap approved for detailed follow-up design.
+**Status:** Active — UI Slice 1 / P0 Runtime Activity Foundation delivered on
+2026-08-27; Inspector and later slices remain planned.
 
 **Target:** Local CLI / OpenTUI presentation layer after the Stage 6.5 local
 Session, Runtime, Provider, Context, Usage and Cost foundations.

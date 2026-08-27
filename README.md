@@ -17,10 +17,11 @@
 - 🎨 **9 种配色主题** — 从 Nightfox 到 Sakura Pulse，满足不同审美
 - 📜 **本地会话持久化** — Session Entry Tree、分支、Context checkpoint 和元数据存储在本地 SQLite，重启后可继续
 - 📊 **会话资源可观测性** — StatusBar 展示当前 Context 占用、累计 API 估算费用和可信 Cache 命中率；Usage 由本地 Runtime Store 持久化并在重启后恢复
+- 🧭 **Agent Runtime Activity** — 会话主界面直接展示当前 Run/Turn/Model Step/Tool Step 活动；ToolUse 使用语义状态区分运行、失败、拒绝、超时、取消、审批等待与历史不完整状态
 - ⚡ **流式响应** — 本地 Provider streaming，支持思维链（reasoning）展示
 - ⌨️ **命令菜单** — 输入 `/` 快速切换模型、模式、主题、浏览历史会话
 
-> **当前架构（ADR-0023、ADR-0024、ADR-0026、ADR-0027）：** Stage 6.4 Provider Runtime、Stage 6.5 Local Session Authority、semantic navigation/finalized-message follow-up，以及 Usage/Cost/Context Observability 均已交付。CLI 的 Session、Provider 配置/凭证、Harness Context、cache/checkpoint、Model/Tool Runtime 与 Session Usage telemetry 均在本地运行；StatusBar 的 `Ctx` 来自 canonical Context 投影，`API` 来自 Provider Usage + 持久化 pricing basis 的计算费用，`Cache` 来自 Provider-reported cache-read/input 汇总。创建、列出、打开、继续和重启恢复不需要 Server、账户、`API_URL`、Cloudflare Worker 或 Railway。Stage 6.6 云同步/商业账户暂时暂停，Server/database 仅保留为 dormant future-cloud 代码。
+> **当前架构（ADR-0023、ADR-0024、ADR-0026、ADR-0027）：** Stage 6.4 Provider Runtime、Stage 6.5 Local Session Authority、semantic navigation/finalized-message follow-up、Usage/Cost/Context Observability，以及 UI Runtime Activity Foundation 均已交付。CLI 的 Session、Provider 配置/凭证、Harness Context、cache/checkpoint、Model/Tool Runtime 与 Session Usage telemetry 均在本地运行；React/OpenTUI 通过 CLI-owned `AgentActivityProjection` / ToolUse projection 消费 Run/Turn/Step 和 Tool 状态，不直接解释 Harness 或持久化细节。StatusBar 的 `Ctx` 来自 canonical Context 投影，`API` 来自 Provider Usage + 持久化 pricing basis 的计算费用，`Cache` 来自 Provider-reported cache-read/input 汇总。创建、列出、打开、继续和重启恢复不需要 Server、账户、`API_URL`、Cloudflare Worker 或 Railway。Stage 6.6 云同步/商业账户暂时暂停，Server/database 仅保留为 dormant future-cloud 代码。
 
 ---
 

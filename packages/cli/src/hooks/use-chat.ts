@@ -71,6 +71,12 @@ import {
 import { getCliRunLifecycle } from "../lib/run-lifecycle";
 import { createRuntimeUsagePayload } from "../lib/provider-usage";
 import { createSessionObservability } from "../lib/session-observability";
+import {
+    projectAgentActivity,
+    reduceAgentActivityProgress,
+    type AgentActivityProgressState,
+} from "../lib/agent-activity-projection";
+import { projectToolUses } from "../lib/tool-use-projection";
 
 export type { Message } from "../lib/chat-types";
 
@@ -345,6 +351,8 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         [runtimeSession],
     );
     const [run, setRun] = useState<AgentRun | null>(null);
+    const [activityProgressByStep, setActivityProgressByStep] = useState<AgentActivityProgressState>({});
+    const [activityNow, setActivityNow] = useState(() => Date.now());
     const [busy, setBusy] = useState(false);
     const [runtimeRecovery, setRuntimeRecovery] = useState<RuntimeSessionRecoveryReport | null>(null);
     const [runtimeError, setRuntimeError] = useState<Error | null>(null);
@@ -401,6 +409,17 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
     useEffect(() => subscribeAgentEnvironment((environment) => {
         setAgentEnvironmentRevision(environment.loadedAt);
     }), []);
+
+    useEffect(() => agentLoop.subscribe((event) => {
+        setActivityProgressByStep((current) => reduceAgentActivityProgress(current, event));
+    }), [agentLoop]);
+
+    useEffect(() => {
+        if (run?.status !== "running") return;
+        setActivityNow(Date.now());
+        const timer = setInterval(() => setActivityNow(Date.now()), 1_000);
+        return () => clearInterval(timer);
+    }, [run?.id, run?.status]);
 
     const transport = useMemo(() => {
         return new LocalModelTransport({
@@ -1213,11 +1232,25 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         usagePersistenceIncomplete,
     }), [contextUsage, sessionUsage, usagePersistenceIncomplete]);
 
+    const activity = useMemo(() => projectAgentActivity(run, {
+        progressByStep: activityProgressByStep,
+        now: activityNow,
+    }), [run, activityNow, activityProgressByStep]);
+
+    const toolUses = useMemo(() => projectToolUses({
+        messages: chat.messages,
+        sessionTree,
+        activity,
+        pendingApprovals,
+    }), [activity, chat.messages, pendingApprovals, sessionTree]);
+
     return {
         messages: chat.messages,
         status: chat.status,
         error: runtimeError ?? chat.error,
         run,
+        activity,
+        toolUses,
         busy,
         runtimeRecovery,
         observability,

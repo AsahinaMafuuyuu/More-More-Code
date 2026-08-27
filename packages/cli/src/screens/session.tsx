@@ -59,7 +59,13 @@ function getMessageText(msg: Message) {
     .join("");
 }
 
-function ChatMessage({ msg }: { msg: Message }) {
+function ChatMessage({
+  msg,
+  toolUses,
+}: {
+  msg: Message;
+  toolUses: Readonly<Record<string, import("../lib/tool-use-projection").ToolUseView>>;
+}) {
   if (msg.role === "user") { // 如果是用户消息
     return <UserMessage message={getMessageText(msg)} mode={msg.metadata?.mode ?? "BUILD"} />;
   }
@@ -75,6 +81,7 @@ function ChatMessage({ msg }: { msg: Message }) {
       mode={msg.metadata?.mode ?? "BUILD"}
       durationMs={msg.metadata?.durationMs}
       streaming={false}
+      toolUses={toolUses}
     />
   );
 }
@@ -104,6 +111,8 @@ function SessionChat({
     interrupt,
     error,
     run,
+    activity,
+    toolUses,
     busy,
     runtimeRecovery,
     observability,
@@ -319,6 +328,7 @@ function SessionChat({
       }}
       inputDisabled={settling}
       loading={busy || status === "submitted" || status === "streaming"}
+      activity={activity}
       observability={observability}
       interruptible={runActive || status === "streaming" || status === "submitted"}
       sessionTree={sessionTreeCommands}
@@ -332,7 +342,7 @@ function SessionChat({
     >
       {/* 渲染消息 */}
       {messages.map((msg) => (
-        <ChatMessage key={msg.id} msg={msg} />
+        <ChatMessage key={msg.id} msg={msg} toolUses={toolUses} />
       ))}
 
       {/*  */}

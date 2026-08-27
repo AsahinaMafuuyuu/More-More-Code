@@ -6,6 +6,8 @@ All notable changes to MORE MORE CODE are recorded here.
 
 ### Added
 
+- CLI-owned `AgentActivityProjection` and responsive `ActivityView`, exposing current Run/Turn/Model Step/Tool Step lifecycle, Turn cause, active Step, duration and bounded process-local progress between Conversation and Input.
+- Semantic expandable ToolUse projection/presentation with canonical `tool_result` precedence and explicit requested/running/completed/failed/cancelled/timed-out/denied/approval-waiting/incomplete states; historical missing terminals remain fail-closed and are never auto-replayed.
 - Durable `usage/model.usage` Runtime Events with Step-idempotent Session Usage projection, snapshot/restart recovery, strict unknown-vs-zero cache semantics, and no new Session Entry or SQLite schema migration.
 - Effective-time/version-aware pricing snapshots and deterministic cache-aware Cost Engine, including DeepSeek V4 Flash tariff handling and stable historical Session cost.
 - Canonical Current Context observability plus CLI `SessionObservability`, with StatusBar `Ctx`, cumulative calculated `API` cost, and trustworthy `Cache` metrics sourced from separate authority classes.

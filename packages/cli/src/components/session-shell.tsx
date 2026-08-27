@@ -7,6 +7,8 @@ import type { SessionTreeCommandApi } from "./command-menu/types";
 import type { ModeType, ModelRef } from "@more-more-code/shared";
 import type { ManualContextCompactionOutcome } from "../lib/local-model-transport";
 import type { SessionObservability } from "../lib/session-observability";
+import type { AgentActivityView } from "../lib/agent-activity-projection";
+import { ActivityView } from "./activity-view";
 
 type Props = {
     children?: ReactNode;
@@ -20,6 +22,7 @@ type Props = {
     onModelChange?: (model: ModelRef) => void | Promise<void>;
     onCompact?: () => Promise<ManualContextCompactionOutcome>;
     observability?: SessionObservability;
+    activity?: AgentActivityView | null;
 };
 
 export function SessionShell({ children,
@@ -33,6 +36,7 @@ export function SessionShell({ children,
     onModelChange,
     onCompact,
     observability,
+    activity,
 }
     : Props) {
     const { mode } = usePromptConfig()
@@ -54,6 +58,8 @@ export function SessionShell({ children,
             >
                 <box>{children}</box>
             </scrollbox>
+
+            <ActivityView activity={activity} />
 
             <box flexShrink={0}>
                 <InputBar

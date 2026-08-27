@@ -34,7 +34,11 @@ The human-facing semantic navigation view derived from the canonical Session Ent
 
 ## ToolUse Projection
 
-A derived navigation/UI representation joining one canonical `tool_call` with its matching terminal `tool_result` by exact `toolCallId`. `ToolUse` is never persisted as a Session Entry. Terminal ToolUse navigation targets the terminal `tool_result`; unresolved calls remain explicit incomplete diagnostics and are not auto-replayed after restart.
+A CLI presentation projection for one Tool call. Canonical active-branch `tool_call` / `tool_result` facts remain the terminal authority, while the current AI SDK Tool part, process-local Approval request and Agent Activity Tool Step may supply transient pre-terminal state. Canonical terminal status always wins; historical `approval_required`, missing terminals and integrity mismatches fail closed as explicit incomplete diagnostics. `ToolUse` is never persisted as a Session Entry or Runtime Event. Session Navigation uses the same canonical call/result identity to expose one semantic ToolUse row whose terminal navigation target is the `tool_result` Entry.
+
+## Agent Activity Projection
+
+The CLI-owned, presentation-ready view over the current Harness `AgentRun -> AgentTurn -> AgentStep` lifecycle. It exposes Run/Turn/Step status, Turn cause, Model/Tool Step identity, active Step and bounded timing/progress information without exposing Provider prompts, Provider payloads, Tool input/output or raw Harness traversal to React. Existing ephemeral `step_update` events are retained process-locally for the current Run only; UI elapsed time uses a process-local clock. Agent Activity creates no Session Entry, Runtime Event or persistence schema.
 
 ## Durable Message Normalization
 

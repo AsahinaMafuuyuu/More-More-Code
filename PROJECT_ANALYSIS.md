@@ -119,7 +119,7 @@ CLI 内部使用 AI SDK `UIMessage` 表示用户输入、模型输出和 Tool Ca
 - `reasoning`：推理文本；
 - `tool-call`：工具名称、参数、调用 ID 和可选结果。
 
-CLI 会消费并展示文本、reasoning 与 Tool 相关的归一化分段；对应的 Tool call/result 语义作为独立 canonical facts 进入本地 Session Entry Tree。Tool terminal output 不再通过 normal `message_update` 写回 assistant Entry，而由 Message Projection 从 `tool_result` 推导；Navigation Projection 则把 call/result 显示为一个 derived ToolUse。
+CLI 会消费并展示文本、reasoning 与 Tool 相关的归一化分段；对应的 Tool call/result 语义作为独立 canonical facts 进入本地 Session Entry Tree。Tool terminal output 不再通过 normal `message_update` 写回 assistant Entry，而由 Message Projection 从 `tool_result` 推导；Navigation Projection 则把 call/result 显示为一个 derived ToolUse。当前会话 transcript 中的 ToolUse 也不再直接解释 AI SDK part：CLI 会把 live Tool part、canonical call/result、当前 Agent Activity Tool Step 和 process-local Approval 汇总为纯 ToolUse projection，且 canonical terminal 永远优先。
 
 ### 4.4 流式事件与兼容协议
 
@@ -146,6 +146,8 @@ CLI 使用 OpenTUI + React 渲染，包含：
 - 用户消息、助手消息、错误消息的差异化展示；
 - 自动滚动的消息区域；
 - 流式回答加载状态；
+- Conversation 与 Input 之间的 Agent Activity 区域，直接展示当前 Run/Turn/Model Step/Tool Step 状态、Turn cause、耗时和可用 progress；
+- 可展开的语义 ToolUse，明确区分 requested/running/completed/failed/cancelled/timed-out/denied/approval-waiting/incomplete，并对历史缺失 terminal 状态 fail-closed；
 - Build/Plan、模型名称和耗时状态展示；
 - Enter 提交、Shift+Enter 换行；
 - Ctrl+C 优先清空当前输入；
