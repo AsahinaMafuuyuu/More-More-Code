@@ -1,7 +1,8 @@
 # UI Runtime Workbench Roadmap
 
 **Status:** Active — UI Slice 1 / P0 Runtime Activity Foundation delivered on
-2026-08-27; Inspector and later slices remain planned.
+2026-08-27. UI Slice 1.5 / UI Architecture Foundation is now the required next
+stage; Inspector and later slices are blocked until Slice 1.5 is delivered.
 
 **Target:** Local CLI / OpenTUI presentation layer after the Stage 6.5 local
 Session, Runtime, Provider, Context, Usage and Cost foundations.
@@ -64,6 +65,16 @@ Already implemented and intentionally reused:
 The UI therefore has real authority integration, but it still presents most
 runtime behavior as a linear stream of message parts rather than a structured
 agent execution model.
+
+The delivered P0 work also exposed a deeper presentation-architecture gap. The
+current UI still concentrates application coordination, React state and
+interaction semantics inside large modules such as `useChat`, `Session.tsx`
+and `InputBar`. A one-second Activity elapsed clock briefly attached to the
+Session-root hook was enough to cause broad periodic OpenTUI reconciliation;
+the immediate issue was fixed by localizing the timer, but the root ownership
+model remains too broad for the planned Inspector expansion.
+
+ADR-0028 therefore inserts UI Slice 1.5 before Inspector implementation.
 
 ## 3. Hard UI Architecture Rules
 
@@ -244,6 +255,11 @@ After Activity and ToolUse exist, normalize the main screen hierarchy:
 Avoid adding Context/Usage/Security detail directly into the main transcript.
 
 ## 5. Priority P1 — Unified Session Inspector
+
+P1 is intentionally blocked until **UI Slice 1.5 — UI Architecture
+Foundation** is delivered. Inspector must be built on selector-based UI
+subscriptions and explicit controller/projection boundaries rather than being
+added directly to the current root hook/component ownership model.
 
 P1 exposes already-existing deep runtime capabilities without overcrowding the
 main Session screen.
@@ -437,6 +453,35 @@ Scope:
 
 This slice is the prerequisite for all other UI work.
 
+### UI Slice 1.5 — UI Architecture Foundation (required next stage)
+
+Scope:
+
+- non-React Session Application Controller;
+- disposable per-Session UI Store;
+- selector-based React subscription adapters;
+- Conversation/Activity/Status/Composer surface-specific projections;
+- render-isolation contracts for high-frequency state;
+- Composer/InputBar decomposition;
+- typed CommandIntent and application command routing;
+- semantic Interaction Router over the existing keyboard-layer primitive;
+- explicit SessionWorkspace composition;
+- removal of superseded `useChat`/InputBar/Session god-component paths.
+
+Primary documents:
+
+```text
+docs/decisions/0028-ui-application-architecture-and-render-isolation.md
+docs/UI-ARCHITECTURE-FOUNDATION-DESIGN.md
+docs/UI-ARCHITECTURE-FOUNDATION-PLAN.md
+docs/UI-ARCHITECTURE-FOUNDATION-TEST.md
+docs/UI-ARCHITECTURE-FOUNDATION-DELIVERY.md
+```
+
+This slice is primarily architecture refactoring, not visible feature growth.
+It must preserve current Harness/Session/Runtime semantics and must not create
+a second UI-owned semantic authority.
+
 ### UI Slice 2 — Inspector Foundation + Context/Usage/Tree (P1-A)
 
 Scope:
@@ -448,7 +493,7 @@ Scope:
 - entry commands/keyboard navigation.
 
 These areas are grouped because their data seams already exist and are mostly
-read-only projections.
+read-only projections. **Dependency: UI Slice 1.5 must be fully delivered.**
 
 ### UI Slice 3 — Runtime Recovery + Security Audit (P1-B)
 
@@ -496,6 +541,14 @@ The detailed DESIGN must specify:
 - loading/running/completed/error/interrupted/unknown states;
 - compatibility behavior;
 - explicit out-of-scope bottom-layer changes.
+
+For architecture/refactor slices, DESIGN must additionally specify:
+
+- application-controller boundaries;
+- UI store ownership/lifetime;
+- selector/subscription behavior;
+- update-frequency/render-isolation rules;
+- migration sequencing and legacy-path removal criteria.
 
 The TEST contract must include:
 

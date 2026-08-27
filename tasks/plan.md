@@ -2411,12 +2411,20 @@ Delivered.
 # Stage 6.5 UI Track — Agent Runtime Workbench
 
 **Status:** In progress — UI Slice 1 / P0 Runtime Activity Foundation delivered
-on 2026-08-27. UI Slice 2 and later roadmap work remains planned.
+on 2026-08-27. UI Slice 1.5 / UI Architecture Foundation is the required next
+stage. UI Slice 2 Inspector work is blocked until the architecture foundation
+is delivered.
 
 **Roadmap:** `docs/UI-RUNTIME-WORKBENCH-ROADMAP.md`
 
 **P0 design/test/delivery:** `docs/UI-RUNTIME-ACTIVITY-DESIGN.md`,
 `docs/UI-RUNTIME-ACTIVITY-TEST.md`, `docs/UI-RUNTIME-ACTIVITY-DELIVERY.md`.
+
+**UI Architecture Foundation:**
+`docs/UI-ARCHITECTURE-FOUNDATION-DESIGN.md`,
+`docs/UI-ARCHITECTURE-FOUNDATION-PLAN.md`,
+`docs/UI-ARCHITECTURE-FOUNDATION-TEST.md`,
+`docs/UI-ARCHITECTURE-FOUNDATION-DELIVERY.md`, ADR-0028.
 
 ## Overview
 
@@ -2504,6 +2512,159 @@ expandable semantic ToolUse component driven by existing Tool projection/state.
 
 **Dependencies:** UI-2, UI-3.
 
+## Priority P0.5 — UI Architecture Foundation
+
+**Status:** Planned — mandatory next implementation slice before P1 Inspector.
+
+**Architecture decision:**
+`docs/decisions/0028-ui-application-architecture-and-render-isolation.md`.
+
+This stage restructures the CLI UI application architecture. It is not a
+bottom-layer redesign and it must not implement Inspector content early. The
+implementation order is A1 -> A7 and follows
+`docs/UI-ARCHITECTURE-FOUNDATION-PLAN.md`.
+
+### Task UI-A1: Introduce per-Session UI Store and selector contracts
+
+**Description:** Create a disposable external UI store for one mounted Session
+workspace and selector-based React adapters so UI surfaces subscribe to the
+smallest state they consume.
+
+**Acceptance criteria:**
+- [ ] Store is process-local/disposable and is not Session/Runtime authority.
+- [ ] Store supports immutable snapshots, subscribe/unsubscribe and destroy.
+- [ ] Conversation/Activity/Status/Composer/Approval/Recovery/Inspector-shell
+  selectors are defined.
+- [ ] Changing one slice does not notify unrelated selected slices.
+- [ ] Two Session UI stores can coexist without state leakage.
+- [ ] React receives a stable store instance rather than one changing giant
+  context state value.
+- [ ] No third-party state framework is added without separate approval.
+
+**Verification:** Red selector/lifecycle tests before implementation.
+
+### Task UI-A2: Extract non-React Session Application Controller
+
+**Description:** Move application coordination out of `useChat` into a
+non-visual SessionController while preserving existing authority and
+durable-first ordering.
+
+**Acceptance criteria:**
+- [ ] submit / steer / follow-up / interrupt route through controller methods.
+- [ ] compact, mode/model transitions, Session navigation and approval
+  resolution route through explicit controller methods.
+- [ ] controller is not a React hook and does not render UI.
+- [ ] controller does not own a duplicate Session Tree or AgentRun state
+  machine.
+- [ ] Provider/Tool side effects still occur exactly once.
+- [ ] current durable-first ordering remains unchanged.
+- [ ] attach/dispose reuses current runtime quiescence/cleanup semantics.
+
+**Dependencies:** UI-A1.
+
+### Task UI-A3: Migrate projections into independently subscribed UI slices
+
+**Description:** Connect current runtime/controller state to surface-specific
+UI projections and migrate React consumers from Session-root prop fanout to
+selector subscriptions.
+
+**Acceptance criteria:**
+- [ ] Activity updates only the Activity subscription path except for runtime
+  facts genuinely shared with Composer status.
+- [ ] local Activity elapsed timer remains Activity-local.
+- [ ] Context/Usage/Cost/Cache telemetry updates Status without rebuilding the
+  Conversation tree.
+- [ ] Composer receives a narrow runtime presentation model, not raw AgentRun.
+- [ ] Conversation/ToolUse projection remains semantically compatible with
+  ADR-0026 and P0 ToolUse behavior.
+- [ ] Approval/Recovery presentation receives narrow UI views.
+- [ ] executable render/subscription counters prove unrelated surfaces remain
+  unchanged.
+
+**Dependencies:** UI-A2.
+
+### Task UI-A4: Decompose InputBar into Composer capabilities
+
+**Description:** Remove application-shell responsibilities from the current
+InputBar and establish Composer/Editor/Mention/Command/Actions boundaries.
+
+**Acceptance criteria:**
+- [ ] Editor owns text/cursor/submit/newline only.
+- [ ] Mention parsing/search is extracted into pure/testable modules.
+- [ ] Mention menu owns local selection/rendering only.
+- [ ] Command menu resolves typed CommandIntent values instead of directly
+  executing application dependencies.
+- [ ] Composer no longer directly owns renderer shutdown, Session navigation,
+  compact authority or model/mode authority mutation.
+- [ ] StatusLine is a SessionWorkspace surface rather than an editor-owned
+  authority/status component.
+- [ ] Enter, Shift+Enter, Alt/Option+Enter, slash commands and @file behavior
+  remain compatible.
+
+**Dependencies:** UI-A3.
+
+### Task UI-A5: Centralize CommandIntent execution and semantic interaction routing
+
+**Description:** Introduce one application command router and one semantic
+Interaction Router over the existing keyboard-layer primitive.
+
+**Acceptance criteria:**
+- [ ] Slash/menu commands map to typed intents and one execution path.
+- [ ] exit uses the existing safe quiescence/shutdown path.
+- [ ] Escape priority is Dialog > transient overlay > Inspector > Session Run.
+- [ ] Enter/arrow/Tab/follow-up shortcuts respect the active interaction
+  layer and do not leak to lower-priority handlers.
+- [ ] exactly one semantic action occurs for one key event.
+- [ ] command/interaction components do not acquire RuntimeSession/AgentLoop
+  authority references merely to route input.
+
+**Dependencies:** UI-A4.
+
+### Task UI-A6: Replace generic SessionShell ownership with SessionWorkspace surfaces
+
+**Description:** Compose explicit ConversationPane / ActivityDock / Composer /
+StatusLine / InteractionHints surfaces and establish the Inspector surface slot
+without implementing P1 Inspector content.
+
+**Acceptance criteria:**
+- [ ] Conversation is the only primary flex-growing transcript surface.
+- [ ] Activity is bounded current-execution UI, not a second history log.
+- [ ] Composer uses available width instead of retaining the old arbitrary 80%
+  structural width.
+- [ ] StatusLine and hints have explicit ownership.
+- [ ] narrow/medium/wide and height behavior are tested.
+- [ ] sticky scroll/manual-scroll behavior survives unrelated Activity/Status
+  updates.
+- [ ] `Session.tsx` converges toward route/workspace composition only.
+- [ ] Inspector shell slot/state can be added later without expanding a god
+  hook/component.
+
+**Dependencies:** UI-A5.
+
+### Task UI-A7: Remove superseded UI orchestration paths and close architecture foundation
+
+**Description:** Delete legacy normal-path code replaced by the new controller,
+store, Composer and interaction architecture; run the final architecture audit.
+
+**Acceptance criteria:**
+- [ ] `useChat` no longer owns the original monolithic application/UI
+  responsibility set; any remaining adapter is narrow and documented.
+- [ ] InputBar no longer acts as application command/lifecycle owner.
+- [ ] `Session.tsx` no longer interprets ToolUse/Activity/application command
+  semantics directly.
+- [ ] duplicate old/new side-effect paths are removed.
+- [ ] duplicate semantic keyboard handlers are removed.
+- [ ] no global implicit `currentSession` UI store is introduced.
+- [ ] no Session-root presentation timer exists.
+- [ ] full architecture TEST contract passes.
+- [ ] DELIVERY records final owners, render-isolation evidence, manual width
+  checks, limitations and bottom-layer contract audit.
+
+**Dependencies:** UI-A6.
+
+**Stage gate:** UI-5 / Inspector implementation must not begin until UI-A7 is
+complete and `docs/UI-ARCHITECTURE-FOUNDATION-DELIVERY.md` is marked Delivered.
+
 ## Priority P1-A — Inspector Foundation, Context, Usage and Tree
 
 ### Task UI-5: Design and implement one Session Inspector shell
@@ -2519,7 +2680,7 @@ independent diagnostics dialog per subsystem.
 - [ ] Existing `/tree` can route into the Inspector Tree section without
   changing Session navigation semantics.
 
-**Dependencies:** P0 complete.
+**Dependencies:** P0 complete **and UI-A1 through UI-A7 delivered**.
 
 ### Task UI-6: Add Context Inspector
 

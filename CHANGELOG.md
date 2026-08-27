@@ -6,6 +6,7 @@ All notable changes to MORE MORE CODE are recorded here.
 
 ### Added
 
+- ADR-0028 plus the UI Architecture Foundation DESIGN/PLAN/TEST/DELIVERY contracts, inserting a mandatory controller/store/render-isolation refactor between Runtime Activity P0 and the planned Unified Session Inspector.
 - CLI-owned `AgentActivityProjection` and responsive `ActivityView`, exposing current Run/Turn/Model Step/Tool Step lifecycle, Turn cause, active Step, duration and bounded process-local progress between Conversation and Input.
 - Semantic expandable ToolUse projection/presentation with canonical `tool_result` precedence and explicit requested/running/completed/failed/cancelled/timed-out/denied/approval-waiting/incomplete states; historical missing terminals remain fail-closed and are never auto-replayed.
 - Durable `usage/model.usage` Runtime Events with Step-idempotent Session Usage projection, snapshot/restart recovery, strict unknown-vs-zero cache semantics, and no new Session Entry or SQLite schema migration.

@@ -153,6 +153,8 @@ CLI 使用 OpenTUI + React 渲染，包含：
 - Ctrl+C 优先清空当前输入；
 - Toast、Dialog、键盘层级和主题 Provider。
 
+当前 UI 功能已经能够消费本地 Runtime/Session authority，但应用层架构仍处于整改阶段：`useChat` 同时承担较多 Session/Runtime 协调与 UI projection 生命周期，`Session.tsx` 仍混合 route、approval/recovery presentation 与交互 dispatch，`InputBar` 仍集中 Editor、mention、command、keyboard、mode/model、compact、navigation、shutdown 与 StatusBar 等职责。P0 Runtime Activity 曾暴露 Session-root 高频刷新会扩大 OpenTUI native reconciliation 的问题，直接 timer 已下沉修复，但职责集中问题本身仍存在。ADR-0028 已将 **UI Architecture Foundation** 设为 Inspector 之前的强制下一阶段：通过非 React `SessionController`、per-Session disposable UI Store、selector subscription、Composer decomposition、CommandIntent/Interaction Router 与显式 SessionWorkspace surfaces 整改 UI state architecture；该规划阶段不改变 Harness/Runtime/Session authority。
+
 路由目前全部存在于内存中：
 
 - `/`：首页；
