@@ -1626,7 +1626,7 @@ Provider domain model
 
 # Stage 6.5 — Local Session Authority & Railway Retirement
 
-**Status:** Delivered — 2026-08-26. Final integrated review and full repository verification are complete with no residual P0/P1 finding. Explicit legacy import remains a non-blocking follow-up; depends on completed Stage 6.4.
+**Status:** Delivered — 2026-08-26. Final integrated review and full repository verification completed at delivery time. A subsequently discovered AI SDK runtime-message JSON compatibility defect is now tracked as the documented Stage 6.5 Durable Message Normalization follow-up below; explicit legacy import remains a separate non-blocking follow-up. Depends on completed Stage 6.4.
 
 ## Overview
 
@@ -1730,6 +1730,101 @@ The Local Session Store is separate from the Local Runtime Store even when both 
 - Cloud Runtime Event synchronization.
 - Team/collaborative live editing.
 - Codex/ChatGPT OAuth through undocumented cached-token reuse or an external-Agent substitution.
+
+---
+
+# Stage 6.5 Follow-up — Durable Message Normalization Boundary
+
+**Status:** Design approved — 2026-08-26. Documentation complete; implementation intentionally not started.
+
+## Overview
+
+Add one CLI-owned semantic adapter that converts Vercel AI SDK runtime `Message` values into canonical JSON-safe durable Session messages before Harness constructs Session Entries. This addresses the production failure `Session Tree state.entries[...].message.parts[...].providerMetadata must be JSON-safe` without weakening `LocalSessionStore` validation or deleting valid Provider metadata.
+
+The accepted design is defined by ADR-0025 and `docs/DURABLE-MESSAGE-NORMALIZATION-DESIGN.md`. Verification is defined by `docs/DURABLE-MESSAGE-NORMALIZATION-TEST.md`, and delivery boundaries are defined by `docs/DURABLE-MESSAGE-NORMALIZATION-DELIVERY.md`.
+
+## Phase 1: Contract and Red Reproduction
+
+### Task 1: Add durable-message normalization contract tests
+
+**Acceptance criteria:**
+- [ ] A focused adapter seam specifies object `undefined` omission and array/sparse `undefined` -> `null` semantics.
+- [ ] Valid JSON-safe Provider metadata and `__proto__` data are preserved without input mutation.
+- [ ] Non-finite numbers, bigint, function, symbol, cycles, symbol properties, and non-plain objects are not silently coerced.
+
+**Verification:** focused `durable-session-message` tests.
+
+**Dependencies:** ADR-0025/design approval complete.
+
+### Task 2: Reproduce the real persistence failure before implementation
+
+**Acceptance criteria:**
+- [ ] A real local semantic commit containing an assistant part with `providerMetadata: undefined` fails red on the current implementation.
+- [ ] The failure reaches the strict Session persistence boundary rather than a synthetic private helper.
+- [ ] The fixture models the AI SDK runtime shape without requiring a real external Provider credential.
+
+**Verification:** focused CLI local-session integration test demonstrates the pre-fix failure.
+
+**Dependencies:** Task 1 seam definition; test may be authored as the first vertical TDD slice.
+
+## Phase 2: Single Normalization Seam
+
+### Task 3: Implement the CLI durable-message adapter and normal sync integration
+
+**Acceptance criteria:**
+- [ ] One Session-specific adapter owns normalization semantics; no generic stringify/parse sanitizer is introduced.
+- [ ] Normal `syncMessagesToTree` paths normalize before `appendSessionTreeMessages`.
+- [ ] Runtime/UI messages are not mutated.
+
+**Verification:** Tasks 1-2 turn green through the public persistence seam.
+
+**Dependencies:** Tasks 1-2.
+
+### Task 4: Route compaction and Tool-terminal message persistence through the same policy
+
+**Acceptance criteria:**
+- [ ] Compaction history pre-sync uses the same durable-message adapter.
+- [ ] Existing Tool-terminal private `undefined` policy is consolidated rather than duplicated.
+- [ ] Tool terminal remains commit-before-expose and compaction remains one semantic authority transition.
+
+**Verification:** focused Tool durability and compaction regression tests.
+
+**Dependencies:** Task 3.
+
+## Phase 3: Idempotency, Restart, and Delivery
+
+### Task 5: Verify semantic idempotency and restart round-trip
+
+**Acceptance criteria:**
+- [ ] Re-syncing a runtime message that differs only by explicit optional `undefined` does not append redundant `message_update` Entries.
+- [ ] Valid Provider metadata survives commit/restart; omitted optional fields remain absent.
+- [ ] Restart/continue remains local-only with no Server/API_URL dependency.
+
+**Verification:** focused local Session restart/continue integration tests.
+
+**Dependencies:** Tasks 3-4.
+
+### Task 6: Complete full verification and update delivered-state documentation
+
+**Acceptance criteria:**
+- [ ] CLI, Session Store, and Harness suites pass.
+- [ ] CLI/Session Store TypeScript checks and CLI build pass.
+- [ ] `git diff --check` passes and unrelated worktree changes are not included.
+- [ ] ADR/design/test/delivery/current-state docs are changed from planned to delivered only after evidence exists.
+
+**Verification:** full matrix in `docs/DURABLE-MESSAGE-NORMALIZATION-TEST.md`.
+
+**Dependencies:** Tasks 1-5.
+
+## Deferred / Out of Scope
+
+- weakening Store JSON validation;
+- dropping all Provider metadata;
+- Provider endpoint/runtime behavior changes;
+- Session/Runtime Store schema changes;
+- Stage 6.6 cloud sync/account work;
+- legacy Session import;
+- Windows sandbox work.
 
 ---
 
