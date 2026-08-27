@@ -23,6 +23,9 @@ type Props = {
     onCompact?: () => Promise<ManualContextCompactionOutcome>;
     observability?: SessionObservability;
     activity?: AgentActivityView | null;
+    activitySlot?: ReactNode;
+    composerSlot?: ReactNode;
+    footerSlot?: ReactNode;
 };
 
 export function SessionShell({ children,
@@ -37,6 +40,9 @@ export function SessionShell({ children,
     onCompact,
     observability,
     activity,
+    activitySlot,
+    composerSlot,
+    footerSlot,
 }
     : Props) {
     const { mode } = usePromptConfig()
@@ -59,22 +65,24 @@ export function SessionShell({ children,
                 <box>{children}</box>
             </scrollbox>
 
-            <ActivityView activity={activity} />
+            {activitySlot ?? <ActivityView activity={activity} />}
 
-            <box flexShrink={0}>
-                <InputBar
-                    onSubmit={onSubmit}
-                    onFollowUp={onFollowUp}
-                    disabled={inputDisabled}
-                    sessionTree={sessionTree}
-                    onModeChange={onModeChange}
-                    onModelChange={onModelChange}
-                    onCompact={onCompact}
-                    observability={observability}
-                />
-            </box>
+            {composerSlot ?? (
+                <box flexShrink={0}>
+                    <InputBar
+                        onSubmit={onSubmit}
+                        onFollowUp={onFollowUp}
+                        disabled={inputDisabled}
+                        sessionTree={sessionTree}
+                        onModeChange={onModeChange}
+                        onModelChange={onModelChange}
+                        onCompact={onCompact}
+                        observability={observability}
+                    />
+                </box>
+            )}
 
-            <box
+            {footerSlot ?? <box
                 flexShrink={0}
                 flexDirection="row"
                 justifyContent="space-between"
@@ -100,7 +108,7 @@ export function SessionShell({ children,
                     <text>tab</text>
                     <text attributes={TextAttributes.DIM}>agents</text>
                 </box>
-            </box>
+            </box>}
         </box>
     );
 }

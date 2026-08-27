@@ -4,7 +4,7 @@ import { isAbsolute, resolve, relative } from "node:path";
 import { TextAttributes } from "@opentui/core";
 
 import { type KeyBinding } from "@opentui/core";
-import { useRef, useState, useCallback, useEffect, type RefObject } from "react";
+import { useRef, useState, useCallback, useEffect, type ReactNode, type RefObject } from "react";
 import type { TextareaRenderable, ScrollBoxRenderable } from "@opentui/core";
 import { useNavigate } from "react-router";
 import { useKeyboard, useRenderer } from "@opentui/react";
@@ -346,6 +346,7 @@ interface Props {
     onModelChange?: (model: ModelRef) => void | Promise<void>,
     onCompact?: () => Promise<ManualContextCompactionOutcome>,
     observability?: SessionObservability,
+    statusContent?: ReactNode,
 }
 
 /**
@@ -392,6 +393,7 @@ export default function InputBar({
     onModelChange,
     onCompact,
     observability,
+    statusContent,
 }: Props) {
     const { mode, model, setMode, setModel } = usePromptConfig();
     const textareaRef = useRef<TextareaRenderable>(null);
@@ -794,7 +796,7 @@ export default function InputBar({
                         keyBindings={TEXTAREA_KEY_BINDING}
                     >
                     </textarea>
-                    <StatusBar observability={observability} />
+                    {statusContent ?? <StatusBar observability={observability} />}
                 </box>
             </box>
         </box>
