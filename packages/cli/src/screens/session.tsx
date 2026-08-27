@@ -23,6 +23,7 @@ import { ConversationSurface } from "../ui/session/surfaces/conversation-surface
 import { ActivitySurface } from "../ui/session/surfaces/activity-surface";
 import { ComposerSurface } from "../ui/session/surfaces/composer-surface";
 import { InteractionHintsSurface } from "../ui/session/surfaces/interaction-hints-surface";
+import { StatusSurface } from "../ui/session/surfaces/status-surface";
 import { ApprovalPresentation } from "../ui/session/presentation/approval-presentation";
 import { RecoveryPresentation } from "../ui/session/presentation/recovery-presentation";
 
@@ -105,7 +106,12 @@ function SessionChat({
         onSubmit={() => {}}
         activitySlot={<ActivitySurface />}
         composerSlot={<ComposerSurface controller={controller} />}
-        footerSlot={<InteractionHintsSurface />}
+        footerSlot={(
+          <>
+            <StatusSurface />
+            <InteractionHintsSurface />
+          </>
+        )}
       >
         <ConversationSurface />
       </SessionShell>

@@ -9,6 +9,7 @@ import type { ManualContextCompactionOutcome } from "../lib/local-model-transpor
 import type { SessionObservability } from "../lib/session-observability";
 import type { AgentActivityView } from "../lib/agent-activity-projection";
 import { ActivityView } from "./activity-view";
+import StatusBar from "./status-bar";
 
 type Props = {
     children?: ReactNode;
@@ -17,12 +18,8 @@ type Props = {
     inputDisabled?: boolean;
     loading?: boolean;
     interruptible?: boolean;
-    sessionTree?: SessionTreeCommandApi;
-    onModeChange?: (mode: ModeType) => void | Promise<void>;
-    onModelChange?: (model: ModelRef) => void | Promise<void>;
-    onCompact?: () => Promise<ManualContextCompactionOutcome>;
-    observability?: SessionObservability;
     activity?: AgentActivityView | null;
+    observability?: SessionObservability;
     activitySlot?: ReactNode;
     composerSlot?: ReactNode;
     footerSlot?: ReactNode;
@@ -34,12 +31,8 @@ export function SessionShell({ children,
     inputDisabled = false,
     loading = false,
     interruptible = false, // 允许中断
-    sessionTree,
-    onModeChange,
-    onModelChange,
-    onCompact,
-    observability,
     activity,
+    observability,
     activitySlot,
     composerSlot,
     footerSlot,
@@ -68,17 +61,14 @@ export function SessionShell({ children,
             {activitySlot ?? <ActivityView activity={activity} />}
 
             {composerSlot ?? (
-                <box flexShrink={0}>
+                <box flexShrink={0} flexDirection="column" gap={1}>
                     <InputBar
                         onSubmit={onSubmit}
                         onFollowUp={onFollowUp}
                         disabled={inputDisabled}
-                        sessionTree={sessionTree}
-                        onModeChange={onModeChange}
-                        onModelChange={onModelChange}
-                        onCompact={onCompact}
-                        observability={observability}
+                        mode={mode}
                     />
+                    <StatusBar observability={observability} />
                 </box>
             )}
 

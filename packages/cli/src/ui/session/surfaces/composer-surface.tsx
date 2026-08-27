@@ -1,5 +1,6 @@
 import { useMemo } from "react";
-import InputBar from "../../../components/input-bar";
+import { useRenderer } from "@opentui/react";
+import { useNavigate } from "react-router";
 import type { SessionTreeCommandApi } from "../../../components/command-menu/types";
 import type { SessionController } from "../../../app/session/session-controller";
 import { projectSessionNavigationTree } from "../../../lib/session-navigation-projection";
@@ -7,14 +8,21 @@ import { projectDurableSessionMessages } from "../../../lib/durable-session-mess
 import { normalizeModelRef } from "../../../lib/models";
 import { usePromptConfig } from "../../../providers/prompt-config";
 import { useToast } from "../../../providers/toast";
+import { useDialog } from "../../../providers/dialog";
 import { useSessionUiSelector } from "../store/react-session-ui";
 import { selectComposerRuntime } from "../store/session-ui-selectors";
-import { StatusSurface } from "./status-surface";
+import { Composer } from "../composer/composer";
+import { executeLegacyComposerIntent } from "../composer/legacy-command-adapter";
+import { commitPromptModelChange, commitPromptModeChange } from "../composer/composer-actions";
+import { shutdownCliEnvironment } from "../../../lib/cli-environment";
 
 export function ComposerSurface({ controller }: { controller: SessionController }) {
   const runtime = useSessionUiSelector(selectComposerRuntime);
   const { mode, model, setMode, setModel } = usePromptConfig();
   const toast = useToast();
+  const dialog = useDialog();
+  const navigate = useNavigate();
+  const renderer = useRenderer();
 
   const sessionTree = useMemo<SessionTreeCommandApi>(() => ({
     get rootEntryId() {
@@ -107,17 +115,47 @@ export function ComposerSurface({ controller }: { controller: SessionController 
     void operation.catch(reportError);
   };
 
+  const changeMode = (nextMode: typeof mode) => {
+    void commitPromptModeChange({
+      mode: nextMode,
+      onModeChange: (value) => controller.changeMode(value, model),
+      setMode,
+    }).catch(reportError);
+  };
+
+  const changeModel = (nextModel: typeof model) => commitPromptModelChange({
+    model: nextModel,
+    onModelChange: (value) => controller.changeModel(value, mode),
+    setModel,
+  });
+
   return (
     <box flexShrink={0}>
-      <InputBar
+      <Composer
         onSubmit={submit}
         onFollowUp={followUp}
         disabled={runtime.disabled}
-        sessionTree={sessionTree}
-        onModeChange={(nextMode) => controller.changeMode(nextMode, model)}
-        onModelChange={(nextModel) => controller.changeModel(nextModel, mode)}
-        onCompact={() => controller.compact({ mode, model })}
-        statusContent={<StatusSurface />}
+        mode={mode}
+        onIntent={(intent) => executeLegacyComposerIntent(intent, {
+          exit: () => {
+            void shutdownCliEnvironment().then(
+              () => renderer.destroy(),
+              (error) => toast.show({
+                variant: "error",
+                message: `Exit cancelled safely: ${error instanceof Error ? error.message : String(error)}`,
+              }),
+            );
+          },
+          toast,
+          dialog,
+          navigate,
+          mode,
+          model,
+          setMode: changeMode,
+          setModel: changeModel,
+          sessionTree,
+          compact: () => controller.compact({ mode, model }),
+        })}
       />
     </box>
   );
