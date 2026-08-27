@@ -1,6 +1,6 @@
 # Durable Message Normalization Delivery Contract
 
-**Delivery state:** Design approved; implementation pending.
+**Delivery state:** Delivered — 2026-08-26.
 
 **Target:** Stage 6.5 local Session authority follow-up, not a new cloud/sync stage.
 
@@ -29,31 +29,31 @@ Canonical policy:
 - unsupported JavaScript values -> fail closed;
 - no generic JSON stringify/parse coercion.
 
-## 3. Required Deliverables for the Future Implementation
+## 3. Delivered Artifacts
 
 ### D1 — Durable Message Adapter
 
-A CLI-owned Session semantic adapter that exposes a small message-specific normalization interface and contains one authoritative normalization policy.
+Delivered in `packages/cli/src/lib/durable-session-message.ts`, including the message-specific normalizers and the single normalized Session Tree append boundary.
 
 ### D2 — Normal Message Persistence Integration
 
-All normal AI SDK message synchronization entering `appendSessionTreeMessages` is normalized first.
+Delivered. Normal AI SDK message synchronization crosses `appendDurableSessionMessages` before Harness Session Tree construction.
 
 ### D3 — Compaction Integration
 
-The pre-compaction history synchronization path uses the same normalization boundary.
+Delivered. The pre-compaction history synchronization path uses the same adapter in the same semantic authority transition.
 
 ### D4 — Tool Terminal Consolidation
 
-Existing Tool-terminal `undefined` cleanup is consolidated into the shared durable-message policy without changing durable-first Tool ordering.
+Delivered. The private Tool-terminal `omitUndefined` implementation was removed and Tool message/data normalization now reuses the shared Session policy without changing commit-before-expose ordering.
 
 ### D5 — Regression and Contract Tests
 
-Tests defined in `docs/DURABLE-MESSAGE-NORMALIZATION-TEST.md`, including a red reproduction of the real persistence failure before the implementation change.
+Delivered, including the required real Red reproduction before the production change and full contract/integration/restart regressions.
 
 ### D6 — Documentation and Decision Record
 
-ADR-0025 and current-state/task documentation updated to reflect the implemented state only after verification succeeds.
+Delivered after the full verification matrix passed.
 
 ## 4. Explicit Non-Deliverables
 
@@ -120,19 +120,19 @@ No database migration is expected. Therefore rollback should consist of revertin
 
 Any Session message written by the accepted design remains ordinary JSON-safe Session data and should remain readable by the pre-fix Store. This is an important compatibility property and must be retained during implementation.
 
-## 9. Handoff to the Implementation Agent
+## 9. Implementation Record
 
-Before writing code, the next agent must read in this order:
+The implementation followed the prescribed reading order and TDD gate. Before production code changed, the real Local Session persistence path reproduced the exact `providerMetadata: undefined` JSON-safety failure. Production changes then stayed inside the CLI semantic adapter/integration layer; neither Harness nor Session Store persistence semantics were relaxed.
 
-1. `.more-more-code/AGENTS.md`;
-2. ADR-0024 and ADR-0025;
-3. `docs/DURABLE-MESSAGE-NORMALIZATION-DESIGN.md`;
-4. `docs/DURABLE-MESSAGE-NORMALIZATION-TEST.md`;
-5. this delivery contract;
-6. the Stage 6.5 follow-up section in `tasks/plan.md` and `tasks/todo.md`.
+The pre-existing unrelated working-tree modification to root `AGENTS.md` was preserved and is not part of this delivery.
 
-Then reproduce the failure with the first red integration test before changing production code.
+## 10. Final Delivery Evidence
 
-## 10. Current Documentation-Only Delivery
-
-This planning delivery intentionally changes documentation only. It does not implement the normalizer, modify message persistence code, alter the Session Store validator, or add passing/failing production regression tests.
+- Focused normalization/Session/Tool regressions: `19 pass, 0 fail` across the critical files.
+- Full CLI suite: `153 pass, 0 fail` on final run.
+- Local Session Store suite: `11 pass, 0 fail`.
+- Harness suite: `99 pass, 0 fail`.
+- CLI and Session Store TypeScript checks: pass.
+- CLI build: pass.
+- `git diff --check`: pass.
+- No database migration, Provider API behavior change, Runtime Store change, cloud sync work, or unrelated UI work was introduced.

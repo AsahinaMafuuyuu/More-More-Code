@@ -1,12 +1,15 @@
 import {
     appendSessionEntry,
-    appendSessionTreeMessages,
     projectSessionRuntimeState,
     type SessionTreeState,
 } from "@more-more-code/harness";
 import type { ModelRef, ModeType } from "@more-more-code/shared";
 import { createAgentUserMessage } from "./agent-chat-message";
 import type { Message } from "./chat-types";
+import {
+    appendDurableSessionMessages,
+    normalizeDurableMessage,
+} from "./durable-session-message";
 import type { LocalSessionAuthority } from "./local-session-authority";
 
 export type DurableSessionTurnSelection = {
@@ -47,12 +50,12 @@ export function buildDurableSessionTurnState(input: Omit<
     if (!text) throw new Error("Cannot submit an empty user message");
 
     const inputMessageId = input.inputMessageId ?? crypto.randomUUID();
-    const message = createAgentUserMessage({
+    const message = normalizeDurableMessage(createAgentUserMessage({
         id: inputMessageId,
         text,
         mode: input.selection.mode,
         model: input.selection.model,
-    });
+    }));
     const runtime = projectSessionRuntimeState(input.state);
     let state = input.state;
 
@@ -74,7 +77,7 @@ export function buildDurableSessionTurnState(input: Omit<
     }
 
     return {
-        state: appendSessionTreeMessages(state, [message]),
+        state: appendDurableSessionMessages(state, [message]),
         message,
         inputMessageId,
     };

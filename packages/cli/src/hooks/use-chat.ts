@@ -14,7 +14,6 @@ import {
     RUNTIME_EVENT_SCHEMA_VERSION,
     RUNTIME_SECURITY_EVENT_SCHEMA_VERSION,
     appendSessionEntry,
-    appendSessionTreeMessages,
     getParentSessionEntry,
     getSessionEntry,
     jumpToSessionEntry,
@@ -61,6 +60,7 @@ import {
     persistThenExposeToolTerminal,
     type PersistThenExposeToolTerminalInput,
 } from "../lib/durable-tool-terminal";
+import { appendDurableSessionMessages } from "../lib/durable-session-message";
 import { getCliRunLifecycle } from "../lib/run-lifecycle";
 
 export type { Message } from "../lib/chat-types";
@@ -576,7 +576,7 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
     }, [transitionTree]);
 
     const syncMessagesToTree = useCallback(async (metadata: SessionEntryMetadata = {}) => {
-        await transitionTree((state) => appendSessionTreeMessages(
+        await transitionTree((state) => appendDurableSessionMessages(
             state,
             latestMessagesRef.current,
             metadata,
@@ -609,7 +609,7 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
             // neither the UI nor the next provider request can observe a
             // checkpoint whose source history was not persisted with it.
             await transitionTree((state) => appendSessionEntry(
-                appendSessionTreeMessages(
+                appendDurableSessionMessages(
                     state,
                     latestMessagesRef.current,
                     metadata,

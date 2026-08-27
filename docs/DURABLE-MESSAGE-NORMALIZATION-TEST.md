@@ -1,6 +1,6 @@
 # Durable Message Normalization Test Plan
 
-**Status:** Planned; no implementation or new automated test has been written yet.
+**Status:** Verified — 2026-08-26. The implementation and regression suite satisfy this plan.
 
 **Design under test:** `docs/DURABLE-MESSAGE-NORMALIZATION-DESIGN.md`
 
@@ -296,4 +296,33 @@ Implementation is not considered delivered until:
 - `git diff --check` passes;
 - no unrelated working-tree changes are included in the implementation commit.
 
-This document defines future verification only; no production or test implementation is performed in the current documentation task.
+This verification plan is now fulfilled by the delivered Stage 6.5 follow-up implementation and its regression suite.
+
+## 9. Verification Evidence
+
+The required Red phase was reproduced before production implementation. A real local semantic commit containing an assistant text part with enumerable `providerMetadata: undefined` reached the strict Local Session Store and failed with:
+
+```text
+Session Tree state.entries[1].message.parts[0].providerMetadata must be JSON-safe
+```
+
+Delivered automated coverage includes:
+
+- `packages/cli/tests/durable-session-message.test.ts` — normalization contract, sparse arrays, Provider metadata, `__proto__`, strict negative values, no mutation, idempotent re-sync, and compaction pre-sync;
+- `packages/cli/tests/durable-session-message-persistence.test.ts` — real SQLite commit/restart round-trip with both explicit runtime `undefined` and valid Provider metadata, with zero Server fetches;
+- `packages/cli/tests/local-session-tool-durability.test.ts` — shared Tool-terminal policy, array-position preservation, fail-closed non-plain output, and commit-before-expose ordering;
+- existing Local Session durable-turn, authority, compaction, Provider, and runtime suites remain green.
+
+Final verification evidence:
+
+```text
+bun test packages/cli/tests                         -> 153 pass, 0 fail
+bun run --cwd packages/session-store test          -> 11 pass, 0 fail
+bun run --filter @more-more-code/harness test      -> 99 pass, 0 fail
+bunx tsc --noEmit -p packages/cli/tsconfig.json    -> pass
+bunx tsc --noEmit -p packages/session-store/tsconfig.json -> pass
+bun run build:cli                                  -> pass
+git diff --check                                   -> pass
+```
+
+One first full-CLI attempt encountered the existing Windows/libsql temporary-directory `EBUSY` cleanup race after all business assertions had passed. The affected authority file then passed independently, and the subsequent complete CLI run passed `153/153`; no test-infrastructure behavior was changed for this delivery.

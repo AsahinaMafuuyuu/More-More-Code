@@ -300,7 +300,7 @@ Stage 6.4 已完成多模型抽象迁移。shared 中的固定模型目录现在
 9. **本地 Stage 6.5 覆盖已补齐，外部端到端仍有明确边界**
    已有 Local Session Store migrations/transaction/topology/idempotency、离线 create/list/open/restart/continue、durable-first user/model/tool/automatic-compaction、Provider connection/default persistence、AgentLoop、ExecutionEventStore/Projection、Runtime Store migration/restart、write-ahead/redaction/recovery、LocalModelTransport Context lifecycle、Tool Runtime 和 Session Tree 回归测试。本轮不声称真实外部 Provider E2E、Codex OAuth execution、Cloud Session Sync 或完整 CLI 键盘/节点跳转 UI 集成测试已完成。
 
-   Stage 6.5 交付后又发现一类 AI SDK runtime-message 与严格 Session JSON persistence 的兼容性缺口：运行时 message part 可显式携带 `providerMetadata: undefined`，而 Local Session Store 正确地拒绝非 JSON-safe durable state。当前已接受 ADR-0025 的方案：在 CLI 的 AI SDK/UI Message -> Session semantic history 边界增加统一 Durable Message Normalization seam；Store 继续 strict/fail-closed，合法 JSON Provider metadata 保留，对象 `undefined` 规范化为字段缺失，数组 `undefined`/hole 规范化为 `null`。该修复目前只有设计、测试计划、交付合同与任务拆解，尚未实现。
+   Stage 6.5 交付后发现的 AI SDK runtime-message 与严格 Session JSON persistence 兼容性缺口已按 ADR-0025 完成修复：CLI 现在在 AI SDK/UI Message -> Session semantic history 边界使用统一 Durable Message Normalization seam；Store 继续 strict/fail-closed，合法 JSON Provider metadata 保留，对象 `undefined` 规范化为字段缺失，数组 `undefined`/hole 规范化为 `null`。normal sync、compaction pre-sync、durable user turn 与 Tool-terminal message update 已统一走该边界，并完成真实 Red、restart、idempotency、Tool/compaction 及严格负例验证。
 
 10. **可观测性配置偏开发态**
     Sentry DSN 仍直接写在代码中，Trace 采样率较高，并保留测试异常路由，上线前应环境化。
@@ -309,7 +309,7 @@ Stage 6.4 已完成多模型抽象迁移。shared 中的固定模型目录现在
 
 项目现在的核心性质已经从“Client + 远程 AI Chat Server”转为“**Local Coding Agent + Local Session/Provider Authority**”。CLI 是 authoritative execution 与 semantic Session runtime；Cloudflare/Railway 和云账户路径已退出当前本地产品，Server/database 仅作为 Stage 6.6 重新批准后可能启用的 dormant future cloud 边界。
 
-本分析记录的是已实现架构与最终集成证据；Stage 6.5 已完成当时的最终审查。审查期间发现并修复了 Bun 下默认 Session ID 生成器将 `crypto.randomUUID` 脱离 `Crypto` receiver 后触发 `ERR_INVALID_THIS` 的生产路径问题，并补充真实默认 ID 回归覆盖。交付后新发现的 `providerMetadata: undefined` durable-message 兼容性问题不改写当时的验证记录，但它现在作为 ADR-0025 / Stage 6.5 Durable Message Normalization follow-up 明确跟踪，当前尚未实现。
+本分析记录的是已实现架构与最终集成证据；Stage 6.5 已完成当时的最终审查。审查期间发现并修复了 Bun 下默认 Session ID 生成器将 `crypto.randomUUID` 脱离 `Crypto` receiver 后触发 `ERR_INVALID_THIS` 的生产路径问题，并补充真实默认 ID 回归覆盖。交付后发现的 `providerMetadata: undefined` durable-message 兼容性问题随后作为 ADR-0025 / Stage 6.5 Durable Message Normalization follow-up 完成交付；最终 CLI 153/153、Local Session Store 11/11、Harness 99/99，相关 typecheck/build 与 `git diff --check` 全部通过。
 
 现阶段最核心的已完成能力是：
 

@@ -10,7 +10,7 @@ Accepted
 
 ## Implementation Status
 
-Planned. The design, test plan, delivery contract, and implementation task breakdown are documented. No production implementation is included in this decision-record update.
+Delivered — 2026-08-26. The CLI now owns a single durable-message adapter in `packages/cli/src/lib/durable-session-message.ts`. Normal message synchronization, compaction pre-sync, durable user-turn construction, and Tool-terminal message updates all cross that adapter before Harness constructs Session Entries. `LocalSessionStore` remains unchanged and strict.
 
 ## Context
 
@@ -65,6 +65,10 @@ Rejected. The current Tool-terminal helper already demonstrates how policies can
 - No Store schema or migration is required.
 - Future cloud sync can operate on already canonical Session data rather than JavaScript runtime artifacts.
 
-## Verification Requirement
+## Verification Evidence
 
-Implementation must follow `docs/DURABLE-MESSAGE-NORMALIZATION-TEST.md`, including a real pre-fix red reproduction of `providerMetadata: undefined`, strict negative-value coverage, Tool/compaction regressions, idempotent re-sync, and restart round-trip verification.
+The implementation followed `docs/DURABLE-MESSAGE-NORMALIZATION-TEST.md`.
+
+- The first real pre-fix persistence regression failed through `LocalSessionAuthority.commit` with `Session Tree state.entries[1].message.parts[0].providerMetadata must be JSON-safe` before production code changed.
+- Focused durable-message, Local Session, Tool-terminal, compaction pre-sync, restart, mutation-safety, idempotency, `__proto__`, and strict negative-value coverage passes.
+- Final verification: CLI `153/153`, Local Session Store `11/11`, Harness `99/99`; CLI and Session Store TypeScript checks pass; CLI build and `git diff --check` pass.

@@ -110,6 +110,7 @@ All notable changes to MORE MORE CODE are recorded here.
 ### Fixed
 
 - Local Session creation now preserves the Web Crypto receiver when using the production default UUID generator, preventing Bun `ERR_INVALID_THIS` / `Expected this to be instanceof Crypto` failures before Provider execution; regression coverage now exercises the real default-ID path.
+- AI SDK runtime messages with explicit optional fields such as `providerMetadata: undefined` are now normalized at one CLI durable-message boundary before Session Tree construction. Object `undefined` is omitted, array holes/`undefined` retain position as `null`, valid Provider metadata survives restart, unsupported JavaScript values remain fail-closed, and normal sync/compaction/Tool-terminal persistence no longer maintain divergent cleanup policies.
 - The `/providers` custom-provider editor integration test now drives OpenTUI keyboard state through React test transactions instead of depending on batched synthetic key events that could observe stale selection state.
 
 ### Deferred

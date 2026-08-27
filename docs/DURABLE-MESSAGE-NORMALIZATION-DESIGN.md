@@ -1,6 +1,6 @@
 # Durable Message Normalization Design
 
-**Status:** Approved design; implementation not started.
+**Status:** Delivered — 2026-08-26. The implementation matches this design.
 
 **Scope:** Stage 6.5 local Session authority follow-up.
 
@@ -261,7 +261,7 @@ Rejected for this follow-up because some Provider metadata may participate in la
 
 ## 13. Implementation Slices
 
-Implementation is intentionally deferred. When approved for coding, use TDD in these slices:
+The delivered implementation followed these TDD slices:
 
 1. Add the durable-message normalization seam with focused contract tests.
 2. Route normal assistant/message synchronization through the seam and reproduce/fix the `providerMetadata: undefined` failure.
@@ -269,4 +269,14 @@ Implementation is intentionally deferred. When approved for coding, use TDD in t
 4. Consolidate Tool-terminal `omitUndefined` behavior into the shared seam without changing Tool durability semantics.
 5. Add restart/idempotency integration coverage and run the full Stage 6.5 verification matrix.
 
-No production code is changed by this design document.
+## 14. Implementation Result
+
+The delivered implementation keeps the design boundaries intact:
+
+- `packages/cli/src/lib/durable-session-message.ts` owns `normalizeDurableMessage`, `normalizeDurableMessages`, and the single `appendDurableSessionMessages` Session Tree entry seam.
+- object `undefined` is omitted; array `undefined` and sparse holes become explicit `null` without shifting indexes;
+- JSON-safe Provider metadata and own `__proto__` string-keyed data are preserved without mutating runtime/UI messages;
+- non-finite numbers, bigint, functions, symbols/symbol properties, cycles, and non-plain objects remain fail-closed;
+- `use-chat.ts` normal synchronization and compaction pre-sync, `durable-session-turn.ts`, and `durable-tool-terminal.ts` all reuse the same policy;
+- the previous Tool-terminal private `omitUndefined` policy was removed;
+- Harness and `LocalSessionStore` were not weakened or made AI SDK-aware, and no Store migration was required.

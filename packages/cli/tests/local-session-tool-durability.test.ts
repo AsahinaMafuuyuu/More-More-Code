@@ -15,6 +15,7 @@ import { bootstrapLocalSessionStore } from "../../session-store/src";
 import type { Message } from "../src/lib/chat-types";
 import { createLocalSessionAuthority } from "../src/lib/local-session-authority";
 import {
+  buildDurableToolTerminalState,
   inspectDurableToolCall,
   persistThenExposeToolTerminal,
 } from "../src/lib/durable-tool-terminal";
@@ -162,6 +163,14 @@ describe("durable local tool terminals", () => {
         "error",
       ]);
       expect(containsUndefined(failed)).toBe(false);
+      const errorEntry = failed.entries.at(-1)!;
+      expect(errorEntry.type).toBe("error");
+      if (errorEntry.type === "error") {
+        expect(errorEntry.details).toMatchObject({
+          nested: { kept: true },
+          positions: ["first", null, "third"],
+        });
+      }
 
       await first.store.close();
       firstOpen = false;
@@ -205,6 +214,22 @@ describe("durable local tool terminals", () => {
       if (firstOpen) await first.store.close();
       else await first.store.close();
     }
+  });
+
+  test("fails closed on non-plain Tool output instead of silently serializing it", () => {
+    const state = toolCallState();
+
+    expect(() => buildDurableToolTerminalState({
+      sessionId: "tool-session",
+      state,
+      toolCallId: "tool-call-1",
+      toolName: "bash",
+      presentation: {
+        state: "output-available",
+        output: new Date("2026-08-26T00:00:00.000Z"),
+      },
+      result: { status: "completed", source: "native" },
+    })).toThrow("contains a non-plain object");
   });
 
   test("does not expose a successful tool output until its atomic authority commit resolves", async () => {

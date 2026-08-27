@@ -1,7 +1,6 @@
 import { isToolUIPart } from "ai";
 import {
     appendSessionEntries,
-    appendSessionTreeMessages,
     projectSessionEntryPath,
     projectSessionTreeMessages,
     restoreSessionTree,
@@ -12,6 +11,11 @@ import {
     type SessionTreeState,
 } from "@more-more-code/harness";
 import type { Message } from "./chat-types";
+import {
+    appendDurableSessionMessages,
+    normalizeDurableMessage,
+    normalizeDurableSessionData,
+} from "./durable-session-message";
 
 /** The narrow authority contract required by the durable Tool-terminal seam. */
 export type DurableToolTerminalAuthority = {
@@ -66,42 +70,6 @@ export type PersistThenExposeToolTerminalInput = {
     expose: () => void | Promise<void>;
 };
 
-function cloneMessage(message: Message) {
-    return structuredClone(message) as Message;
-}
-
-/**
- * The local SQLite store rejects explicit `undefined` instead of relying on
- * JSON.stringify's lossy omission. Tool UI parts retain optional fields from
- * their preceding state, so remove them before building the terminal fact.
- * Array holes use JSON's explicit `null` representation to keep their index.
- */
-function omitUndefined<T>(value: T): T {
-    if (Array.isArray(value)) {
-        return value.map((item) => item === undefined ? null : omitUndefined(item)) as T;
-    }
-    if (!value || typeof value !== "object") return value;
-
-    const prototype = Object.getPrototypeOf(value);
-    // Preserve non-plain values so the persistence edge can report them
-    // accurately rather than silently changing their meaning here.
-    if (prototype !== Object.prototype && prototype !== null) return value;
-
-    const result: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value)) {
-        if (child === undefined) continue;
-        // Preserve an own `__proto__` key as JSON data instead of changing
-        // the sanitised object's prototype before the store validates it.
-        Object.defineProperty(result, key, {
-            value: omitUndefined(child),
-            enumerable: true,
-            configurable: true,
-            writable: true,
-        });
-    }
-    return result as T;
-}
-
 function updateToolPart(
     part: Message["parts"][number],
     toolCallId: string,
@@ -111,14 +79,14 @@ function updateToolPart(
         return { part, matched: false };
     }
 
-    const cleanPart = omitUndefined(part) as Record<string, unknown>;
+    const cleanPart = normalizeDurableSessionData(part, "Durable Tool UI part") as Record<string, unknown>;
     const next = presentation.state === "output-available"
         ? (() => {
             const { errorText: _errorText, ...withoutErrorText } = cleanPart;
             return {
                 ...withoutErrorText,
                 state: "output-available" as const,
-                output: omitUndefined(presentation.output),
+                output: normalizeDurableSessionData(presentation.output, "Durable Tool output"),
             };
         })()
         : (() => {
@@ -160,14 +128,17 @@ export function inspectDurableToolCall(
 /**
  * Appends the model-visible terminal Tool Result and its matching immutable
  * Session `message_update` to one next tree state. This deliberately reuses
- * Harness' `appendSessionTreeMessages` projection/update constructor instead
- * of introducing a second message-update format.
+ * the CLI durable-message adapter over Harness' projection/update constructor
+ * instead of introducing a second message-update or cleanup policy.
  */
 export function buildDurableToolTerminalState(input: Omit<
     PersistThenExposeToolTerminalInput,
     "authority" | "onCommitted" | "expose"
 >): SessionTreeState<Message> {
-    const metadata = omitUndefined(input.metadata ?? {}) as SessionEntryMetadata;
+    const metadata = normalizeDurableSessionData(
+        input.metadata ?? {},
+        "Durable Tool metadata",
+    ) as SessionEntryMetadata;
     const messages = projectSessionTreeMessages(input.state);
     let matched = false;
     const updatedMessages = messages.map((message) => {
@@ -177,20 +148,19 @@ export function buildDurableToolTerminalState(input: Omit<
             return updated.part;
         });
         if (!nextParts.some((part, index) => part !== message.parts[index])) {
-            return cloneMessage(message);
+            return normalizeDurableMessage(message);
         }
-        const cleanMessage = omitUndefined(cloneMessage(message));
-        return {
-            ...cleanMessage,
-            parts: nextParts.map((part) => omitUndefined(part)),
-        };
+        return normalizeDurableMessage({
+            ...message,
+            parts: nextParts,
+        });
     });
 
     if (!matched) {
         throw new Error(`Cannot make tool result ${input.toolCallId} durable because its UI tool call is absent`);
     }
 
-    const stateWithToolOutput = appendSessionTreeMessages(
+    const stateWithToolOutput = appendDurableSessionMessages(
         input.state,
         updatedMessages,
         metadata,
@@ -201,7 +171,12 @@ export function buildDurableToolTerminalState(input: Omit<
         toolName: input.toolName,
         status: input.result.status,
         ...(input.presentation.state === "output-available"
-            ? { output: omitUndefined(input.presentation.output) }
+            ? {
+                output: normalizeDurableSessionData(
+                    input.presentation.output,
+                    "Durable Tool result output",
+                ),
+            }
             : { error: input.presentation.errorText }),
         ...(input.result.source ? { source: input.result.source } : {}),
         ...(input.result.startedAt === undefined ? {} : { startedAt: input.result.startedAt }),
@@ -215,7 +190,14 @@ export function buildDurableToolTerminalState(input: Omit<
             type: "error" as const,
             message: input.error.message,
             code: input.error.code,
-            ...(input.error.details === undefined ? {} : { details: omitUndefined(input.error.details) }),
+            ...(input.error.details === undefined
+                ? {}
+                : {
+                    details: normalizeDurableSessionData(
+                        input.error.details,
+                        "Durable Tool error details",
+                    ),
+                }),
             ...metadata,
         });
     }

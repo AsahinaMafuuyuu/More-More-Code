@@ -420,30 +420,30 @@
 
 # Stage 6.5 Follow-up — Durable Message Normalization Boundary
 
-**Status:** Design approved — 2026-08-26. Documentation complete; implementation intentionally pending.
+**Status:** Delivered — 2026-08-26. Real Red reproduction, unified normalization integration, restart/idempotency regressions, full verification, and documentation delivery are complete.
 
 ## Contract & Red Reproduction
 
-- [ ] Add focused durable-message contract tests for object `undefined` omission and array/sparse `undefined` -> `null` semantics.
-- [ ] Verify valid JSON-safe Provider metadata and own `__proto__` data are preserved without mutating runtime messages.
-- [ ] Verify non-finite numbers, bigint, function, symbol, cycles, symbol properties, and non-plain objects remain fail-closed.
-- [ ] Add a real red persistence regression for an assistant part containing `providerMetadata: undefined` before changing production code.
+- [x] Add focused durable-message contract tests for object `undefined` omission and array/sparse `undefined` -> `null` semantics.
+- [x] Verify valid JSON-safe Provider metadata and own `__proto__` data are preserved without mutating runtime messages.
+- [x] Verify non-finite numbers, bigint, function, symbol, cycles, symbol properties, and non-plain objects remain fail-closed.
+- [x] Add a real red persistence regression for an assistant part containing `providerMetadata: undefined` before changing production code.
 
 ## Normalization Integration
 
-- [ ] Add one CLI-owned durable-message normalization seam before Session Tree message construction.
-- [ ] Route normal message synchronization through the seam.
-- [ ] Route compaction history pre-sync through the same seam.
-- [ ] Consolidate Tool-terminal private `undefined` cleanup into the same policy without changing commit-before-expose ordering.
-- [ ] Keep Harness provider-independent and keep `LocalSessionStore` strict.
+- [x] Add one CLI-owned durable-message normalization seam before Session Tree message construction.
+- [x] Route normal message synchronization through the seam.
+- [x] Route compaction history pre-sync through the same seam.
+- [x] Consolidate Tool-terminal private `undefined` cleanup into the same policy without changing commit-before-expose ordering.
+- [x] Keep Harness provider-independent and keep `LocalSessionStore` strict.
 
 ## Idempotency, Restart & Delivery
 
-- [ ] Prove repeated semantically equivalent message sync does not append redundant `message_update` Entries.
-- [ ] Prove valid Provider metadata survives local commit/restart and omitted optional fields remain absent.
-- [ ] Prove restart/continue stays local-only with no mandatory Server/API_URL call.
-- [ ] Run the full CLI, Session Store, Harness, typecheck/build, and `git diff --check` verification matrix.
-- [ ] Update ADR/design/test/delivery/current-state documents to Delivered only after all verification evidence exists.
+- [x] Prove repeated semantically equivalent message sync does not append redundant `message_update` Entries.
+- [x] Prove valid Provider metadata survives local commit/restart and omitted optional fields remain absent.
+- [x] Prove restart/continue stays local-only with no mandatory Server/API_URL call.
+- [x] Run the full CLI, Session Store, Harness, typecheck/build, and `git diff --check` verification matrix.
+- [x] Update ADR/design/test/delivery/current-state documents to Delivered only after all verification evidence exists.
 
 ---
 

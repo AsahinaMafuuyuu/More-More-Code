@@ -1735,7 +1735,7 @@ The Local Session Store is separate from the Local Runtime Store even when both 
 
 # Stage 6.5 Follow-up — Durable Message Normalization Boundary
 
-**Status:** Design approved — 2026-08-26. Documentation complete; implementation intentionally not started.
+**Status:** Delivered — 2026-08-26. Real Red reproduction, single CLI normalization seam, integration regressions, restart/idempotency coverage, full verification, and delivery documentation are complete.
 
 ## Overview
 
@@ -1748,9 +1748,9 @@ The accepted design is defined by ADR-0025 and `docs/DURABLE-MESSAGE-NORMALIZATI
 ### Task 1: Add durable-message normalization contract tests
 
 **Acceptance criteria:**
-- [ ] A focused adapter seam specifies object `undefined` omission and array/sparse `undefined` -> `null` semantics.
-- [ ] Valid JSON-safe Provider metadata and `__proto__` data are preserved without input mutation.
-- [ ] Non-finite numbers, bigint, function, symbol, cycles, symbol properties, and non-plain objects are not silently coerced.
+- [x] A focused adapter seam specifies object `undefined` omission and array/sparse `undefined` -> `null` semantics.
+- [x] Valid JSON-safe Provider metadata and `__proto__` data are preserved without input mutation.
+- [x] Non-finite numbers, bigint, function, symbol, cycles, symbol properties, and non-plain objects are not silently coerced.
 
 **Verification:** focused `durable-session-message` tests.
 
@@ -1759,9 +1759,9 @@ The accepted design is defined by ADR-0025 and `docs/DURABLE-MESSAGE-NORMALIZATI
 ### Task 2: Reproduce the real persistence failure before implementation
 
 **Acceptance criteria:**
-- [ ] A real local semantic commit containing an assistant part with `providerMetadata: undefined` fails red on the current implementation.
-- [ ] The failure reaches the strict Session persistence boundary rather than a synthetic private helper.
-- [ ] The fixture models the AI SDK runtime shape without requiring a real external Provider credential.
+- [x] A real local semantic commit containing an assistant part with `providerMetadata: undefined` fails red on the pre-fix implementation.
+- [x] The failure reaches the strict Session persistence boundary rather than a synthetic private helper.
+- [x] The fixture models the AI SDK runtime shape without requiring a real external Provider credential.
 
 **Verification:** focused CLI local-session integration test demonstrates the pre-fix failure.
 
@@ -1772,9 +1772,9 @@ The accepted design is defined by ADR-0025 and `docs/DURABLE-MESSAGE-NORMALIZATI
 ### Task 3: Implement the CLI durable-message adapter and normal sync integration
 
 **Acceptance criteria:**
-- [ ] One Session-specific adapter owns normalization semantics; no generic stringify/parse sanitizer is introduced.
-- [ ] Normal `syncMessagesToTree` paths normalize before `appendSessionTreeMessages`.
-- [ ] Runtime/UI messages are not mutated.
+- [x] One Session-specific adapter owns normalization semantics; no generic stringify/parse sanitizer is introduced.
+- [x] Normal `syncMessagesToTree` paths normalize before Harness Session Tree construction.
+- [x] Runtime/UI messages are not mutated.
 
 **Verification:** Tasks 1-2 turn green through the public persistence seam.
 
@@ -1783,9 +1783,9 @@ The accepted design is defined by ADR-0025 and `docs/DURABLE-MESSAGE-NORMALIZATI
 ### Task 4: Route compaction and Tool-terminal message persistence through the same policy
 
 **Acceptance criteria:**
-- [ ] Compaction history pre-sync uses the same durable-message adapter.
-- [ ] Existing Tool-terminal private `undefined` policy is consolidated rather than duplicated.
-- [ ] Tool terminal remains commit-before-expose and compaction remains one semantic authority transition.
+- [x] Compaction history pre-sync uses the same durable-message adapter.
+- [x] Existing Tool-terminal private `undefined` policy is consolidated rather than duplicated.
+- [x] Tool terminal remains commit-before-expose and compaction remains one semantic authority transition.
 
 **Verification:** focused Tool durability and compaction regression tests.
 
@@ -1796,9 +1796,9 @@ The accepted design is defined by ADR-0025 and `docs/DURABLE-MESSAGE-NORMALIZATI
 ### Task 5: Verify semantic idempotency and restart round-trip
 
 **Acceptance criteria:**
-- [ ] Re-syncing a runtime message that differs only by explicit optional `undefined` does not append redundant `message_update` Entries.
-- [ ] Valid Provider metadata survives commit/restart; omitted optional fields remain absent.
-- [ ] Restart/continue remains local-only with no Server/API_URL dependency.
+- [x] Re-syncing a runtime message that differs only by explicit optional `undefined` does not append redundant `message_update` Entries.
+- [x] Valid Provider metadata survives commit/restart; omitted optional fields remain absent.
+- [x] Restart/continue remains local-only with no Server/API_URL dependency.
 
 **Verification:** focused local Session restart/continue integration tests.
 
@@ -1807,10 +1807,10 @@ The accepted design is defined by ADR-0025 and `docs/DURABLE-MESSAGE-NORMALIZATI
 ### Task 6: Complete full verification and update delivered-state documentation
 
 **Acceptance criteria:**
-- [ ] CLI, Session Store, and Harness suites pass.
-- [ ] CLI/Session Store TypeScript checks and CLI build pass.
-- [ ] `git diff --check` passes and unrelated worktree changes are not included.
-- [ ] ADR/design/test/delivery/current-state docs are changed from planned to delivered only after evidence exists.
+- [x] CLI, Session Store, and Harness suites pass.
+- [x] CLI/Session Store TypeScript checks and CLI build pass.
+- [x] `git diff --check` passes and unrelated worktree changes are not included.
+- [x] ADR/design/test/delivery/current-state docs are changed from planned to delivered only after evidence exists.
 
 **Verification:** full matrix in `docs/DURABLE-MESSAGE-NORMALIZATION-TEST.md`.
 

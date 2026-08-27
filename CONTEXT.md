@@ -24,6 +24,10 @@ One root-to-entry history path through a Session Entry Tree. Branches may share 
 
 The conversational message history derived from a Session branch. Non-message Session Entries remain part of Session history even when they are absent from this projection.
 
+## Durable Message Normalization
+
+The CLI-owned semantic boundary between Vercel AI SDK/UI runtime `Message` objects and durable Session history. Runtime object properties whose value is `undefined` are omitted, array `undefined` values and sparse holes become explicit `null`, and valid JSON-safe Provider metadata is preserved. Unsupported values such as non-finite numbers, bigint, functions, symbols/symbol-keyed properties, cycles, and non-plain objects remain fail-closed. Normal message sync, compaction pre-sync, durable user turns, and Tool-terminal message updates share this one policy before Harness constructs Session Entries; Harness stays provider-independent and `LocalSessionStore` remains the strict final JSON integrity validator.
+
 ## Runtime State Projection
 
 The effective agent/model configuration derived from state-changing Session Entries on a branch, such as model, mode, or other configuration changes.
