@@ -69,6 +69,7 @@ All notable changes to MORE MORE CODE are recorded here.
 - CLI Local Session Authority for offline create/list/open/continue/restart/branch flows, with durable-first user/model/tool/automatic-compaction transitions.
 - Focused local-only coverage for Session Store persistence/restart/migration/transaction/idempotency, fetch-free Session lifecycle, durable-first ordering, compaction durability, secret-safe Provider connection probes, and persisted model defaults.
 - ADR-0024 documenting local-only Session authority, Railway retirement, disabled cloud surfaces, and capability-gated Codex OAuth.
+- ADR-0026 semantic Session follow-up with pure Navigation Tree Projection, derived ToolUse rows, legacy `message_update` folding, terminal ToolResult navigation anchors, and step-scoped finalized assistant persistence.
 
 ### Changed
 
@@ -106,11 +107,16 @@ All notable changes to MORE MORE CODE are recorded here.
 - `/providers` connection validation now reports a secret-safe resolved URL and typed configuration/credential/protocol/HTTP/model/network failures; `/models` defaults persist locally across restart.
 - Codex OAuth is hidden while no supported documented model-execution broker exists; OpenAI API Key remains the supported local path, and the CLI never reuses private Codex token files.
 - Stage 6.5 Local Session Authority & Railway Retirement is delivered; Stage 6.6 Cloud Session Sync & Commercial Entitlements is paused pending explicit product re-approval.
+- Normal assistant persistence now appends one immutable `assistant_message` per completed AgentLoop Model Step; normal Tool completion no longer writes `message_update`, while existing update-bearing v3 Sessions remain readable through the legacy projection path.
+- `/tree` and `/jump` now consume semantic Navigation Tree Projection rows rather than raw Session Entries: bookkeeping/update rows are folded, ordinary single-child history stays flat, true branches retain topology, and canonical `tool_call` + `tool_result` facts appear as one derived ToolUse whose terminal navigation target is the `tool_result` Entry.
+- Tool terminal UI/provider state is reconstructed from canonical `tool_result` facts through Message Projection, preserving request-before-side-effect and result-before-continuation ordering without duplicating terminal truth into assistant history.
 
 ### Fixed
 
 - Local Session creation now preserves the Web Crypto receiver when using the production default UUID generator, preventing Bun `ERR_INVALID_THIS` / `Expected this to be instanceof Crypto` failures before Provider execution; regression coverage now exercises the real default-ID path.
 - AI SDK runtime messages with explicit optional fields such as `providerMetadata: undefined` are now normalized at one CLI durable-message boundary before Session Tree construction. Object `undefined` is omitted, array holes/`undefined` retain position as `null`, valid Provider metadata survives restart, unsupported JavaScript values remain fail-closed, and normal sync/compaction/Tool-terminal persistence no longer maintain divergent cleanup policies.
+- Tool-continuation finalization no longer treats AI SDK assistant `UIMessage.id` as immutable Session identity. AI SDK v7 can reuse one aggregate assistant message across multiple Model Steps; durable assistant ids are now derived from AgentLoop `stepId`, and only the parts after the latest `step-start` marker are persisted for each completed step. This fixes `Finalized durable assistant message ... already exists with different content` without reintroducing `message_update` or duplicating Tool Call/Result semantics.
+- Windows CLI integration-test cleanup now treats a persistently locked temporary libsql directory as best-effort only after explicit store close, successful persistence/restart assertions, and bounded retries; Session/database operation failures and non-transient cleanup errors remain test failures.
 - The `/providers` custom-provider editor integration test now drives OpenTUI keyboard state through React test transactions instead of depending on batched synthetic key events that could observe stale selection state.
 
 ### Deferred

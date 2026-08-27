@@ -18,7 +18,7 @@ function getSessionEntryColor(type: string, colors: ThemeColors) {
     if (["user_message", "assistant_message", "custom_message", "message_update", "session_start"].includes(type)) {
         return colors.sessionMessage;
     }
-    if (type === "tool_call" || type === "tool_result") return colors.sessionTool;
+    if (type === "tool_call" || type === "tool_result" || type === "tool_use") return colors.sessionTool;
     if (type === "compaction") return colors.sessionCompaction;
     if (type === "model_change" || type === "mode_change" || type === "config_change") {
         return colors.sessionStateChange;
@@ -42,21 +42,29 @@ export function SessionTreeDialogContent({ tree }: { tree: SessionTreeCommandApi
     const { colors } = useTheme();
 
     const handleSelect = useCallback((entry: SessionTreeCommandEntry) => {
-        const intent = tree.inspectJump(entry.id);
+        if (!entry.selectable) {
+            toast.show({
+                variant: "info",
+                message: "This Tool request is incomplete and is not a terminal navigation point",
+            });
+            return;
+        }
+        const targetEntryId = entry.navigationTargetEntryId;
+        const intent = tree.inspectJump(targetEntryId);
         if (intent.action === "ask") {
             dialog.open({
                 title: "Carry Branch Knowledge",
                 children: (
                     <BranchSummaryDecisionDialogContent
                         tree={tree}
-                        targetEntryId={entry.id}
+                        targetEntryId={targetEntryId}
                     />
                 ),
             });
             return;
         }
 
-        void tree.jump(entry.id)
+        void tree.jump(targetEntryId)
             .then((result) => showNavigationResultToast(result, toast))
             .catch((error) => {
                 toast.show({
@@ -96,8 +104,8 @@ export function SessionTreeDialogContent({ tree }: { tree: SessionTreeCommandApi
                 </>
             )}
             getKey={(entry) => entry.id}
-            placeholder="Search session entries..."
-            emptyText="No session entries"
+            placeholder="Search session navigation..."
+            emptyText="No semantic session entries"
         />
     );
 }

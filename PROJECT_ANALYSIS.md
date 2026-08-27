@@ -94,7 +94,7 @@ Session Entry Tree 由独立的 `entries[]` 组成，每个 durable semantic eve
 
 ### 4.2 Message（消息）
 
-CLI 内部使用 AI SDK `UIMessage` 表示用户输入、模型输出和 Tool Call/Result；Local Session Store 将消息作为 Session Entry 的 payload 保存。Server/database 不参与本地 Session 恢复。
+CLI 内部使用 AI SDK `UIMessage` 表示用户输入、模型输出和 Tool Call/Result，但 AI SDK assistant `UIMessage` 是运行时/UI 聚合对象，不再被视为 durable semantic identity。Tool continuation 可以复用同一个 `UIMessage.id` 并追加新的 Model Step；CLI 会按 AgentLoop `stepId` 为每个 completed Model Step 派生独立 durable assistant message id，并按最后一个 `step-start` 只提取当前 step parts 后写入 Local Session Store。Server/database 不参与本地 Session 恢复。
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
@@ -119,7 +119,7 @@ CLI 内部使用 AI SDK `UIMessage` 表示用户输入、模型输出和 Tool Ca
 - `reasoning`：推理文本；
 - `tool-call`：工具名称、参数、调用 ID 和可选结果。
 
-CLI 会消费并展示文本、reasoning 与 Tool 相关的归一化分段；对应的 Tool call/result 语义同时进入本地 Session Entry Tree，完整 UI 细节仍由 CLI 组件负责。
+CLI 会消费并展示文本、reasoning 与 Tool 相关的归一化分段；对应的 Tool call/result 语义作为独立 canonical facts 进入本地 Session Entry Tree。Tool terminal output 不再通过 normal `message_update` 写回 assistant Entry，而由 Message Projection 从 `tool_result` 推导；Navigation Projection 则把 call/result 显示为一个 derived ToolUse。
 
 ### 4.4 流式事件与兼容协议
 
@@ -300,7 +300,9 @@ Stage 6.4 已完成多模型抽象迁移。shared 中的固定模型目录现在
 9. **本地 Stage 6.5 覆盖已补齐，外部端到端仍有明确边界**
    已有 Local Session Store migrations/transaction/topology/idempotency、离线 create/list/open/restart/continue、durable-first user/model/tool/automatic-compaction、Provider connection/default persistence、AgentLoop、ExecutionEventStore/Projection、Runtime Store migration/restart、write-ahead/redaction/recovery、LocalModelTransport Context lifecycle、Tool Runtime 和 Session Tree 回归测试。本轮不声称真实外部 Provider E2E、Codex OAuth execution、Cloud Session Sync 或完整 CLI 键盘/节点跳转 UI 集成测试已完成。
 
-   Stage 6.5 交付后发现的 AI SDK runtime-message 与严格 Session JSON persistence 兼容性缺口已按 ADR-0025 完成修复：CLI 现在在 AI SDK/UI Message -> Session semantic history 边界使用统一 Durable Message Normalization seam；Store 继续 strict/fail-closed，合法 JSON Provider metadata 保留，对象 `undefined` 规范化为字段缺失，数组 `undefined`/hole 规范化为 `null`。normal sync、compaction pre-sync、durable user turn 与 Tool-terminal message update 已统一走该边界，并完成真实 Red、restart、idempotency、Tool/compaction 及严格负例验证。
+   Stage 6.5 交付后发现的 AI SDK runtime-message 与严格 Session JSON persistence 兼容性缺口已按 ADR-0025 完成修复：CLI 在 runtime Message -> Session semantic history 边界使用统一 Durable Message Normalization seam；Store 继续 strict/fail-closed，合法 JSON Provider metadata 保留，对象 `undefined` 规范化为字段缺失，数组 `undefined`/hole 规范化为 `null`。随后 ADR-0026 又完成 finalized-message / semantic navigation follow-up：新 normal assistant history 按 AgentLoop Model Step append，不再写 Tool-terminal `message_update`；legacy update 只读兼容；`/tree` 使用 semantic Navigation Projection 与 derived ToolUse。
+
+   真实 CLI Tool conversation 进一步暴露了 finalized identity 缺口：AI SDK v7 会在 Tool continuation 中复用同一个 assistant `UIMessage.id`。初版若把该 ID 当 durable message identity，就会在后续 Model Step 抛出 `already exists with different content`。当前实现已将 durable assistant identity 改为 `stepId`，并按最新 `step-start` 切出当前 Model Step；fake Provider 回归证明两步共用一个 UIMessage ID 后再 follow-up，模型输入仍只有一组匹配 Tool Call/Result，且 continuation 文本不丢失。
 
 10. **可观测性配置偏开发态**
     Sentry DSN 仍直接写在代码中，Trace 采样率较高，并保留测试异常路由，上线前应环境化。
@@ -309,7 +311,7 @@ Stage 6.4 已完成多模型抽象迁移。shared 中的固定模型目录现在
 
 项目现在的核心性质已经从“Client + 远程 AI Chat Server”转为“**Local Coding Agent + Local Session/Provider Authority**”。CLI 是 authoritative execution 与 semantic Session runtime；Cloudflare/Railway 和云账户路径已退出当前本地产品，Server/database 仅作为 Stage 6.6 重新批准后可能启用的 dormant future cloud 边界。
 
-本分析记录的是已实现架构与最终集成证据；Stage 6.5 已完成当时的最终审查。审查期间发现并修复了 Bun 下默认 Session ID 生成器将 `crypto.randomUUID` 脱离 `Crypto` receiver 后触发 `ERR_INVALID_THIS` 的生产路径问题，并补充真实默认 ID 回归覆盖。交付后发现的 `providerMetadata: undefined` durable-message 兼容性问题随后作为 ADR-0025 / Stage 6.5 Durable Message Normalization follow-up 完成交付；最终 CLI 153/153、Local Session Store 11/11、Harness 99/99，相关 typecheck/build 与 `git diff --check` 全部通过。
+本分析记录的是已实现架构与最终集成证据。Stage 6.5 先修复了默认 Session ID 生成器的 Bun `Crypto` receiver 问题，随后通过 ADR-0025 交付 Durable Message Normalization，再通过 ADR-0026 交付 Finalized Message Persistence、Tool terminal Message Projection 与 semantic `/tree`。ADR-0026 最终验证期间又修复了 AI SDK Tool continuation 复用 assistant `UIMessage.id` 导致 durable finalization identity 冲突的问题。当前最终证据为 CLI **171/171**、Local Session Store **11/11**、Harness **99/99**；CLI/Session Store typecheck、CLI build 与 `git diff --check` 全部通过。真实 DeepSeek conversation 是该 reused-ID bug 的发现来源，但自动 delivery gate 使用确定性的 AI SDK/fake Provider 回归，不声称真实外部 Provider E2E 已纳入套件。
 
 现阶段最核心的已完成能力是：
 

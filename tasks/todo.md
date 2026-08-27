@@ -447,6 +447,85 @@
 
 ---
 
+# Stage 6.5 Follow-up — Finalized Message Persistence & Semantic Navigation Projection
+
+**Status:** Delivered — 2026-08-27.
+
+## Projection Foundation
+
+- [x] Add the required Red regression proving raw navigation currently exposes `message_update`.
+- [x] Add a pure Navigation Tree Projection that folds legacy `message_update` and default bookkeeping rows.
+- [x] Preserve visible branch topology when hidden Entries are contracted.
+- [x] Keep ordinary single-child visible chains structurally flat for rendering.
+- [x] Add ToolUse projection that joins `tool_call` + `tool_result` by exact `toolCallId`.
+- [x] Make terminal ToolUse navigate to the terminal `tool_result` Entry.
+- [x] Define and test incomplete/orphan/duplicate Tool fact behavior fail-closed.
+
+## Finalized Message Persistence
+
+- [x] Add a Red regression proving normal streaming/tool flows currently append `message_update`.
+- [x] Keep provider stream/message deltas in runtime/UI state rather than Session semantic history.
+- [x] Append one normalized finalized `assistant_message` per completed AgentLoop Model Step.
+- [x] Treat AI SDK assistant `UIMessage.id` as runtime aggregation identity only; derive durable assistant identity from `stepId` and persist only the current `step-start` segment.
+- [x] Stop newly writing `message_update` in normal execution while keeping legacy-read support.
+- [x] Never mutate an existing canonical Session Entry in place.
+
+## Tool Terminal Projection & Durability
+
+- [x] Preserve durable `tool_call` before external Tool execution.
+- [x] Preserve durable `tool_result` before dependent Provider continuation.
+- [x] Remove normal Tool terminal message write-back through `message_update`.
+- [x] Derive terminal Tool UI/message state from canonical `tool_result` without mutating source Entries.
+- [x] Prove fake Provider tool-continuation input contains one valid matching Tool Call/Result pair and no duplicates.
+- [x] Prove a later follow-up remains provider-valid after two Model Steps reuse one AI SDK assistant `UIMessage.id`.
+- [x] Preserve Tool Result Working Set durable source identity and pruning semantics.
+
+## `/tree` Integration
+
+- [x] Route `/tree` through Navigation Tree Projection instead of raw Session Entries.
+- [x] Hide legacy `message_update` and default bookkeeping rows from normal navigation.
+- [x] Show one derived ToolUse row rather than separate Tool Call and Tool Result rows.
+- [x] Keep user/assistant/approved semantic landmarks in conversational order.
+- [x] Render nesting only at real visible branch points; keep linear history flat.
+- [x] Resolve every selectable projected row to an explicit canonical Entry target.
+- [x] Preserve existing Branch Summary Carry / No Carry / Cancel controller semantics after target resolution.
+
+## Compatibility, Recovery & Regression
+
+- [x] Load existing v3 Sessions containing `message_update` without destructive migration.
+- [x] Reconstruct legacy effective messages exactly enough to preserve previous conversation semantics.
+- [x] Continue an old Session using only the new finalized-message write style.
+- [x] Verify ToolUse navigation from terminal result creates the correct new branch and preserves siblings.
+- [x] Verify an incomplete historical Tool request is not automatically replayed.
+- [x] Verify Compaction, Branch Summary and Tool Result Working Set regressions remain green.
+- [x] Keep Local Session Store schema and strict JSON-safety boundary unchanged.
+
+## Documentation & Delivery Gate
+
+- [x] Add ADR-0026 for finalized message persistence, ToolUse projection and semantic `/tree` navigation.
+- [x] Add `SESSION-NAVIGATION-PROJECTION-DESIGN.md`.
+- [x] Add `SESSION-NAVIGATION-PROJECTION-TEST.md`.
+- [x] Add `SESSION-NAVIGATION-PROJECTION-DELIVERY.md`.
+- [x] Add bounded implementation plan/tasks without claiming implementation is delivered.
+- [x] Run focused Red -> Green slices in the documented order during implementation.
+- [x] Run relevant Harness/CLI/Session Store suites, required typechecks/builds and `git diff --check`.
+- [x] Update README/CONTEXT/PROJECT_ANALYSIS/CHANGELOG and delivery state only after verified implementation.
+- [x] Preserve the pre-existing unrelated root `AGENTS.md` modification outside the implementation commit.
+
+## Explicitly Out of Scope
+
+- [ ] Usage/token-cost + Context Window observability — separate design unit.
+- [ ] Provider pricing/model-capability redesign — separate design unit.
+- [ ] Physical deletion/migration of historical `message_update` rows — separate migration decision.
+- [ ] Runtime Store schema redesign / persisted partial-stream recovery.
+- [ ] Parallel Tool execution and completion-order semantics.
+- [ ] Stage 6.6 cloud sync / commercial entitlements.
+- [ ] MCP / new Tool protocol work.
+- [ ] Windows Native Sandbox.
+- [ ] Unrelated UI redesign.
+
+---
+
 # Stage 6.6 — Cloud Session Sync & Commercial Entitlements
 
 **Status:** Paused — requires explicit product re-approval after ADR-0024.

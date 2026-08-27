@@ -22,14 +22,14 @@ import { usePromptConfig } from "../providers/prompt-config";
 import type { Message } from "../hooks/use-chat";
 import type { SessionTreeCommandApi } from "../components/command-menu/types";
 import {
-  projectSessionTreeMessages,
-  type SessionEntry,
   type SessionRuntimeState,
 } from "@more-more-code/harness";
 import { useKeyboardLayer } from "../providers/keyboard-layer";
 import { formatRuntimeRecoveryNotice } from "../lib/runtime-recovery";
 import { normalizeModelRef } from "../lib/models";
 import type { LocalSessionSnapshot } from "@more-more-code/session-store";
+import { projectDurableSessionMessages } from "../lib/durable-session-message";
+import { projectSessionNavigationTree } from "../lib/session-navigation-projection";
 
 type SessionData = LocalSessionSnapshot<Message>;
 
@@ -57,36 +57,6 @@ function getMessageText(msg: Message) {
     .filter((part) => part.type === "text")
     .map((part) => part.text)
     .join("");
-}
-
-function getSessionEntryPreview(entry: SessionEntry<Message>) {
-  switch (entry.type) {
-    case "session_start":
-      return "Session start";
-    case "user_message":
-    case "assistant_message":
-    case "custom_message":
-    case "message_update":
-      return getMessageText(entry.message).trim() || entry.messageId;
-    case "tool_call":
-      return `${entry.toolName}(${entry.toolCallId.slice(0, 8)})`;
-    case "tool_result":
-      return `${entry.toolName ?? "tool"} result ${entry.toolCallId.slice(0, 8)}`;
-    case "error":
-      return entry.message;
-    case "model_change":
-      return `Model → ${entry.model}`;
-    case "mode_change":
-      return `Mode → ${entry.mode}`;
-    case "config_change":
-      return `Config changed: ${entry.key}`;
-    case "compaction":
-      return "Context compaction";
-    case "branch_summary":
-      return "Branch summary";
-    case "custom":
-      return entry.customType;
-  }
 }
 
 function ChatMessage({ msg }: { msg: Message }) {
@@ -203,37 +173,26 @@ function SessionChat({
   }, [setMode, setModel]);
 
   const sessionTreeCommands = useMemo<SessionTreeCommandApi>(() => {
-    const childrenByParent = new Map<string | null, typeof sessionTree.entries>();
-    for (const entry of sessionTree.entries) {
-      const children = childrenByParent.get(entry.parentId) ?? [];
-      children.push(entry);
-      childrenByParent.set(entry.parentId, children);
-    }
-
-    const ordered: Array<{ entry: (typeof sessionTree.entries)[number]; depth: number }> = [];
-    const visit = (entryId: string, depth: number) => {
-      const entry = sessionTree.entries.find((candidate) => candidate.id === entryId);
-      if (!entry) return;
-      ordered.push({ entry, depth });
-      for (const child of childrenByParent.get(entry.id) ?? []) {
-        visit(child.id, depth + 1);
-      }
-    };
-    visit(sessionTree.rootEntryId, 0);
+    const navigation = projectSessionNavigationTree(sessionTree);
 
     return {
       rootEntryId: sessionTree.rootEntryId,
       activeEntryId: sessionTree.activeEntryId,
       parentEntryId: sessionTree.entries.find((entry) => entry.id === sessionTree.activeEntryId)?.parentId ?? null,
-      entries: ordered.map(({ entry, depth }) => ({
-        id: entry.id,
-        parentId: entry.parentId,
-        type: entry.type,
-        depth,
-        createdAt: entry.createdAt,
-        messageCount: projectSessionTreeMessages(sessionTree, entry.id).length,
-        preview: getSessionEntryPreview(entry),
-        active: entry.id === sessionTree.activeEntryId,
+      entries: navigation.nodes.map((node) => ({
+        id: node.id,
+        parentId: node.parentId,
+        type: node.type,
+        depth: node.depth,
+        createdAt: node.createdAt,
+        messageCount: projectDurableSessionMessages(
+          sessionTree,
+          node.navigationTargetEntryId,
+        ).length,
+        preview: node.preview,
+        navigationTargetEntryId: node.navigationTargetEntryId,
+        selectable: node.selectable,
+        active: node.active,
       })),
       inspectJump: (entryId) => {
         const intent = inspectNavigation(entryId);

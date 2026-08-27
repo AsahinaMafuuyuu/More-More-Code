@@ -8,9 +8,12 @@ import {
 } from "@more-more-code/harness";
 import type { Message } from "../src/lib/chat-types";
 import {
+  appendFinalizedDurableAssistantStep,
+  appendFinalizedDurableAssistantMessage,
   appendDurableSessionMessages,
   normalizeDurableMessage,
   normalizeDurableMessages,
+  projectDurableSessionMessages,
 } from "../src/lib/durable-session-message";
 
 function assistantMessage(partOverrides: Record<string, unknown> = {}): Message {
@@ -172,6 +175,238 @@ describe("durable Session message normalization", () => {
     // adapter is the intended semantic boundary.
     const raw = appendSessionTreeMessages(initial, [runtime], {}, options);
     expect(firstPart(projectSessionTreeMessages(raw)[0]!).providerMetadata).toBeUndefined();
+  });
+
+  test("persists one finalized assistant message without creating message_update", () => {
+    let nextId = 0;
+    const options: SessionTreeOptions<Message> = {
+      createId: () => `final-entry-${nextId += 1}`,
+      now: () => nextId,
+    };
+    const initial = createSessionTree<Message>([], options);
+    const final = assistantMessage({ providerMetadata: undefined });
+
+    const first = appendFinalizedDurableAssistantMessage(initial, final, {}, options);
+    const second = appendFinalizedDurableAssistantMessage(first, final);
+
+    expect(first.entries.map((entry) => entry.type)).toEqual([
+      "session_start",
+      "assistant_message",
+    ]);
+    expect(first.entries.some((entry) => entry.type === "message_update")).toBe(false);
+    expect(second).toBe(first);
+  });
+
+  test("fails closed instead of revising an already-finalized assistant entry", () => {
+    const initial = createSessionTree<Message>([]);
+    const first = appendFinalizedDurableAssistantMessage(initial, assistantMessage());
+    const changed = {
+      ...assistantMessage(),
+      parts: [{ type: "text", text: "changed", state: "done" }],
+    } as Message;
+
+    expect(() => appendFinalizedDurableAssistantMessage(first, changed)).toThrow(
+      "already exists with different content",
+    );
+  });
+
+  test("persists two Tool-continuation model steps even when AI SDK reuses one UIMessage id", () => {
+    let nextId = 0;
+    const options: SessionTreeOptions<Message> = {
+      createId: () => `step-entry-${nextId += 1}`,
+      now: () => nextId,
+    };
+    let state = createSessionTree<Message>([], options);
+    const aggregateStepOne = {
+      id: "shared-ai-sdk-message",
+      role: "assistant",
+      parts: [
+        { type: "step-start" },
+        {
+          type: "tool-bash",
+          toolCallId: "call-1",
+          state: "input-available",
+          input: { command: "echo first" },
+        } as never,
+      ],
+    } as Message;
+
+    state = appendFinalizedDurableAssistantStep(
+      state,
+      aggregateStepOne,
+      { runId: "run-1", turnId: "turn-1", stepId: "step-1" },
+      options,
+    );
+    state = appendSessionEntry(state, {
+      type: "tool_call",
+      toolCallId: "call-1",
+      toolName: "bash",
+      input: { command: "echo first" },
+    }, options);
+    state = appendSessionEntry(state, {
+      type: "tool_result",
+      toolCallId: "call-1",
+      toolName: "bash",
+      status: "completed",
+      output: { stdout: "first\n" },
+    }, options);
+
+    const aggregateStepTwo = {
+      id: "shared-ai-sdk-message",
+      role: "assistant",
+      parts: [
+        { type: "step-start" },
+        {
+          type: "tool-bash",
+          toolCallId: "call-1",
+          state: "output-available",
+          input: { command: "echo first" },
+          output: { stdout: "first\n" },
+        } as never,
+        { type: "step-start" },
+        { type: "text", text: "second model step", state: "done" },
+      ],
+    } as Message;
+
+    state = appendFinalizedDurableAssistantStep(
+      state,
+      aggregateStepTwo,
+      { runId: "run-1", turnId: "turn-2", stepId: "step-2" },
+      options,
+    );
+
+    const assistantMessageIds = state.entries.flatMap((entry) => (
+      entry.type === "assistant_message" ? [entry.messageId] : []
+    ));
+    expect(assistantMessageIds).toHaveLength(2);
+    expect(assistantMessageIds).toEqual([
+      "assistant-step:step-1",
+      "assistant-step:step-2",
+    ]);
+    expect(state.entries.some((entry) => entry.type === "message_update")).toBe(false);
+    expect(projectSessionTreeMessages(state).map((message) => ({
+      id: message.id,
+      parts: message.parts,
+    }))).toEqual([
+      {
+        id: "assistant-step:step-1",
+        parts: [expect.objectContaining({
+          type: "tool-bash",
+          toolCallId: "call-1",
+          state: "input-available",
+        })],
+      },
+      {
+        id: "assistant-step:step-2",
+        parts: [{ type: "text", text: "second model step", state: "done" }],
+      },
+    ]);
+  });
+
+  test("same durable Model Step id remains immutable", () => {
+    const initial = createSessionTree<Message>([]);
+    const first = appendFinalizedDurableAssistantStep(
+      initial,
+      assistantMessage(),
+      { stepId: "same-step" },
+    );
+    const changed = {
+      ...assistantMessage(),
+      parts: [{ type: "text", text: "changed", state: "done" }],
+    } as Message;
+
+    expect(() => appendFinalizedDurableAssistantStep(
+      first,
+      changed,
+      { stepId: "same-step" },
+    )).toThrow("already exists with different content");
+  });
+
+  test("derives Tool terminal state without mutating canonical message or result facts", () => {
+    const assistant = {
+      id: "assistant-tool-projection",
+      role: "assistant",
+      parts: [{
+        type: "tool-bash",
+        toolCallId: "projection-tool",
+        state: "input-available",
+        input: { command: "echo projected" },
+      } as never],
+    } as Message;
+    let state = createSessionTree<Message>([assistant]);
+    state = appendSessionEntry(state, {
+      type: "tool_call",
+      toolCallId: "projection-tool",
+      toolName: "bash",
+      input: { command: "echo projected" },
+    });
+    state = appendSessionEntry(state, {
+      type: "tool_result",
+      toolCallId: "projection-tool",
+      toolName: "bash",
+      status: "completed",
+      output: { stdout: "projected\n" },
+    });
+    const canonicalBefore = structuredClone(state);
+
+    const first = projectDurableSessionMessages(state);
+    const second = projectDurableSessionMessages(state);
+
+    expect(first).toEqual(second);
+    expect(first[0]?.parts[0]).toMatchObject({
+      toolCallId: "projection-tool",
+      state: "output-available",
+      output: { stdout: "projected\n" },
+    });
+    expect(state).toEqual(canonicalBefore);
+    expect((state.entries[1] as any).message.parts[0]).not.toHaveProperty("output");
+  });
+
+  test("fails closed when canonical Tool facts cannot form one valid continuation", () => {
+    let orphan = createSessionTree<Message>([assistantMessage()]);
+    orphan = appendSessionEntry(orphan, {
+      type: "tool_result",
+      toolCallId: "orphan-tool",
+      toolName: "bash",
+      status: "completed",
+      output: "unexpected",
+    });
+    expect(() => projectDurableSessionMessages(orphan)).toThrow("Orphan tool_result orphan-tool");
+
+    const toolMessage = {
+      id: "assistant-duplicate-tool",
+      role: "assistant",
+      parts: [{
+        type: "tool-bash",
+        toolCallId: "duplicate-tool",
+        state: "input-available",
+        input: { command: "echo duplicate" },
+      } as never],
+    } as Message;
+    let duplicate = createSessionTree<Message>([toolMessage]);
+    duplicate = appendSessionEntry(duplicate, {
+      type: "tool_call",
+      toolCallId: "duplicate-tool",
+      toolName: "bash",
+      input: { command: "echo duplicate" },
+    });
+    duplicate = appendSessionEntry(duplicate, {
+      type: "tool_result",
+      toolCallId: "duplicate-tool",
+      toolName: "bash",
+      status: "completed",
+      output: "first",
+    });
+    duplicate = appendSessionEntry(duplicate, {
+      type: "tool_result",
+      toolCallId: "duplicate-tool",
+      toolName: "bash",
+      status: "completed",
+      output: "second",
+    });
+    expect(() => projectDurableSessionMessages(duplicate)).toThrow(
+      "Duplicate terminal tool_result duplicate-tool",
+    );
   });
 
   test("supports compaction pre-sync as one normalized Session transition", () => {

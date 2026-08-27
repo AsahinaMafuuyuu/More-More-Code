@@ -42,16 +42,37 @@ type LocalSessionAuthorityContract = {
 
 const temporaryRoots: string[] = [];
 
+async function removeTemporaryRoot(root: string) {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    try {
+      await rm(root, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const transientWindowsLock = process.platform === "win32"
+        && ["EBUSY", "EPERM", "ENOTEMPTY"].includes(code ?? "");
+      if (!transientWindowsLock) {
+        throw error;
+      }
+      if (attempt === 29) {
+        // The store has already been explicitly closed and all persistence /
+        // restart assertions completed. On Windows, libsql or external file
+        // scanners can retain a temp-file handle past the test lifetime. Temp
+        // deletion is infrastructure cleanup, not the authority contract.
+        return;
+      }
+      // Bun/libsql can release the final Windows SQLite handle a little after
+      // Client.close(). Keep the retry window bounded below Bun's hook timeout.
+      await Bun.sleep(200);
+    }
+  }
+}
+
 afterEach(async () => {
   // libsql releases Windows file handles shortly after Client.close().
-  await Bun.sleep(500);
-  await Promise.all(temporaryRoots.splice(0).map((root) => rm(root, {
-    recursive: true,
-    force: true,
-    maxRetries: 20,
-    retryDelay: 100,
-  })));
-});
+  await Bun.sleep(250);
+  await Promise.all(temporaryRoots.splice(0).map(removeTemporaryRoot));
+}, { timeout: 10_000 });
 
 function sessionTree(): SessionTree {
   return {

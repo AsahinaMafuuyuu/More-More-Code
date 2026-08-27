@@ -2,7 +2,6 @@ import { isToolUIPart } from "ai";
 import {
     appendSessionEntries,
     projectSessionEntryPath,
-    projectSessionTreeMessages,
     restoreSessionTree,
     type SessionEntryInput,
     type SessionEntryMetadata,
@@ -12,9 +11,8 @@ import {
 } from "@more-more-code/harness";
 import type { Message } from "./chat-types";
 import {
-    appendDurableSessionMessages,
-    normalizeDurableMessage,
     normalizeDurableSessionData,
+    projectDurableSessionMessages,
 } from "./durable-session-message";
 
 /** The narrow authority contract required by the durable Tool-terminal seam. */
@@ -70,36 +68,6 @@ export type PersistThenExposeToolTerminalInput = {
     expose: () => void | Promise<void>;
 };
 
-function updateToolPart(
-    part: Message["parts"][number],
-    toolCallId: string,
-    presentation: DurableToolOutputPresentation,
-) {
-    if (!isToolUIPart(part) || part.toolCallId !== toolCallId) {
-        return { part, matched: false };
-    }
-
-    const cleanPart = normalizeDurableSessionData(part, "Durable Tool UI part") as Record<string, unknown>;
-    const next = presentation.state === "output-available"
-        ? (() => {
-            const { errorText: _errorText, ...withoutErrorText } = cleanPart;
-            return {
-                ...withoutErrorText,
-                state: "output-available" as const,
-                output: normalizeDurableSessionData(presentation.output, "Durable Tool output"),
-            };
-        })()
-        : (() => {
-            const { output: _output, ...withoutOutput } = cleanPart;
-            return {
-                ...withoutOutput,
-                state: "output-error" as const,
-                errorText: presentation.errorText,
-            };
-        })();
-    return { part: next as Message["parts"][number], matched: true };
-}
-
 /**
  * Returns the durable lifecycle state for one tool call on the active Session
  * branch. A pending call is intentionally not replayable: doing so could
@@ -126,10 +94,9 @@ export function inspectDurableToolCall(
 }
 
 /**
- * Appends the model-visible terminal Tool Result and its matching immutable
- * Session `message_update` to one next tree state. This deliberately reuses
- * the CLI durable-message adapter over Harness' projection/update constructor
- * instead of introducing a second message-update or cleanup policy.
+ * Appends one canonical Tool Result (and optional semantic error) without
+ * persisting a second copy into the assistant message. Terminal UI/provider
+ * state is reconstructed later by Message Projection from `tool_result`.
  */
 export function buildDurableToolTerminalState(input: Omit<
     PersistThenExposeToolTerminalInput,
@@ -139,32 +106,24 @@ export function buildDurableToolTerminalState(input: Omit<
         input.metadata ?? {},
         "Durable Tool metadata",
     ) as SessionEntryMetadata;
-    const messages = projectSessionTreeMessages(input.state);
-    let matched = false;
-    const updatedMessages = messages.map((message) => {
-        const nextParts = message.parts.map((part) => {
-            const updated = updateToolPart(part, input.toolCallId, input.presentation);
-            matched ||= updated.matched;
-            return updated.part;
-        });
-        if (!nextParts.some((part, index) => part !== message.parts[index])) {
-            return normalizeDurableMessage(message);
-        }
-        return normalizeDurableMessage({
-            ...message,
-            parts: nextParts,
-        });
-    });
-
-    if (!matched) {
-        throw new Error(`Cannot make tool result ${input.toolCallId} durable because its UI tool call is absent`);
+    const lifecycle = inspectDurableToolCall(input.state, input.toolCallId);
+    if (lifecycle.status !== "pending") {
+        throw new Error(
+            `Cannot persist tool result ${input.toolCallId}: expected one pending durable tool_call`,
+        );
+    }
+    if (lifecycle.call.toolName !== input.toolName) {
+        throw new Error(
+            `Cannot persist tool result ${input.toolCallId}: tool name ${input.toolName} does not match durable call ${lifecycle.call.toolName}`,
+        );
     }
 
-    const stateWithToolOutput = appendDurableSessionMessages(
-        input.state,
-        updatedMessages,
-        metadata,
-    );
+    const matchedToolParts = projectDurableSessionMessages(input.state)
+        .flatMap((message) => message.parts)
+        .filter((part) => isToolUIPart(part) && part.toolCallId === input.toolCallId);
+    if (matchedToolParts.length !== 1) {
+        throw new Error(`Cannot make tool result ${input.toolCallId} durable because its UI tool call is absent`);
+    }
     const terminal = {
         type: "tool_result" as const,
         toolCallId: input.toolCallId,
@@ -201,13 +160,13 @@ export function buildDurableToolTerminalState(input: Omit<
             ...metadata,
         });
     }
-    return appendSessionEntries(stateWithToolOutput, entries);
+    return appendSessionEntries(input.state, entries);
 }
 
 /**
  * Authority commit is the side-effect gate. UI/provider-facing tool output is
- * intentionally published only after the tree containing both `message_update`
- * and `tool_result` has committed. Any commit rejection reaches AgentLoop so
+ * intentionally published only after the tree containing `tool_result` has
+ * committed. Any commit rejection reaches AgentLoop so
  * it records a failed Run instead of taking a continuation model step.
  */
 export async function persistThenExposeToolTerminal(

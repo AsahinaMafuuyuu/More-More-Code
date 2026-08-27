@@ -22,11 +22,23 @@ One root-to-entry history path through a Session Entry Tree. Branches may share 
 
 ## Message Projection
 
-The conversational message history derived from a Session branch. Non-message Session Entries remain part of Session history even when they are absent from this projection.
+The conversational message history derived from a Session branch. It replays legacy `message_update` Entries for backward compatibility and joins canonical `tool_call` / `tool_result` facts into the terminal Tool state required by UI/provider consumers without mutating source Entries. Non-message Session Entries remain part of Session history even when they are absent from this projection.
+
+## Finalized Assistant Model Step
+
+One immutable durable `assistant_message` representing a completed AgentLoop Model Step. Vercel AI SDK may keep one aggregate assistant `UIMessage` and reuse its `UIMessage.id` across Tool continuation, so that runtime/UI identity is not the durable Session identity. The CLI derives the durable assistant id from `stepId` and, when AI SDK `step-start` markers are present, persists only the parts after the latest marker. A later Tool-continuation Model Step therefore appends a new assistant Entry instead of revising the earlier Tool-calling Entry.
+
+## Navigation Tree Projection
+
+The human-facing semantic navigation view derived from the canonical Session Entry Tree. It folds legacy `message_update` and default bookkeeping Entries, contracts hidden nodes without losing true branch topology, keeps ordinary single-child visible history flat, and exposes explicit canonical navigation targets for selectable rows.
+
+## ToolUse Projection
+
+A derived navigation/UI representation joining one canonical `tool_call` with its matching terminal `tool_result` by exact `toolCallId`. `ToolUse` is never persisted as a Session Entry. Terminal ToolUse navigation targets the terminal `tool_result`; unresolved calls remain explicit incomplete diagnostics and are not auto-replayed after restart.
 
 ## Durable Message Normalization
 
-The CLI-owned semantic boundary between Vercel AI SDK/UI runtime `Message` objects and durable Session history. Runtime object properties whose value is `undefined` are omitted, array `undefined` values and sparse holes become explicit `null`, and valid JSON-safe Provider metadata is preserved. Unsupported values such as non-finite numbers, bigint, functions, symbols/symbol-keyed properties, cycles, and non-plain objects remain fail-closed. Normal message sync, compaction pre-sync, durable user turns, and Tool-terminal message updates share this one policy before Harness constructs Session Entries; Harness stays provider-independent and `LocalSessionStore` remains the strict final JSON integrity validator.
+The CLI-owned semantic boundary between Vercel AI SDK/UI runtime `Message` objects and durable Session history. Runtime object properties whose value is `undefined` are omitted, array `undefined` values and sparse holes become explicit `null`, and valid JSON-safe Provider metadata is preserved. Unsupported values such as non-finite numbers, bigint, functions, symbols/symbol-keyed properties, cycles, and non-plain objects remain fail-closed. Durable user turns and finalized assistant Model Steps share this policy before Harness constructs Session Entries; Tool terminal output is sourced from canonical `tool_result` through Message Projection rather than a new message revision. Harness stays provider-independent and `LocalSessionStore` remains the strict final JSON integrity validator.
 
 ## Runtime State Projection
 

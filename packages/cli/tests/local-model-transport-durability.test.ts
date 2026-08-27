@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import {
+    appendSessionEntry,
+    createSessionTree,
     createHeuristicTokenCounter,
     type ModelContextProfile,
 } from "@more-more-code/harness";
@@ -13,6 +15,10 @@ import {
     LocalModelTransport,
     type ContextCompactionEvent,
 } from "../src/lib/local-model-transport";
+import {
+    appendFinalizedDurableAssistantStep,
+    projectDurableSessionMessages,
+} from "../src/lib/durable-session-message";
 
 const temporaryDirectories: string[] = [];
 
@@ -161,6 +167,175 @@ async function waitFor<T>(promise: Promise<T>, timeoutMs = 1_000): Promise<T> {
 }
 
 describe("LocalModelTransport compaction durability", () => {
+    test("sends exactly one matching Tool Call/Result pair after canonical Tool terminal projection", async () => {
+        await bootstrapTestEnvironment();
+        const provider = createFakeProvider();
+        const model = { providerId: "openai", modelId: "gpt-5.5" } as const;
+        let state = createSessionTree<Message>([
+            {
+                id: "tool-user",
+                role: "user",
+                parts: [{ type: "text", text: "Read the file." }],
+                metadata: { mode: "BUILD", model },
+            },
+            {
+                id: "tool-assistant",
+                role: "assistant",
+                parts: [{
+                    type: "tool-bash",
+                    toolCallId: "provider-tool-1",
+                    state: "input-available",
+                    input: { command: "type README.md" },
+                } as never],
+                metadata: { mode: "BUILD", model },
+            },
+        ]);
+        state = appendSessionEntry(state, {
+            type: "tool_call",
+            toolCallId: "provider-tool-1",
+            toolName: "bash",
+            input: { command: "type README.md" },
+        });
+        state = appendSessionEntry(state, {
+            type: "tool_result",
+            toolCallId: "provider-tool-1",
+            toolName: "bash",
+            status: "completed",
+            output: { stdout: "project contents" },
+        });
+
+        expect(state.entries.some((entry) => entry.type === "message_update")).toBe(false);
+        const projected = projectDurableSessionMessages(state);
+        const transport = new LocalModelTransport({
+            dependencies: {
+                async resolveChatModel(selectedModel) {
+                    return {
+                        model: provider,
+                        provider: "openai",
+                        providerId: selectedModel.providerId,
+                        modelId: selectedModel.modelId,
+                    };
+                },
+                resolveModelContextProfile: () => transportProfile(),
+            },
+        });
+
+        const stream = await transport.sendMessages(sendInput(projected));
+        const reader = stream.getReader();
+        while (!(await reader.read()).done) {
+            // Drain the UI stream so the fake Provider receives the compiled prompt.
+        }
+
+        expect(provider.doStreamCalls).toHaveLength(1);
+        const prompt = JSON.stringify(provider.doStreamCalls[0]?.prompt);
+        expect(prompt.match(/"type":"tool-call"/g)).toHaveLength(1);
+        expect(prompt.match(/"type":"tool-result"/g)).toHaveLength(1);
+        expect(prompt.match(/"toolCallId":"provider-tool-1"/g)).toHaveLength(2);
+        expect(prompt).toContain("project contents");
+    });
+
+    test("compiles a follow-up after two durable Model Steps from one reused AI SDK message id", async () => {
+        await bootstrapTestEnvironment();
+        const provider = createFakeProvider();
+        const model = { providerId: "openai", modelId: "gpt-5.5" } as const;
+        let state = createSessionTree<Message>([
+            {
+                id: "reuse-user",
+                role: "user",
+                parts: [{ type: "text", text: "Inspect the project." }],
+                metadata: { mode: "BUILD", model },
+            },
+        ]);
+        state = appendFinalizedDurableAssistantStep(state, {
+            id: "reused-ui-message",
+            role: "assistant",
+            parts: [
+                { type: "step-start" },
+                {
+                    type: "tool-bash",
+                    toolCallId: "reuse-tool",
+                    state: "input-available",
+                    input: { command: "type README.md" },
+                } as never,
+            ],
+            metadata: { mode: "BUILD", model },
+        }, { runId: "reuse-run", turnId: "reuse-turn-1", stepId: "reuse-step-1" });
+        state = appendSessionEntry(state, {
+            type: "tool_call",
+            toolCallId: "reuse-tool",
+            toolName: "bash",
+            input: { command: "type README.md" },
+        });
+        state = appendSessionEntry(state, {
+            type: "tool_result",
+            toolCallId: "reuse-tool",
+            toolName: "bash",
+            status: "completed",
+            output: { stdout: "README contents" },
+        });
+        state = appendFinalizedDurableAssistantStep(state, {
+            id: "reused-ui-message",
+            role: "assistant",
+            parts: [
+                { type: "step-start" },
+                {
+                    type: "tool-bash",
+                    toolCallId: "reuse-tool",
+                    state: "output-available",
+                    input: { command: "type README.md" },
+                    output: { stdout: "README contents" },
+                } as never,
+                { type: "step-start" },
+                { type: "text", text: "The project inspection is complete.", state: "done" },
+            ],
+            metadata: { mode: "BUILD", model },
+        }, { runId: "reuse-run", turnId: "reuse-turn-2", stepId: "reuse-step-2" });
+        state = appendSessionEntry(state, {
+            type: "user_message",
+            messageId: "reuse-follow-up",
+            message: {
+                id: "reuse-follow-up",
+                role: "user",
+                parts: [{ type: "text", text: "What changed?" }],
+                metadata: { mode: "BUILD", model },
+            },
+        });
+
+        const projected = projectDurableSessionMessages(state);
+        expect(projected.map((message) => message.id)).toEqual([
+            "reuse-user",
+            "assistant-step:reuse-step-1",
+            "assistant-step:reuse-step-2",
+            "reuse-follow-up",
+        ]);
+
+        const transport = new LocalModelTransport({
+            dependencies: {
+                async resolveChatModel(selectedModel) {
+                    return {
+                        model: provider,
+                        provider: "openai",
+                        providerId: selectedModel.providerId,
+                        modelId: selectedModel.modelId,
+                    };
+                },
+                resolveModelContextProfile: () => transportProfile(),
+            },
+        });
+        const stream = await transport.sendMessages(sendInput(projected));
+        const reader = stream.getReader();
+        while (!(await reader.read()).done) {
+            // Drain the stream so the fake Provider records the compiled prompt.
+        }
+
+        const prompt = JSON.stringify(provider.doStreamCalls[0]?.prompt);
+        expect(prompt.match(/"type":"tool-call"/g)).toHaveLength(1);
+        expect(prompt.match(/"type":"tool-result"/g)).toHaveLength(1);
+        expect(prompt).toContain("README contents");
+        expect(prompt).toContain("The project inspection is complete.");
+        expect(prompt).toContain("What changed?");
+    });
+
     test("does not expose the provider stream until the fake Session authority commits the automatic checkpoint", async () => {
         await bootstrapTestEnvironment();
         const provider = createFakeProvider();

@@ -19,7 +19,7 @@
 - ⚡ **流式响应** — 本地 Provider streaming，支持思维链（reasoning）展示
 - ⌨️ **命令菜单** — 输入 `/` 快速切换模型、模式、主题、浏览历史会话
 
-> **当前架构（ADR-0023、ADR-0024）：** Stage 6.4 Provider Runtime 与 Stage 6.5 Local Session Authority 已交付。CLI 的 Session、Provider 配置/凭证、Harness Context、cache/checkpoint、Model/Tool Runtime 均在本地运行；创建、列出、打开、继续和重启恢复不需要 Server、账户、`API_URL`、Cloudflare Worker 或 Railway。Stage 6.6 云同步/商业账户暂时暂停，Server/database 仅保留为 dormant future-cloud 代码。
+> **当前架构（ADR-0023、ADR-0024、ADR-0026）：** Stage 6.4 Provider Runtime、Stage 6.5 Local Session Authority，以及 Stage 6.5 semantic navigation/finalized-message follow-up 均已交付。CLI 的 Session、Provider 配置/凭证、Harness Context、cache/checkpoint、Model/Tool Runtime 均在本地运行；新 assistant 历史按 AgentLoop Model Step 持久化，不再为正常 Tool completion 新写 `message_update`，`/tree` 使用 semantic Navigation Projection 与 derived ToolUse。创建、列出、打开、继续和重启恢复不需要 Server、账户、`API_URL`、Cloudflare Worker 或 Railway。Stage 6.6 云同步/商业账户暂时暂停，Server/database 仅保留为 dormant future-cloud 代码。
 
 ---
 
@@ -213,7 +213,7 @@ bun dev:cli
 | `/agents` | 切换工作模式（PLAN / BUILD） |
 | `/models` | 选择 AI 模型 |
 | `/sessions` | 浏览历史会话 |
-| `/tree` | 浏览当前 Session Entry Tree；跨分支且会丢失语义知识时按策略询问是否 Carry |
+| `/tree` | 浏览当前 Session 的 semantic Navigation Tree Projection；隐藏 legacy update/bookkeeping，Tool Call/Result 合并为 ToolUse，跨分支时复用 Carry 策略 |
 | `/jump` | 打开 Session Entry 跳转器，复用与 `/tree` 相同的 Branch Summary 决策 |
 | `/parent` | 跳转到父 Entry；需要时执行同一套 Carry / No Carry / Cancel 流程 |
 | `/root` | 跳转到 `session_start` 根 Entry；需要时执行同一套 Branch Summary 流程 |
@@ -378,7 +378,7 @@ Tools 通过 Tool Registry 按来源区分为 **native** 与 **MCP extension sou
 
 本地 `packages/session-store` 是当前 Session semantic authority，默认数据库为 `~/.more-more-code/sessions/sessions.db`，也可用 `LOCAL_SESSION_STORE_DATABASE_URL` 指定绝对 `file:` URL。它保存 Session 元数据、root/active Entry identity、append-only **Session Entry Tree v3**、稳定序列、版本化 migrations，并以事务和幂等约束保护 topology。`create`、`load/open`、`list`、`commit`、`archive` 都在本地完成；Session 在提交成功前不会暴露给 UI，也不会触发 Provider 或 Tool 副作用。
 
-Session state 直接保存 `entries[]`，每个 durable semantic event 自身就是带 `id / parentId / type` 的树节点，不再使用 v2 的 checkpoint `nodes[] + eventIds[] + events[]` 双层结构。消息只是 Session Entry 的一个子集；tool call/result、error、model/mode/config change、compaction、branch summary 与 custom event 也可以被持久化。显式导入 legacy linear/v1/v2/v3 快照的事务性/idempotent 命令尚未实现，但不阻断新建本地 Session；该 follow-up 不会在启动时抓取云端状态。
+Session state 直接保存 `entries[]`，每个 durable semantic event 自身就是带 `id / parentId / type` 的树节点，不再使用 v2 的 checkpoint `nodes[] + eventIds[] + events[]` 双层结构。消息只是 Session Entry 的一个子集；tool call/result、error、model/mode/config change、compaction、branch summary 与 custom event 也可以被持久化。新 assistant execution 以 AgentLoop `stepId` 作为 durable identity 来源：AI SDK 可跨 Tool continuation 复用同一个聚合 `UIMessage.id`，CLI 会按最后一个 `step-start` 边界只保存当前 Model Step 的 parts，因此不会把合法 continuation 误判成对旧 assistant Entry 的修改。显式导入 legacy linear/v1/v2/v3 快照的事务性/idempotent 命令尚未实现，但不阻断新建本地 Session；该 follow-up 不会在启动时抓取云端状态。
 
 Harness 另有独立的 Run / Turn / Step `ExecutionEventStore`：AgentLoop 将执行事实记录为 append-only execution events，并通过 replay 投影出当前 `AgentRun`。Turn 的语义是“一次 Model response + 该 response 触发的 Tool executions”；工具结果继续调用模型时会开启新的 `tool-continuation` Turn。Harness 还提供 awaited lifecycle stream、`waitForIdle()`、steering/follow-up 队列与 Step progress。
 
@@ -390,7 +390,7 @@ Harness 的纯派生 `projectSecurityAuditTimeline(sessionId, events)` 会从 se
 
 ### 会话恢复与分支
 
-Session Entry Tree 中每个 Entry 都是一个可恢复的语义历史点。CLI 沿 `session_start → activeEntry` 路径分别投影 Message History 与 Runtime State；从旧 Entry 继续执行会创建新的 child branch，并保留 sibling branch。普通 `/tree` / `/jump` / `/parent` / `/root` 浏览本身不会创建 Entry。若目标路径会丢失 source-only 语义知识，统一导航控制器依据 `session.branchSummaryOnJump` 决定 `ask | always | never`：Carry 先跳到目标，再追加一个带精确 coverage/provenance 的 `branch_summary` child；No Carry 只改变导航状态；Cancel 保持原 source active。历史 message 更新通过不可变 `message_update` Entry 表达，不修改旧 Entry。Legacy linear/v1/v2/v3 的显式事务性导入尚未交付；现有内存恢复/规范化能力不应被误解为已完成的本地迁移命令。
+Session Entry Tree 中每个 Entry 都是一个可恢复的语义历史点。CLI 沿 `session_start → activeEntry` 路径分别投影 Message History、Navigation Tree 与 Runtime State；从旧 Entry 继续执行会创建新的 child branch，并保留 sibling branch。普通 `/tree` / `/jump` / `/parent` / `/root` 浏览本身不会创建 Entry。若目标路径会丢失 source-only 语义知识，统一导航控制器依据 `session.branchSummaryOnJump` 决定 `ask | always | never`：Carry 先跳到目标，再追加一个带精确 coverage/provenance 的 `branch_summary` child；No Carry 只改变导航状态；Cancel 保持原 source active。历史 v3 Session 中已有的不可变 `message_update` Entry 仍会在 Message Projection 中兼容 replay，但新 normal execution 不再写它；Tool terminal truth 由 canonical `tool_result` 投影回 UI/Provider，`/tree` 则始终折叠 legacy update。Legacy linear/v1/v2/v3 的显式事务性导入尚未交付；现有内存恢复/规范化能力不应被误解为已完成的本地迁移命令。
 
 模型调用前会使用 `ModelContextProfile` 做预算，并先按 **core prompt → global instructions → project instructions → skill catalog → tool definitions → persisted checkpoint → history → retained tail → runtime continuation → current input** 的稳定→动态顺序建立 canonical Context。Active-path `branch_summary` 作为独立 historical Context record 参与这条顺序，不伪装成 UI chat Message；它的最大生成预算为 **min(4096 tokens, 有效输入预算 4%)**，源 delta 中的大 Tool Result 会先复用 Tool Result Working Set 裁剪。Skill/tool 集合使用确定性排序，PLAN/BUILD 分别生成 `ToolSetFingerprint` 与 `PromptPrefixFingerprint`。在历史 Compaction 之前，CLI 会先建立 **Tool Result Working Set**：完整 `tool_result` 仍保存在 append-only Session Tree 中，只有 model-facing clone 会按 `full / truncated / summary / reference` 做投影；fresh 结果优先保持完整，warm/cold 结果在预算压力下按 shell、test/build、search/grep、file-read、generic 策略裁剪，并保留 durable Session Entry reference。默认 Tool Working Set / 单结果 full threshold / reference target 分别占有效输入预算的 **25% / 6% / 0.6%**。最近 Turn 作为 retained tail 原子保留；Compaction 默认按有效输入预算的 **80% soft limit / 92% hard limit / 70% post-compaction target** 主动回收旧历史，而不是等到 provider 已经装不下。Cut point 只发生在完整 Context group/Turn 边界。CLI 在真正创建 checkpoint 时使用 LLM semantic reducer，把 `compactN + 新被压缩历史` 归约为包含 Current Goal / Current State / Decisions / Constraints / Artifacts / Failures and Lessons / Pending Work 的完整 replacement snapshot；若 reducer/provider 失败则回退到 bounded deterministic compactor。`/compact` 使用同一条 pipeline 并记录 `trigger=manual`，但它是“立即尝试压缩”而不是无条件 force：默认要求可压缩历史至少为 **max(2048 tokens, 输入预算 3%)**；已有 checkpoint 时至少新增 **2 个完整 Turn**；保守预计至少节省 **max(1024 tokens, 输入预算 2%)** 且达到 replacement source 的 **30%**。重复压缩判断基于 checkpoint 后的 Session 增量而不是时间 cooldown，并会排除上次 checkpoint 已 retained 的 record IDs；不满足条件时返回 `insufficient-history / recent-compaction / insufficient-gain` 等 typed no-op，不会调用 semantic reducer。真正执行时仍不绕过 retained/required records、原子 cut point、branch-local checkpoint 与 append-only persistence。生成的 `compaction` Entry 会额外记录 trigger、before/after token diagnostics、compacted-through 与 retained IDs；generic record coverage 可记录被吸收的 Branch Summary，从而在 checkpoint reuse 后避免重复注入。后续 Model Step 直接复用 active branch 最近 checkpoint，不会每一步重复生成等价 summary；旧 compaction、Branch Summary 与源 Session Entries 仍完整保留在 append-only Session Tree 中。OpenAI 模型显式走 `openai.responses(...)`，`OpenAIResponsesAdapter` 从 prefix fingerprint 派生 `promptCacheKey`，Vercel AI SDK 继续负责 streaming、tool integration 与 UI message normalization；`previous_response_id` 不作为 MORE-MORE-CODE Session authority。当前 provider token counter 仍是显式标记为 `estimated` 的适配器，Harness 已保留 exact tokenizer adapter 接口。
 

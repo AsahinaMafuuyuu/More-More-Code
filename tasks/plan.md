@@ -1828,6 +1828,220 @@ The accepted design is defined by ADR-0025 and `docs/DURABLE-MESSAGE-NORMALIZATI
 
 ---
 
+# Stage 6.5 Follow-up — Finalized Message Persistence & Semantic Navigation Projection
+
+**Status:** Delivered — 2026-08-27. Implementation, compatibility verification, semantic `/tree` integration, and the AI SDK reused-`UIMessage.id` Tool-continuation regression are complete.
+
+**Design:** `docs/SESSION-NAVIGATION-PROJECTION-DESIGN.md`
+
+**Test contract:** `docs/SESSION-NAVIGATION-PROJECTION-TEST.md`
+
+**Delivery contract:** `docs/SESSION-NAVIGATION-PROJECTION-DELIVERY.md`
+
+**Decision:** ADR-0026.
+
+## Overview
+
+Retire new `message_update` writes from normal Session execution while preserving legacy update-bearing Sessions. Keep `tool_call` and `tool_result` as separate durable semantic facts, derive one ToolUse presentation from them, and move `/tree` from raw Entry rendering to a semantic Navigation Tree Projection. Ordinary visible history remains flat; nested tree structure appears only at real visible branches.
+
+This is a bounded Stage 6.5 Session-semantics follow-up. It does not include Usage/Context Window observability, Provider pricing/model-capability changes, cloud sync, Runtime Store redesign, parallel Tool execution, or a database migration.
+
+## Architecture Decisions
+
+- Streaming deltas are runtime/UI state; each completed AgentLoop Model Step becomes one durable `assistant_message` whose identity is derived from `stepId`, not aggregate AI SDK `UIMessage.id`.
+- AI SDK Tool continuation may reuse one assistant `UIMessage.id`; only the current `step-start` segment is persisted for each durable Model Step.
+- Existing canonical Entries remain immutable; removing `message_update` does not permit in-place rewrites.
+- Historical `message_update` remains legacy-readable but is always folded from Navigation Projection and must not be newly written by normal flows.
+- `tool_call` commits before external Tool execution; `tool_result` commits before dependent Provider continuation.
+- Tool terminal state is reconstructed by Message/UI Projection from canonical Tool facts rather than persisted again through a message revision.
+- `ToolUse` is a derived projection type, never a new Session Entry.
+- Terminal ToolUse navigation resolves to the terminal canonical `tool_result` Entry.
+- `/tree` consumes a semantic Navigation Tree Projection. Hidden Entries are topology-transparent, single-child visible chains stay flat, and only multiple visible children create nested branches.
+- Existing Branch Summary Carry/No Carry/Cancel navigation semantics remain the mutation controller after a projected row resolves to its canonical target.
+
+## Dependency Graph
+
+```text
+Pure legacy-aware Message/Navigation projection
+    -> ToolUse call/result pairing + terminal target
+        -> finalized assistant one-time persistence
+            -> Tool terminal projection without message_update
+                -> provider continuation regression
+                    -> /tree integration
+                        -> restart/legacy/branch/compaction verification
+```
+
+## Phase 1: Projection Foundation
+
+### Task 1: Add Red regressions and pure Navigation Tree Projection
+
+**Description:** First capture the current unwanted behavior, then add a pure projection seam that folds internal/legacy Entries while preserving canonical branch targets. Do not change new-write persistence behavior in this task.
+
+**Acceptance criteria:**
+- [x] A pre-change regression proves raw navigation exposes `message_update` as a node.
+- [x] Projection hides `message_update` and default bookkeeping rows without mutating the Session Tree.
+- [x] Hidden-node contraction preserves real branches and does not invent a false chain.
+- [x] Single-child visible chains expose structural metadata sufficient for flat rendering.
+
+**Verification:** focused Session Tree/navigation projection tests from the first sections of `SESSION-NAVIGATION-PROJECTION-TEST.md`.
+
+**Dependencies:** None.
+
+**Files likely touched:**
+- `packages/harness/src/session-tree.ts` and tests, or an explicitly justified CLI projection module;
+- new focused navigation projection tests.
+
+**Estimated scope:** Medium.
+
+### Task 2: Add ToolUse projection and terminal navigation anchors
+
+**Description:** Pair canonical `tool_call` and `tool_result` facts by `toolCallId` and expose one derived ToolUse row without changing canonical persistence.
+
+**Acceptance criteria:**
+- [x] One call/result pair produces exactly one ToolUse projection row.
+- [x] Terminal status/output/error comes from `tool_result`.
+- [x] Completed/failed terminal ToolUse targets the terminal `tool_result` Entry.
+- [x] Incomplete/orphan/duplicate Tool facts follow the explicit fail-closed diagnostics in the test contract.
+
+**Verification:** ToolUse status matrix, incomplete request, orphan/duplicate integrity tests.
+
+**Dependencies:** Task 1.
+
+**Estimated scope:** Medium.
+
+## Checkpoint: Projection Contracts
+
+- Navigation projection is deterministic and non-mutating.
+- ToolUse is derived only; no new persistent Entry kind exists.
+- Legacy `message_update` is still loadable and projectable.
+- No production new-write behavior has changed before these pure contracts are green.
+
+## Phase 2: Finalized Message & Tool Persistence
+
+### Task 3: Persist finalized assistant messages once
+
+**Description:** Refactor the normal model-message synchronization boundary so Provider streaming remains runtime/UI state and each completed AgentLoop Model Step appends one normalized durable `assistant_message`. Durable identity is step-scoped; aggregate AI SDK assistant message identity is not persisted as the semantic identity.
+
+**Acceptance criteria:**
+- [x] Multiple stream/UI updates produce one durable assistant Entry for the completed Model Step after finalization.
+- [x] Tool continuation reusing one AI SDK `UIMessage.id` produces distinct `stepId`-scoped durable assistant Entries and persists only the current `step-start` segment.
+- [x] New normal model flow appends no `message_update`.
+- [x] Final text/reasoning/tool-call parts survive durable normalization and local commit.
+- [x] Existing persisted Entries are never edited in place; incompatible re-finalization of one durable `stepId` fails closed.
+
+**Verification:** fake streaming Provider regression plus durable-message normalization/persistence tests.
+
+**Dependencies:** Tasks 1-2.
+
+**Estimated scope:** Medium.
+
+### Task 4: Remove Tool terminal message write-back and deepen Message Projection
+
+**Description:** Stop appending a Tool-completion `message_update`. Reconstruct terminal Tool state from canonical Tool Result facts for UI and provider-facing message compilation.
+
+**Acceptance criteria:**
+- [x] Canonical normal Tool sequence is `assistant_message -> tool_call -> tool_result` with no new `message_update`.
+- [x] `tool_call` still commits before `ToolRuntime.run()`.
+- [x] `tool_result` still commits before dependent Provider continuation.
+- [x] Message Projection derives terminal Tool state without mutating source Entries.
+
+**Verification:** `local-session-tool-durability` Red/Green regression and projection purity tests.
+
+**Dependencies:** Task 3.
+
+**Estimated scope:** Medium.
+
+### Task 5: Prove Provider Tool continuation without message updates
+
+**Description:** Use a fake Provider + Tool integration path to prove the next Model Step still receives a valid Tool Call/Result conversation after the durable message-update write-back is removed.
+
+**Acceptance criteria:**
+- [x] Matching Tool Call/Result reaches the next model input exactly once.
+- [x] No Tool result is lost or duplicated.
+- [x] A later follow-up after two durable Model Steps sourced from one reused AI SDK `UIMessage.id` compiles valid Provider input.
+- [x] Projection inconsistency fails closed instead of silently dropping Tool state.
+- [x] Existing Tool Result Working Set/source identity remains valid.
+
+**Verification:** mandatory fake-Provider continuation integration regression.
+
+**Dependencies:** Task 4.
+
+**Estimated scope:** Small/Medium.
+
+## Checkpoint: Durable Execution
+
+- Zero newly-written normal `message_update` Entries.
+- Request-before-side-effect and terminal-before-continuation ordering remains verified.
+- Provider continuation remains valid.
+- Local Session Store schema and strict JSON policy remain unchanged.
+
+## Phase 3: `/tree`, Compatibility & Delivery
+
+### Task 6: Integrate Navigation Projection into `/tree`
+
+**Description:** Replace raw Entry rows with projected semantic rows while keeping existing navigation/Branch Summary behavior behind canonical Entry targets.
+
+**Acceptance criteria:**
+- [x] Default `/tree` shows user/assistant/ToolUse and approved semantic landmarks, not legacy update/bookkeeping rows.
+- [x] Ordinary single-child history is visually flat.
+- [x] True branches introduce nested connectors/indentation only at the branch point.
+- [x] Selecting a row resolves to the intended canonical target before existing Carry/No Carry/Cancel logic runs.
+
+**Verification:** pure structure tests plus focused `/tree` component/command behavior tests.
+
+**Dependencies:** Tasks 1-5.
+
+**Estimated scope:** Medium.
+
+### Task 7: Verify legacy restart, branch, compaction and incomplete Tool recovery
+
+**Description:** Prove old update-bearing local Sessions remain compatible and the new projection semantics do not disturb established Session/Context mechanisms.
+
+**Acceptance criteria:**
+- [x] Existing v3 `message_update` history loads and reconstructs the same effective messages.
+- [x] Continuing an old Session writes only the new finalized-message style.
+- [x] ToolUse branch navigation restores terminal result state and preserves sibling branches.
+- [x] Compaction, Branch Summary and Tool Result Working Set regressions remain green.
+- [x] An incomplete historical Tool request is not automatically replayed.
+
+**Verification:** restart/continue, branch navigation, compaction and Tool durability suites from the test contract.
+
+**Dependencies:** Task 6.
+
+**Estimated scope:** Medium.
+
+### Task 8: Complete full verification and delivered-state documentation
+
+**Description:** Run the repository-required verification matrix, perform final architecture review against ADR-0026, then update current-state docs from planned to delivered only if all gates pass.
+
+**Acceptance criteria:**
+- [x] Focused and relevant Harness/CLI/Session Store suites pass: CLI 171/171, Harness 99/99, Local Session Store 11/11.
+- [x] Required TypeScript checks/builds and `git diff --check` pass.
+- [x] No Session/Runtime Store schema migration or unrelated feature scope was introduced.
+- [x] README/CONTEXT/PROJECT_ANALYSIS/CHANGELOG and delivery status are updated only after verified implementation.
+- [x] Pre-existing unrelated `AGENTS.md` change is preserved outside the implementation commit.
+
+**Verification:** full matrix defined by `docs/SESSION-NAVIGATION-PROJECTION-TEST.md` plus repository instructions.
+
+**Dependencies:** Tasks 1-7.
+
+**Estimated scope:** Small.
+
+## Explicitly Deferred / Out of Scope
+
+- Usage/token-cost and Context Window observability;
+- Model capability/pricing catalog redesign;
+- cloud Session sync / entitlements;
+- physical deletion or migration of historical `message_update` rows;
+- Session/Runtime Store schema redesign;
+- persisted partial-stream recovery;
+- parallel Tool execution and completion-order semantics;
+- MCP / new Provider or Tool protocols;
+- Windows Sandbox work;
+- unrelated UI redesign.
+
+---
+
 # Stage 6.6 — Cloud Session Sync & Commercial Entitlements
 
 **Status:** Paused — Stage 6.5 is delivered; requires explicit product re-approval before cloud sync or commercial-account work resumes.

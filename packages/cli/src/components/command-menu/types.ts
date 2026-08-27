@@ -11,6 +11,8 @@ export type SessionTreeCommandEntry = {
     createdAt: number;
     messageCount: number;
     preview: string;
+    navigationTargetEntryId: string;
+    selectable: boolean;
     active: boolean;
 };
 

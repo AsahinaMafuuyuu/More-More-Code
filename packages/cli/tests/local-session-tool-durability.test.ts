@@ -5,9 +5,9 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   AgentLoop,
+  appendSessionEntry,
   createSessionTree,
   appendSessionTreeMessages,
-  projectSessionTreeMessages,
   restoreSessionTree,
   type SessionTreeState,
 } from "@more-more-code/harness";
@@ -19,6 +19,7 @@ import {
   inspectDurableToolCall,
   persistThenExposeToolTerminal,
 } from "../src/lib/durable-tool-terminal";
+import { projectDurableSessionMessages } from "../src/lib/durable-session-message";
 
 const temporaryRoots: string[] = [];
 
@@ -44,7 +45,7 @@ function deferred<T>() {
 }
 
 function toolCallState(): SessionTreeState<Message> {
-  return createSessionTree<Message>([
+  const state = createSessionTree<Message>([
     {
       id: "assistant-tool-message",
       role: "assistant",
@@ -56,6 +57,12 @@ function toolCallState(): SessionTreeState<Message> {
       } as never],
     },
   ]);
+  return appendSessionEntry(state, {
+    type: "tool_call",
+    toolCallId: "tool-call-1",
+    toolName: "bash",
+    input: { command: "echo durable" },
+  });
 }
 
 function containsUndefined(value: unknown): boolean {
@@ -109,7 +116,19 @@ describe("durable local tool terminals", () => {
         id: "sqlite-tool-session",
         title: "Durable SQLite Tool Session",
       });
-      const withToolInputs = appendSessionTreeMessages(created.state, [twoToolCallMessage()]);
+      let withToolInputs = appendSessionTreeMessages(created.state, [twoToolCallMessage()]);
+      withToolInputs = appendSessionEntry(withToolInputs, {
+        type: "tool_call",
+        toolCallId: "sqlite-success-tool",
+        toolName: "bash",
+        input: { command: "echo success" },
+      });
+      withToolInputs = appendSessionEntry(withToolInputs, {
+        type: "tool_call",
+        toolCallId: "sqlite-failed-tool",
+        toolName: "bash",
+        input: { command: "echo failure" },
+      });
       await authority.commit({
         sessionId: "sqlite-tool-session",
         state: withToolInputs,
@@ -131,10 +150,8 @@ describe("durable local tool terminals", () => {
         metadata: { runId: "sqlite-run", turnId: undefined, stepId: "sqlite-step" },
         async expose() {},
       });
-      expect(success.entries.slice(-2).map((entry) => entry.type)).toEqual([
-        "message_update",
-        "tool_result",
-      ]);
+      expect(success.entries.at(-1)?.type).toBe("tool_result");
+      expect(success.entries.some((entry) => entry.type === "message_update")).toBe(false);
       expect(containsUndefined(success)).toBe(false);
 
       const failed = await persistThenExposeToolTerminal({
@@ -157,11 +174,11 @@ describe("durable local tool terminals", () => {
         },
         async expose() {},
       });
-      expect(failed.entries.slice(-3).map((entry) => entry.type)).toEqual([
-        "message_update",
+      expect(failed.entries.slice(-2).map((entry) => entry.type)).toEqual([
         "tool_result",
         "error",
       ]);
+      expect(failed.entries.some((entry) => entry.type === "message_update")).toBe(false);
       expect(containsUndefined(failed)).toBe(false);
       const errorEntry = failed.entries.at(-1)!;
       expect(errorEntry.type).toBe("error");
@@ -184,7 +201,7 @@ describe("durable local tool terminals", () => {
       expect(reopened?.state).toEqual(failed);
       expect(containsUndefined(reopened?.state)).toBe(false);
 
-      const [message] = projectSessionTreeMessages(reopened!.state);
+      const [message] = projectDurableSessionMessages(reopened!.state);
       expect(message).toMatchObject({ id: "assistant-two-tool-calls" });
       const successPart = message!.parts.find((part) => (
         "toolCallId" in part && part.toolCallId === "sqlite-success-tool"
@@ -264,17 +281,15 @@ describe("durable local tool terminals", () => {
     await Promise.resolve();
     expect(exposed).toBe(0);
     expect(commits).toHaveLength(1);
-    expect(commits[0]!.entries.slice(-2).map((entry) => entry.type)).toEqual([
-      "message_update",
-      "tool_result",
-    ]);
+    expect(commits[0]!.entries.at(-1)?.type).toBe("tool_result");
+    expect(commits[0]!.entries.some((entry) => entry.type === "message_update")).toBe(false);
 
     commit.resolve({ state: commits[0]! });
     const committed = await terminal;
     expect(exposed).toBe(1);
 
     const reopened = restoreSessionTree<Message>(committed);
-    const message = projectSessionTreeMessages(reopened)[0]!;
+    const message = projectDurableSessionMessages(reopened)[0]!;
     expect(message.parts[0]).toMatchObject({
       toolCallId: "tool-call-1",
       state: "output-available",
@@ -336,7 +351,7 @@ describe("durable local tool terminals", () => {
     expect(run.error).toContain("local authority commit rejected");
     expect(modelSteps).toBe(1);
     expect(toolExposures).toBe(0);
-    expect(inspectDurableToolCall(state, "tool-call-1")).toEqual({ status: "none" });
+    expect(inspectDurableToolCall(state, "tool-call-1")).toMatchObject({ status: "pending" });
   });
 
   test("a deferred terminal commit prevents AgentLoop from sending the continuation model request", async () => {

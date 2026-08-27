@@ -20,7 +20,6 @@ import {
     projectLatestSessionCompaction,
     projectSessionEntryPath,
     projectSessionRuntimeState,
-    projectSessionTreeMessages,
     restoreSessionTree,
     type AgentInteraction,
     type AgentRun,
@@ -60,7 +59,10 @@ import {
     persistThenExposeToolTerminal,
     type PersistThenExposeToolTerminalInput,
 } from "../lib/durable-tool-terminal";
-import { appendDurableSessionMessages } from "../lib/durable-session-message";
+import {
+    appendFinalizedDurableAssistantStep,
+    projectDurableSessionMessages,
+} from "../lib/durable-session-message";
 import { getCliRunLifecycle } from "../lib/run-lifecycle";
 
 export type { Message } from "../lib/chat-types";
@@ -351,7 +353,7 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
     const activeModelStepMetadataRef = useRef<SessionEntryMetadata>({});
     const contextCompactionHandlerRef = useRef<((event: ContextCompactionEvent) => Promise<void>) | null>(null);
     const latestMessagesRef = useRef<Message[]>(
-        cloneMessages(projectSessionTreeMessages(sessionTree)),
+        cloneMessages(projectDurableSessionMessages(sessionTree)),
     );
 
     useEffect(() => {
@@ -575,14 +577,6 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         return transitionTree((state) => appendSessionEntry(state, input));
     }, [transitionTree]);
 
-    const syncMessagesToTree = useCallback(async (metadata: SessionEntryMetadata = {}) => {
-        await transitionTree((state) => appendDurableSessionMessages(
-            state,
-            latestMessagesRef.current,
-            metadata,
-        ));
-    }, [transitionTree]);
-
     const persistToolTerminal = useCallback(async (
         input: Omit<
             PersistThenExposeToolTerminalInput,
@@ -597,24 +591,17 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         state: sessionTreeRef.current,
         onCommitted(committedState) {
             applyTreeState(committedState);
-            latestMessagesRef.current = cloneMessages(projectSessionTreeMessages(committedState));
+            latestMessagesRef.current = cloneMessages(projectDurableSessionMessages(committedState));
         },
     })), [applyTreeState, localSessionAuthority, queueTreeWrite, sessionId]);
 
     contextCompactionHandlerRef.current = async (event) => {
         const metadata = activeModelStepMetadataRef.current;
         try {
-            // The history sync and its checkpoint form one semantic Session
-            // Tree transition. Applying it through one authority commit means
-            // neither the UI nor the next provider request can observe a
-            // checkpoint whose source history was not persisted with it.
-            await transitionTree((state) => appendSessionEntry(
-                appendDurableSessionMessages(
-                    state,
-                    latestMessagesRef.current,
-                    metadata,
-                ),
-                {
+            // Streaming/provider deltas are not semantic Session history. By
+            // the time compaction runs, durable completed history is already
+            // represented by finalized messages and canonical Tool facts.
+            await transitionTree((state) => appendSessionEntry(state, {
                     type: "compaction",
                     summary: event.summary,
                     tokensBefore: event.tokensBefore,
@@ -635,8 +622,7 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
                     compactedRecordIds: event.compactedRecordIds,
                     retainedTailRecordIds: event.retainedTailRecordIds,
                     ...metadata,
-                },
-            ));
+                }));
         } catch (error) {
             setRuntimeError(toError(error));
             throw error;
@@ -722,7 +708,7 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         }
 
         const committedTree = await commitTree(nextTree);
-        const messages = cloneMessages(projectSessionTreeMessages(committedTree));
+        const messages = cloneMessages(projectDurableSessionMessages(committedTree));
         const runtime = projectSessionRuntimeState(committedTree);
 
         latestMessagesRef.current = messages;
@@ -835,7 +821,7 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
     }, [approvalBroker]);
 
     const syncChatMessagesFromTree = useCallback((state = sessionTreeRef.current) => {
-        const messages = cloneMessages(projectSessionTreeMessages(state));
+        const messages = cloneMessages(projectDurableSessionMessages(state));
         latestMessagesRef.current = messages;
         chat.setMessages(messages);
     }, [chat]);
@@ -894,12 +880,20 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
                         // continuing, steering, and restart state share one path.
                         if (prompt) syncChatMessagesFromTree();
                         const responseMessage = await runModelRequest(() => chat.sendMessage());
-                        await syncMessagesToTree(metadata);
+                        const committedTree = await transitionTree((state) => (
+                            appendFinalizedDurableAssistantStep(
+                                state,
+                                responseMessage,
+                                metadata,
+                            )
+                        ));
+                        const durableMessages = cloneMessages(projectDurableSessionMessages(committedTree));
+                        latestMessagesRef.current = durableMessages;
+                        chat.setMessages(durableMessages);
                         return {
                             toolCalls: getPendingToolCalls(responseMessage),
                         };
                     } catch (error) {
-                        await syncMessagesToTree(metadata);
                         const resolved = toError(error);
                         await appendEntry({
                             type: "error",
@@ -928,9 +922,9 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
                     );
                     if (durableToolCall.status === "terminal") {
                         // A restart/recovery path may encounter the same model
-                        // tool call again. Its durable terminal already carries
-                        // the corresponding message_update, so restore that
-                        // output instead of repeating an external side effect.
+                        // tool call again. Its canonical tool_result is enough
+                        // to restore terminal output through Message Projection
+                        // instead of repeating an external side effect.
                         syncChatMessagesFromTree();
                         return;
                     }
@@ -1077,10 +1071,6 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
             },
         });
 
-        await syncMessagesToTree({
-            runId: completedRun.id,
-            inputMessageId: input.inputMessageId,
-        });
         if (completedRun.status === "failed" && completedRun.error) {
             await appendEntry({
                 type: "error",
@@ -1102,7 +1092,7 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         sessionId,
         stopModelStep,
         syncChatMessagesFromTree,
-        syncMessagesToTree,
+        transitionTree,
     ]);
 
     const queueDurableInteraction = useCallback((input: {
