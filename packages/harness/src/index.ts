@@ -198,6 +198,11 @@ export type {
   RuntimeSecurityEventPayloadV1,
   RuntimeSecurityEventPayloadV2,
   RuntimeSecurityEventPayloadV3,
+  RuntimeUsageEventPayload,
+  RuntimeUsageInputTokens,
+  RuntimeUsageOutputTokens,
+  RuntimePricingSnapshot,
+  RuntimeModelStepCost,
   RuntimeSnapshot,
   RuntimeSnapshotInput,
   RuntimeSnapshotStore,
@@ -206,6 +211,17 @@ export type {
   RuntimeToolEventPayload,
   RuntimeToolStatus,
 } from "./event-store";
+export {
+  createRuntimeUsageProjection,
+  isRuntimeUsageProjection,
+  projectSessionUsage,
+  reduceRuntimeUsageProjection,
+} from "./runtime-usage";
+export type {
+  RuntimeUsageProjection,
+  SessionUsageSummary,
+  UsageCoverage,
+} from "./runtime-usage";
 export { projectSecurityAuditTimeline } from "./security-audit";
 export type {
   ApprovalAuditEntry,

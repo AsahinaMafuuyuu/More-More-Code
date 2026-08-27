@@ -56,6 +56,11 @@ export type DefaultModelRecovery = {
 
 let currentEnvironment: AgentEnvironment | null = null;
 let bootstrapOptions: AgentBootstrapOptions = {};
+const environmentSubscribers = new Set<(environment: AgentEnvironment) => void>();
+
+function publishAgentEnvironment(environment: AgentEnvironment) {
+    for (const subscriber of environmentSubscribers) subscriber(environment);
+}
 
 // ProviderRegistry is deliberately a low-level file adapter. All CLI-owned
 // provider/default mutations go through this AgentEnvironment queue so a later
@@ -253,6 +258,7 @@ export async function bootstrapAgentEnvironment(
 ) {
     bootstrapOptions = { ...options };
     currentEnvironment = await loadAgentEnvironment(options);
+    publishAgentEnvironment(currentEnvironment);
     return currentEnvironment;
 }
 
@@ -265,7 +271,19 @@ export function getAgentEnvironment() {
 
 export async function reloadAgentEnvironment() {
     currentEnvironment = await loadAgentEnvironment(bootstrapOptions);
+    publishAgentEnvironment(currentEnvironment);
     return currentEnvironment;
+}
+
+/** Subscribe to hot Agent source/ToolSet replacements without polling renders. */
+export function subscribeAgentEnvironment(
+    subscriber: (environment: AgentEnvironment) => void,
+) {
+    environmentSubscribers.add(subscriber);
+    if (currentEnvironment) subscriber(currentEnvironment);
+    return () => {
+        environmentSubscribers.delete(subscriber);
+    };
 }
 
 /**
@@ -304,6 +322,7 @@ export function persistAgentEnvironmentModel(
             config,
             loadedAt: Date.now(),
         };
+        publishAgentEnvironment(currentEnvironment);
         return currentEnvironment;
     });
 }

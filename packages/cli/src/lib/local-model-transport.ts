@@ -23,6 +23,10 @@ import {
     type ContextRecord,
     type ManualContextCompactionEligibility,
     type ModelContextProfile,
+    type RuntimeModelStepCost,
+    type RuntimePricingSnapshot,
+    type RuntimeUsageInputTokens,
+    type RuntimeUsageOutputTokens,
 } from "@more-more-code/harness";
 import type { Message } from "./chat-types";
 import {
@@ -34,7 +38,12 @@ import {
     projectToolResultWorkingSet,
     type ToolResultPruningStats,
 } from "./tool-result-pruning";
-import { normalizeModelRef, resolveChatModel, resolveConfiguredProvider } from "./models";
+import {
+    normalizeModelRef,
+    resolveChatModel,
+    resolveConfiguredProvider,
+    type ResolvedModel,
+} from "./models";
 import { resolveModelContextProfile } from "./model-context-profile";
 import {
     buildSystemPrompt,
@@ -52,6 +61,8 @@ import {
     reduceBranchSummary,
     type BranchSummaryReductionOutcome,
 } from "./branch-summary-reducer";
+import { normalizeProviderUsage } from "./provider-usage";
+import { calculateModelStepCost, resolvePricingRevision } from "./cost-engine";
 
 export type ContextCompactionEvent = {
     summary: Message;
@@ -109,6 +120,27 @@ export type BranchSummaryContextAnchor = {
     afterMessageId: string | null;
 };
 
+export type ModelUsageCompletionEvent = {
+    providerId: string;
+    providerKind: ResolvedModel["provider"];
+    modelId: string;
+    inputTokens?: RuntimeUsageInputTokens;
+    outputTokens?: RuntimeUsageOutputTokens;
+    pricing?: RuntimePricingSnapshot;
+    cost?: RuntimeModelStepCost;
+};
+
+export type CurrentContextUsage = {
+    estimatedInputTokens: number;
+    contextWindowTokens: number;
+    inputBudgetTokens: number;
+    reservedOutputTokens: number;
+    safetyMarginTokens: number;
+    utilizationRatio: number;
+    tokenCounterId: string;
+    tokenCountQuality: "estimated" | "exact";
+};
+
 /**
  * Narrow collaborator overrides used by transport integration tests. Production
  * callers leave this unset and retain the normal local Provider Runtime.
@@ -125,6 +157,8 @@ export type LocalModelTransportOptions = {
     getToolResultSourceEntryId?: (toolCallId: string) => string | undefined;
     getBranchSummaryContext?: () => BranchSummaryContextAnchor[];
     onProviderTelemetry?: (telemetry: ProviderCacheTelemetry) => void;
+    onModelUsage?: (event: ModelUsageCompletionEvent) => void | Promise<void>;
+    onModelUsageError?: (error: Error) => void;
     onContextEvent?: (event: ContextProjectionLifecycleEvent) => void | Promise<void>;
     /** @internal Injectable only to make provider ordering deterministic in tests. */
     dependencies?: LocalModelTransportDependencies;
@@ -342,6 +376,59 @@ export async function projectMessages(input: {
     };
 }
 
+/**
+ * Read-only current Context projection. It shares canonical record building,
+ * Tool Result pruning, checkpoint semantics, model budget, and TokenCounter
+ * with a Model Step but never invokes a Provider or persists a checkpoint.
+ */
+export function projectCurrentContextUsage(input: {
+    messages: Message[];
+    systemPrompt: string;
+    profile: ModelContextProfile;
+    checkpoint: PersistedContextCheckpoint | null;
+    branchSummaries?: readonly BranchSummaryContextAnchor[];
+    resolveToolResultSourceEntryId?: (toolCallId: string) => string | undefined;
+}): CurrentContextUsage {
+    const systemPromptTokens = input.profile.tokenCounter.countText(input.systemPrompt);
+    const safetyMarginTokens = input.profile.safetyMarginTokens + systemPromptTokens;
+    const inputBudgetTokens = Math.max(
+        0,
+        input.profile.contextWindowTokens
+            - input.profile.reservedOutputTokens
+            - safetyMarginTokens,
+    );
+    const toolWorkingSet = projectToolResultWorkingSet({
+        messages: input.messages,
+        profile: input.profile,
+        inputBudgetTokens,
+        resolveSourceEntryId: input.resolveToolResultSourceEntryId,
+    });
+    const records = buildContextRecords(
+        toolWorkingSet.messages,
+        input.profile,
+        input.checkpoint,
+        input.branchSummaries,
+    );
+    const projection = new ContextManager<ContextCompactionPayload>().project(records, {
+        contextWindowTokens: input.profile.contextWindowTokens,
+        reservedOutputTokens: input.profile.reservedOutputTokens,
+        safetyMarginTokens,
+    });
+
+    return {
+        estimatedInputTokens: projection.estimatedInputTokens,
+        contextWindowTokens: input.profile.contextWindowTokens,
+        inputBudgetTokens: projection.inputBudgetTokens,
+        reservedOutputTokens: input.profile.reservedOutputTokens,
+        safetyMarginTokens,
+        utilizationRatio: input.profile.contextWindowTokens === 0
+            ? 0
+            : projection.estimatedInputTokens / input.profile.contextWindowTokens,
+        tokenCounterId: input.profile.tokenCounter.id,
+        tokenCountQuality: input.profile.tokenCounter.accuracy,
+    };
+}
+
 function resolveExecutionConfig(messages: Message[]): {
     mode: ModeType;
     model: ModelRef;
@@ -407,6 +494,26 @@ export class LocalModelTransport implements ChatTransport<Message> {
         return this.lastProviderTelemetry
             ? structuredClone(this.lastProviderTelemetry)
             : null;
+    }
+
+    inspectCurrentContext(input: {
+        messages: Message[];
+        mode: ModeType;
+        model: ModelRef;
+    }): CurrentContextUsage {
+        const environment = getAgentEnvironment();
+        const provider = resolveConfiguredProvider(input.model, environment);
+        const contextProfile = (this.options.dependencies?.resolveModelContextProfile
+            ?? resolveModelContextProfile)(input.model, provider.kind);
+        const systemPrompt = buildSystemPrompt({ mode: input.mode, environment });
+        return projectCurrentContextUsage({
+            messages: input.messages,
+            systemPrompt,
+            profile: contextProfile,
+            checkpoint: this.options.getContextCheckpoint?.() ?? null,
+            branchSummaries: this.options.getBranchSummaryContext?.() ?? [],
+            resolveToolResultSourceEntryId: this.options.getToolResultSourceEntryId,
+        });
     }
 
     async summarizeBranch(input: {
@@ -649,6 +756,7 @@ export class LocalModelTransport implements ChatTransport<Message> {
         });
 
         let completedUsage: LanguageModelUsage | undefined;
+        const providerRequestStartedAt = Date.now();
         const result = streamText({
             model: resolvedModel.model,
             system: systemPrompt,
@@ -656,7 +764,7 @@ export class LocalModelTransport implements ChatTransport<Message> {
             tools,
             providerOptions: providerRequest.providerOptions,
             abortSignal,
-            onFinish: (event) => {
+            onFinish: async (event) => {
                 completedUsage = event.totalUsage;
                 const telemetry = createProviderCacheTelemetry({
                     resolvedModel,
@@ -665,6 +773,38 @@ export class LocalModelTransport implements ChatTransport<Message> {
                 });
                 this.lastProviderTelemetry = telemetry;
                 this.options.onProviderTelemetry?.(structuredClone(telemetry));
+
+                try {
+                    const normalized = normalizeProviderUsage(completedUsage);
+                    if (!normalized.inputTokens && !normalized.outputTokens) return;
+                    const pricing = resolvePricingRevision({
+                        providerId: resolvedModel.providerId,
+                        providerKind: resolvedModel.provider,
+                        modelId: resolvedModel.modelId,
+                        at: providerRequestStartedAt,
+                    });
+                    const cost = pricing
+                        ? calculateModelStepCost(normalized, pricing)
+                        : null;
+                    await this.options.onModelUsage?.({
+                        providerId: resolvedModel.providerId,
+                        providerKind: resolvedModel.provider,
+                        modelId: resolvedModel.modelId,
+                        ...normalized,
+                        ...(pricing ? { pricing } : {}),
+                        ...(cost ? { cost } : {}),
+                    });
+                } catch (error) {
+                    // Provider completion already occurred. Accounting must not
+                    // turn into a request retry or discard a valid response.
+                    try {
+                        this.options.onModelUsageError?.(
+                            error instanceof Error ? error : new Error(String(error)),
+                        );
+                    } catch {
+                        // Diagnostic consumers are post-side-effect observers too.
+                    }
+                }
             },
         });
 
@@ -680,7 +820,6 @@ export class LocalModelTransport implements ChatTransport<Message> {
                     mode,
                     model,
                     durationMs: Date.now() - startedAt,
-                    ...(completedUsage ? { usage: completedUsage } : {}),
                 };
             },
             onEnd: ({ messages: completedMessages }) => {

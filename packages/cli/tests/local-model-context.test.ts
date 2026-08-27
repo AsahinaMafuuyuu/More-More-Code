@@ -4,7 +4,10 @@ import {
   type ContextCompactor,
   type ModelContextProfile,
 } from "@more-more-code/harness";
-import { projectMessages } from "../src/lib/local-model-transport";
+import {
+  projectCurrentContextUsage,
+  projectMessages,
+} from "../src/lib/local-model-transport";
 import type { Message } from "../src/lib/chat-types";
 
 const tokenCounter = createHeuristicTokenCounter({
@@ -79,6 +82,53 @@ function countingCompactor(state: { calls: number }): ContextCompactor<Message> 
 }
 
 describe("local model context reduction pipeline", () => {
+  test("current Context observability reuses the canonical checkpoint/pruning budget without Provider work", async () => {
+    const state = { calls: 0 };
+    const messages = [
+      assistantTool({
+        id: "old-tool",
+        toolCallId: "old-tool-call",
+        command: "git status",
+        output: { stdout: "noise\n".repeat(2_000), stderr: "", exitCode: 0 },
+      }),
+      user("u-current", "continue"),
+      { id: "a-current", role: "assistant" as const, parts: [{ type: "text" as const, text: "ready" }] },
+    ];
+    const checkpoint = {
+      summary: {
+        id: "checkpoint",
+        role: "assistant" as const,
+        parts: [{ type: "text" as const, text: "prior state" }],
+      },
+      compactedRecordIds: [] as string[],
+      retainedTailRecordIds: ["u-current", "a-current"],
+    };
+    const currentProfile = profile({
+      compactionSoftLimitRatio: 0.99,
+      compactionHardLimitRatio: 1,
+    });
+    const actual = await projectMessages({
+      messages,
+      systemPrompt: "system",
+      profile: currentProfile,
+      checkpoint,
+      compactor: countingCompactor(state),
+    });
+    const observed = projectCurrentContextUsage({
+      messages,
+      systemPrompt: "system",
+      profile: currentProfile,
+      checkpoint,
+    });
+
+    expect(state.calls).toBe(0);
+    expect(observed.estimatedInputTokens).toBe(actual.projection.estimatedInputTokens);
+    expect(observed.inputBudgetTokens).toBe(actual.projection.inputBudgetTokens);
+    expect(observed.contextWindowTokens).toBe(currentProfile.contextWindowTokens);
+    expect(observed.tokenCounterId).toBe(tokenCounter.id);
+    expect(observed.tokenCountQuality).toBe("estimated");
+  });
+
   test("takes the no-prune/no-compaction path for a small context", async () => {
     const state = { calls: 0 };
     const result = await projectMessages({

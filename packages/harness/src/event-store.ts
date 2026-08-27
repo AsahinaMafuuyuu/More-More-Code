@@ -14,6 +14,7 @@ export const RUNTIME_EVENT_TYPES = [
   "tool",
   "security",
   "context",
+  "usage",
   "system",
 ] as const;
 
@@ -139,6 +140,58 @@ export type RuntimeContextEventPayload = {
   compactionTrigger?: string;
 } & RuntimeCorrelation;
 
+export type RuntimeUsageInputTokens = {
+  total?: number;
+  noCache?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+};
+
+export type RuntimeUsageOutputTokens = {
+  total?: number;
+  text?: number;
+  reasoning?: number;
+};
+
+export type RuntimePricingSnapshot = {
+  revisionId: string;
+  providerId: string;
+  modelId: string;
+  effectiveFrom: number;
+  effectiveUntil?: number;
+  currency: "USD";
+  rates: {
+    inputNoCacheUsdPerMillionTokens: number;
+    cacheReadUsdPerMillionTokens?: number;
+    cacheWriteUsdPerMillionTokens?: number;
+    outputUsdPerMillionTokens: number;
+  };
+};
+
+export type RuntimeModelStepCost = {
+  inputUsd: number;
+  cacheReadUsd: number;
+  cacheWriteUsd: number;
+  outputUsd: number;
+  totalUsd: number;
+  quality: "calculated";
+};
+
+export type RuntimeUsageEventPayload = {
+  schemaVersion: typeof RUNTIME_EVENT_SCHEMA_VERSION;
+  kind: "model.usage";
+  runId: string;
+  turnId: string;
+  stepId: string;
+  providerId: string;
+  providerKind: "openai" | "anthropic" | "google" | "deepseek" | "custom";
+  modelId: string;
+  inputTokens?: RuntimeUsageInputTokens;
+  outputTokens?: RuntimeUsageOutputTokens;
+  pricing?: RuntimePricingSnapshot;
+  cost?: RuntimeModelStepCost;
+};
+
 export type RuntimeSystemEventPayload = {
   schemaVersion: typeof RUNTIME_EVENT_SCHEMA_VERSION;
   kind: "runtime.session_opened";
@@ -157,6 +210,7 @@ export interface RuntimeEventPayloadByType {
   tool: RuntimeToolEventPayload;
   security: RuntimeSecurityEventPayload;
   context: RuntimeContextEventPayload;
+  usage: RuntimeUsageEventPayload;
   system: RuntimeSystemEventPayload;
 }
 
@@ -276,6 +330,8 @@ export function isRuntimeEventPayload<TType extends RuntimeEventType>(
             && optionalNonNegativeNumber(value.prunedToolResultCount)
             && (value.overBudget === undefined || typeof value.overBudget === "boolean")
             && optionalCompactionTrigger(value.compactionTrigger));
+    case "usage":
+      return isRuntimeUsageEventPayload(value);
     case "system":
       return hasOnlyKeys(value, [
         "schemaVersion", "kind", "recoveredEventOffset", "incompleteRunCount",
@@ -286,6 +342,123 @@ export function isRuntimeEventPayload<TType extends RuntimeEventType>(
         && isNonNegativeSafeInteger(value.incompleteRunCount)
         && isNonNegativeSafeInteger(value.pendingExternalOperationCount);
   }
+}
+
+function isRuntimeUsageEventPayload(
+  value: Record<string, unknown>,
+): value is RuntimeUsageEventPayload {
+  if (!hasOnlyKeys(value, [
+    "schemaVersion", "kind", "runId", "turnId", "stepId", "providerId",
+    "providerKind", "modelId", "inputTokens", "outputTokens", "pricing", "cost",
+  ])
+    || value.schemaVersion !== RUNTIME_EVENT_SCHEMA_VERSION
+    || value.kind !== "model.usage"
+    || !isNonEmptyString(value.runId)
+    || !isNonEmptyString(value.turnId)
+    || !isNonEmptyString(value.stepId)
+    || !isNonEmptyString(value.providerId)
+    || !isProviderKind(value.providerKind)
+    || !isNonEmptyString(value.modelId)) {
+    return false;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(value, "inputTokens")
+    && !isRuntimeUsageInputTokens(value.inputTokens)) {
+    return false;
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "outputTokens")
+    && !isRuntimeUsageOutputTokens(value.outputTokens)) {
+    return false;
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "pricing")
+    && !isRuntimePricingSnapshot(value.pricing, value.providerId, value.modelId)) {
+    return false;
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "cost")) {
+    if (!isRuntimeModelStepCost(value.cost) || !isRuntimePricingSnapshot(
+      value.pricing,
+      value.providerId,
+      value.modelId,
+    )) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isRuntimeUsageInputTokens(value: unknown): value is RuntimeUsageInputTokens {
+  return isRecord(value)
+    && Object.keys(value).length > 0
+    && hasOnlyKeys(value, ["total", "noCache", "cacheRead", "cacheWrite"])
+    && everyPresentValue(value, ["total", "noCache", "cacheRead", "cacheWrite"], isNonNegativeSafeInteger);
+}
+
+function isRuntimeUsageOutputTokens(value: unknown): value is RuntimeUsageOutputTokens {
+  return isRecord(value)
+    && Object.keys(value).length > 0
+    && hasOnlyKeys(value, ["total", "text", "reasoning"])
+    && everyPresentValue(value, ["total", "text", "reasoning"], isNonNegativeSafeInteger);
+}
+
+function isRuntimePricingSnapshot(
+  value: unknown,
+  providerId?: unknown,
+  modelId?: unknown,
+): value is RuntimePricingSnapshot {
+  if (!isRecord(value)
+    || !hasOnlyKeys(value, [
+      "revisionId", "providerId", "modelId", "effectiveFrom", "effectiveUntil", "currency", "rates",
+    ])
+    || !isNonEmptyString(value.revisionId)
+    || !isNonEmptyString(value.providerId)
+    || !isNonEmptyString(value.modelId)
+    || (providerId !== undefined && value.providerId !== providerId)
+    || (modelId !== undefined && value.modelId !== modelId)
+    || !isNonNegativeSafeInteger(value.effectiveFrom)
+    || (Object.prototype.hasOwnProperty.call(value, "effectiveUntil")
+      && !isNonNegativeSafeInteger(value.effectiveUntil))
+    || value.currency !== "USD"
+    || !isRecord(value.rates)
+    || !hasOnlyKeys(value.rates, [
+      "inputNoCacheUsdPerMillionTokens", "cacheReadUsdPerMillionTokens",
+      "cacheWriteUsdPerMillionTokens", "outputUsdPerMillionTokens",
+    ])
+    || !isNonNegativeNumber(value.rates.inputNoCacheUsdPerMillionTokens)
+    || !isNonNegativeNumber(value.rates.outputUsdPerMillionTokens)) {
+    return false;
+  }
+
+  return everyPresentValue(
+    value.rates,
+    ["cacheReadUsdPerMillionTokens", "cacheWriteUsdPerMillionTokens"],
+    isNonNegativeNumber,
+  );
+}
+
+function isRuntimeModelStepCost(value: unknown): value is RuntimeModelStepCost {
+  if (!isRecord(value)
+    || !hasOnlyKeys(value, [
+      "inputUsd", "cacheReadUsd", "cacheWriteUsd", "outputUsd", "totalUsd", "quality",
+    ])
+    || value.quality !== "calculated"
+    || !isNonNegativeNumber(value.inputUsd)
+    || !isNonNegativeNumber(value.cacheReadUsd)
+    || !isNonNegativeNumber(value.cacheWriteUsd)
+    || !isNonNegativeNumber(value.outputUsd)
+    || !isNonNegativeNumber(value.totalUsd)) {
+    return false;
+  }
+
+  const expected = value.inputUsd + value.cacheReadUsd + value.cacheWriteUsd + value.outputUsd;
+  return Math.abs(expected - value.totalUsd) <= 1e-10;
+}
+
+function everyPresentValue(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+  predicate: (input: unknown) => boolean,
+): boolean {
+  return keys.every((key) => !Object.prototype.hasOwnProperty.call(value, key) || predicate(value[key]));
 }
 
 function isRuntimeSecurityEventPayload(
@@ -528,6 +701,14 @@ function isPermissionScope(value: unknown): boolean {
     || value === "outside-workspace"
     || value === "agent-config"
     || value === "external";
+}
+
+function isProviderKind(value: unknown): boolean {
+  return value === "openai"
+    || value === "anthropic"
+    || value === "google"
+    || value === "deepseek"
+    || value === "custom";
 }
 
 function hasOnlyExecutionKeys(

@@ -1,6 +1,11 @@
 # Usage, Cost & Context Observability Test Plan
 
-**Status:** Approved test contract — implementation not started.
+**Status:** Delivered verification — 2026-08-27.
+
+Focused observability verification: **38 passed / 0 failed**. Full relevant
+verification: **Harness 107/107**, **CLI 191/191**, **Runtime Store 9/9**;
+Shared/Harness/CLI/Runtime Store TypeScript checks and CLI build passed;
+Runtime Store Prisma validation and `git diff --check` passed.
 
 **Design:** `docs/USAGE-COST-CONTEXT-OBSERVABILITY-DESIGN.md`
 

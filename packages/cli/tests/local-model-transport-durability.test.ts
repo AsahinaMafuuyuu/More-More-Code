@@ -167,6 +167,82 @@ async function waitFor<T>(promise: Promise<T>, timeoutMs = 1_000): Promise<T> {
 }
 
 describe("LocalModelTransport compaction durability", () => {
+    test("emits one normalized post-completion Usage fact without Provider payload leakage", async () => {
+        await bootstrapTestEnvironment();
+        const provider = createFakeProvider();
+        const usageEvents: unknown[] = [];
+        const transport = new LocalModelTransport({
+            onModelUsage(event) {
+                usageEvents.push(event);
+            },
+            dependencies: {
+                async resolveChatModel(model) {
+                    return {
+                        model: provider,
+                        provider: "openai",
+                        providerId: model.providerId,
+                        modelId: model.modelId,
+                    };
+                },
+                resolveModelContextProfile: () => transportProfile(),
+            },
+        });
+
+        const stream = await transport.sendMessages(sendInput([messages().at(-1)!]));
+        const reader = stream.getReader();
+        while (!(await reader.read()).done) {}
+
+        expect(provider.doStreamCalls).toHaveLength(1);
+        expect(usageEvents).toHaveLength(1);
+        expect(usageEvents[0]).toMatchObject({
+            providerId: "openai",
+            providerKind: "openai",
+            modelId: "gpt-5.5",
+            inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+            outputTokens: { total: 1, text: 1, reasoning: 0 },
+        });
+        expect(JSON.stringify(usageEvents[0])).not.toContain("prompt");
+    });
+
+    test("does not retry Provider when post-completion Usage persistence rejects", async () => {
+        await bootstrapTestEnvironment();
+        const provider = createFakeProvider();
+        const usageErrors: Error[] = [];
+        const transport = new LocalModelTransport({
+            async onModelUsage() {
+                throw new Error("runtime usage append failed");
+            },
+            onModelUsageError(error) {
+                usageErrors.push(error);
+            },
+            dependencies: {
+                async resolveChatModel(model) {
+                    return {
+                        model: provider,
+                        provider: "openai",
+                        providerId: model.providerId,
+                        modelId: model.modelId,
+                    };
+                },
+                resolveModelContextProfile: () => transportProfile(),
+            },
+        });
+
+        const stream = await transport.sendMessages(sendInput([messages().at(-1)!]));
+        const reader = stream.getReader();
+        let text = "";
+        while (true) {
+            const next = await reader.read();
+            if (next.done) break;
+            text += JSON.stringify(next.value);
+        }
+
+        expect(provider.doStreamCalls).toHaveLength(1);
+        expect(text).toContain("done");
+        expect(usageErrors).toHaveLength(1);
+        expect(usageErrors[0]?.message).toBe("runtime usage append failed");
+    });
+
     test("sends exactly one matching Tool Call/Result pair after canonical Tool terminal projection", async () => {
         await bootstrapTestEnvironment();
         const provider = createFakeProvider();

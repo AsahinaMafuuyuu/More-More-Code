@@ -6,6 +6,10 @@ All notable changes to MORE MORE CODE are recorded here.
 
 ### Added
 
+- Durable `usage/model.usage` Runtime Events with Step-idempotent Session Usage projection, snapshot/restart recovery, strict unknown-vs-zero cache semantics, and no new Session Entry or SQLite schema migration.
+- Effective-time/version-aware pricing snapshots and deterministic cache-aware Cost Engine, including DeepSeek V4 Flash tariff handling and stable historical Session cost.
+- Canonical Current Context observability plus CLI `SessionObservability`, with StatusBar `Ctx`, cumulative calculated `API` cost, and trustworthy `Cache` metrics sourced from separate authority classes.
+- ADR-0027 documenting the Runtime Usage authority, pricing/cost stability, canonical Context observability, and failure semantics that prevent accounting persistence errors from retrying completed Provider calls.
 - Agent Bootstrap using user-global `~/.more-more-code/` and project-local `.more-more-code/` configuration homes.
 - Global → project `AGENTS.md` instruction chain composed into the coding-agent system prompt before Model Steps.
 - Progressive Skill Registry discovery from `~/.agents/skills/*/SKILL.md`, user-global `.more-more-code/skills/*/SKILL.md`, and project `.more-more-code/skills/*/SKILL.md`, with metadata-only bootstrap and the read-only native `loadSkill` tool for on-demand full skill loading.

@@ -1,6 +1,7 @@
 # Usage, Cost & Context Observability Design
 
-**Status:** Approved design — implementation pending.
+**Status:** Delivered — 2026-08-27. Implemented without changing Session Store
+semantics, Runtime Store schema, Provider request authority, or cloud behavior.
 
 **Target:** Next active local-only Stage 6.5 follow-up after ADR-0026. Stage 6.6
 Cloud Sync remains paused and Stage 6.7 Windows Native Sandbox remains separate.

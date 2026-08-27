@@ -17,6 +17,13 @@ import {
 } from "./event-store";
 import { ProjectionCache } from "./projection-cache";
 import { recoverRuntime, type PendingExternalOperation } from "./recovery";
+import {
+  createRuntimeUsageProjection,
+  isRuntimeUsageProjection,
+  reduceRuntimeUsageProjection,
+  type RuntimeUsageProjection,
+  type SessionUsageSummary,
+} from "./runtime-usage";
 import { SnapshotPolicy, type SnapshotPolicyOptions } from "./snapshot-policy";
 
 type OpenRunProjection = {
@@ -34,6 +41,8 @@ export type RuntimeSessionProjection = {
   sessionId: string;
   openRuns: Record<string, OpenRunProjection>;
   pendingContexts: Record<string, PendingContextProjection>;
+  /** Optional for backward compatibility with pre-usage Runtime snapshots. */
+  usage?: RuntimeUsageProjection;
 };
 
 export type RuntimeSessionRecoveryReport = {
@@ -127,6 +136,12 @@ export class RuntimeSession implements ExecutionEventStore {
 
   getSnapshotDiagnostics(): RuntimeSessionSnapshotDiagnostics {
     return { ...this.snapshotDiagnostics };
+  }
+
+  getUsageSummary(): SessionUsageSummary {
+    return structuredClone(
+      this.projection.usage?.summary ?? createRuntimeUsageProjection().summary,
+    );
   }
 
   async append(event: ExecutionEvent): Promise<void> {
@@ -311,6 +326,7 @@ export function createRuntimeSessionProjection(sessionId: string): RuntimeSessio
     sessionId,
     openRuns: {},
     pendingContexts: {},
+    usage: createRuntimeUsageProjection(),
   };
 }
 
@@ -361,6 +377,13 @@ export function reduceRuntimeSessionProjection<TState extends RuntimeJsonValue>(
     }
   }
 
+  if (event.type === "usage") {
+    next.usage = reduceRuntimeUsageProjection(
+      next.usage ?? createRuntimeUsageProjection(),
+      event,
+    );
+  }
+
   return next as TState;
 }
 
@@ -373,7 +396,8 @@ export function isRuntimeSessionProjection(
     || typeof value.sessionId !== "string"
     || (sessionId !== undefined && value.sessionId !== sessionId)
     || !isRecord(value.openRuns)
-    || !isRecord(value.pendingContexts)) {
+    || !isRecord(value.pendingContexts)
+    || (value.usage !== undefined && !isRuntimeUsageProjection(value.usage))) {
     return false;
   }
 

@@ -10,8 +10,10 @@ Accepted
 
 ## Implementation Status
 
-Planned / approved design only. No production Usage persistence, Cost Engine,
-Context status projection, or StatusBar behavior is delivered by this ADR.
+Delivered — 2026-08-27. Runtime Usage persistence/projection, versioned pricing
+and Cost Engine, canonical Current Context observability, and StatusBar
+Context/API Cost/Cache metrics are implemented and verified. No Session Entry
+kind or SQLite schema migration was introduced.
 
 ## Context
 

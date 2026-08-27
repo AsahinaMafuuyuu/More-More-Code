@@ -20,6 +20,7 @@ import { usePromptConfig } from "../providers/prompt-config";
 import type { ModeType, ModelRef } from "@more-more-code/shared";
 import type { ManualContextCompactionOutcome } from "../lib/local-model-transport";
 import { shutdownCliEnvironment } from "../lib/cli-environment";
+import type { SessionObservability } from "../lib/session-observability";
 
 // 这些变量主要用于@提及功能的实现
 const MAX_VISIBLE_MENTIONS = 8; // 最大可见的提及数量
@@ -344,6 +345,7 @@ interface Props {
     onModeChange?: (mode: ModeType) => void | Promise<void>,
     onModelChange?: (model: ModelRef) => void | Promise<void>,
     onCompact?: () => Promise<ManualContextCompactionOutcome>,
+    observability?: SessionObservability,
 }
 
 /**
@@ -389,6 +391,7 @@ export default function InputBar({
     onModeChange,
     onModelChange,
     onCompact,
+    observability,
 }: Props) {
     const { mode, model, setMode, setModel } = usePromptConfig();
     const textareaRef = useRef<TextareaRenderable>(null);
@@ -791,7 +794,7 @@ export default function InputBar({
                         keyBindings={TEXTAREA_KEY_BINDING}
                     >
                     </textarea>
-                    <StatusBar />
+                    <StatusBar observability={observability} />
                 </box>
             </box>
         </box>

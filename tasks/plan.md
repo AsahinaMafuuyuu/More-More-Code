@@ -2044,7 +2044,9 @@ Pure legacy-aware Message/Navigation projection
 
 # Stage 6.5 Follow-up — Usage, Cost & Context Observability
 
-**Status:** Approved design / planned implementation. No production behavior has changed yet.
+**Status:** Delivered — 2026-08-27. Runtime Usage authority, versioned pricing /
+Cost, canonical Current Context observability, and StatusBar integration are
+implemented and verified without a Session/Runtime Store schema migration.
 
 **Design:** `docs/USAGE-COST-CONTEXT-OBSERVABILITY-DESIGN.md`
 
@@ -2118,15 +2120,15 @@ changing Session Store semantics.
 
 **Acceptance criteria:**
 
-- [ ] Red regression proves `usage` Runtime Event is not currently accepted.
-- [ ] Add `usage/model.usage` with strict schema-v1 allowlist.
-- [ ] Persist run/turn/step/provider/model correlation.
-- [ ] Preserve input total/no-cache/cache-read/cache-write and output
+- [x] Red regression proves `usage` Runtime Event is not currently accepted.
+- [x] Add `usage/model.usage` with strict schema-v1 allowlist.
+- [x] Persist run/turn/step/provider/model correlation.
+- [x] Preserve input total/no-cache/cache-read/cache-write and output
   total/text/reasoning when reported.
-- [ ] Missing Provider fields remain absent rather than becoming zero.
-- [ ] Raw Provider payloads, prompts, message content, Tool content and secrets
+- [x] Missing Provider fields remain absent rather than becoming zero.
+- [x] Raw Provider payloads, prompts, message content, Tool content and secrets
   cannot cross the Usage event seam.
-- [ ] Existing Runtime Event types remain backward compatible.
+- [x] Existing Runtime Event types remain backward compatible.
 
 **Verification:** Runtime Usage contract/validation tests plus existing Harness
 event-store tests.
@@ -2142,13 +2144,13 @@ pure Session Usage projector with `stepId` idempotency/integrity semantics.
 
 **Acceptance criteria:**
 
-- [ ] Fake Provider completion records one effective Runtime Usage fact.
-- [ ] Exact duplicate facts for one `stepId` count once.
-- [ ] Incompatible duplicate facts fail aggregation integrity and never charge
+- [x] Fake Provider completion records one effective Runtime Usage fact.
+- [x] Exact duplicate facts for one `stepId` count once.
+- [x] Incompatible duplicate facts fail aggregation integrity and never charge
   twice.
-- [ ] Usage persistence uses current Session/Run/Turn/Step correlation.
-- [ ] No new Session Entry kind or Session Store schema change is introduced.
-- [ ] Usage metadata inside legacy/current messages is not counted as a second
+- [x] Usage persistence uses current Session/Run/Turn/Step correlation.
+- [x] No new Session Entry kind or Session Store schema change is introduced.
+- [x] Usage metadata inside legacy/current messages is not counted as a second
   authority.
 
 **Verification:** fake Provider integration + pure Usage projection tests.
@@ -2165,11 +2167,11 @@ an unbounded event-zero replay on every open.
 
 **Acceptance criteria:**
 
-- [ ] Full replay and snapshot+tail replay yield identical Usage summaries.
-- [ ] Existing snapshots without Usage aggregate remain readable.
-- [ ] Runtime Store restart restores token/cache/cost state locally.
-- [ ] No Server/API URL dependency is added.
-- [ ] No Runtime Store SQLite migration is required.
+- [x] Full replay and snapshot+tail replay yield identical Usage summaries.
+- [x] Existing snapshots without Usage aggregate remain readable.
+- [x] Runtime Store restart restores token/cache/cost state locally.
+- [x] No Server/API URL dependency is added.
+- [x] No Runtime Store SQLite migration is required.
 
 **Verification:** disposable SQLite restart/snapshot parity tests.
 
@@ -2193,13 +2195,13 @@ revisions and cache-aware rates without restoring a closed model allowlist.
 
 **Acceptance criteria:**
 
-- [ ] Pricing revision identifies provider/model/effective time/currency.
-- [ ] Support uncached input, cache-read, optional cache-write and output rates.
-- [ ] Historical revisions required by persisted Usage are retained.
-- [ ] Usage facts persist the resolved pricing basis used at completion.
-- [ ] Unknown Custom Provider pricing does not inherit OpenAI pricing merely
+- [x] Pricing revision identifies provider/model/effective time/currency.
+- [x] Support uncached input, cache-read, optional cache-write and output rates.
+- [x] Historical revisions required by persisted Usage are retained.
+- [x] Usage facts persist the resolved pricing basis used at completion.
+- [x] Unknown Custom Provider pricing does not inherit OpenAI pricing merely
   because the protocol is OpenAI-compatible.
-- [ ] Missing required pricing bucket yields unavailable Cost, not guessed Cost.
+- [x] Missing required pricing bucket yields unavailable Cost, not guessed Cost.
 
 **Verification:** Pricing revision selection/time-boundary/custom-provider
 negative tests.
@@ -2215,12 +2217,12 @@ pricing basis, then aggregate Session Cost with explicit coverage.
 
 **Acceptance criteria:**
 
-- [ ] Cost covers uncached input/cache-read/cache-write/output buckets.
-- [ ] Reasoning tokens are not double-charged when included in output total.
-- [ ] Deterministic rounding is tested for tiny and large totals.
-- [ ] `complete | partial | none` Cost coverage is explicit.
-- [ ] Historical Session totals do not change after catalog revisions.
-- [ ] Context estimates are never used by Cost Engine.
+- [x] Cost covers uncached input/cache-read/cache-write/output buckets.
+- [x] Reasoning tokens are not double-charged when included in output total.
+- [x] Deterministic rounding is tested for tiny and large totals.
+- [x] `complete | partial | none` Cost coverage is explicit.
+- [x] Historical Session totals do not change after catalog revisions.
+- [x] Context estimates are never used by Cost Engine.
 
 **Verification:** table-driven Cost Engine + historical pricing regression.
 
@@ -2235,11 +2237,11 @@ without conflating unknown with zero.
 
 **Acceptance criteria:**
 
-- [ ] Cache hit formula is `sum(cacheRead) / sum(inputTotal)`.
-- [ ] Explicit `cacheRead=0` produces real 0%.
-- [ ] Missing cache telemetry is unknown, not 0%.
-- [ ] Cache-write/output tokens do not enter the hit numerator.
-- [ ] Mixed incomplete telemetry yields partial/none coverage; V1 StatusBar does
+- [x] Cache hit formula is `sum(cacheRead) / sum(inputTotal)`.
+- [x] Explicit `cacheRead=0` produces real 0%.
+- [x] Missing cache telemetry is unknown, not 0%.
+- [x] Cache-write/output tokens do not enter the hit numerator.
+- [x] Mixed incomplete telemetry yields partial/none coverage; V1 StatusBar does
   not present it as a complete percentage.
 
 **Verification:** cache coverage matrix tests.
@@ -2265,12 +2267,12 @@ the real Model Step path, but perform no Provider request.
 
 **Acceptance criteria:**
 
-- [ ] Expose current estimated/exact input tokens, Context Window, effective
+- [x] Expose current estimated/exact input tokens, Context Window, effective
   input budget, reserved output, safety margin, utilization and counter ID.
-- [ ] Same current state produces the same Context record selection/token count
+- [x] Same current state produces the same Context record selection/token count
   as the actual Model Step projection.
-- [ ] No Provider request or persistence mutation occurs.
-- [ ] Current heuristic counters are marked `estimated`.
+- [x] No Provider request or persistence mutation occurs.
+- [x] Current heuristic counters are marked `estimated`.
 
 **Verification:** canonical Context parity/purity tests.
 
@@ -2285,11 +2287,11 @@ render tick.
 
 **Acceptance criteria:**
 
-- [ ] Recompute after Session open/restart and active branch navigation.
-- [ ] Recompute after durable message/Tool/Compaction/Branch Summary changes.
-- [ ] Recompute after model/mode/ToolSet/Agent-source changes.
-- [ ] Model change immediately updates Context Window/profile.
-- [ ] Branch change updates Context occupancy but does not reduce Session-wide
+- [x] Recompute after Session open/restart and active branch navigation.
+- [x] Recompute after durable message/Tool/Compaction/Branch Summary changes.
+- [x] Recompute after model/mode/ToolSet/Agent-source changes.
+- [x] Model change immediately updates Context Window/profile.
+- [x] Branch change updates Context occupancy but does not reduce Session-wide
   historical API Cost.
 
 **Verification:** trigger matrix tests.
@@ -2308,10 +2310,10 @@ components.
 
 **Acceptance criteria:**
 
-- [ ] UI state exposes Context, Cost, Cache plus quality/coverage flags.
-- [ ] Incremental Usage updates do not trigger full Runtime replay.
-- [ ] Status reads do not write Session/Runtime stores.
-- [ ] React/OpenTUI receives already-computed values.
+- [x] UI state exposes Context, Cost, Cache plus quality/coverage flags.
+- [x] Incremental Usage updates do not trigger full Runtime replay.
+- [x] Status reads do not write Session/Runtime stores.
+- [x] React/OpenTUI receives already-computed values.
 
 **Verification:** state/provider seam tests.
 
@@ -2326,14 +2328,14 @@ three required compact metrics.
 
 **Acceptance criteria:**
 
-- [ ] Example complete state renders semantically equivalent to
+- [x] Example complete state renders semantically equivalent to
   `Ctx ~42.8k/128k · API ~$0.0187 · Cache 72%`.
-- [ ] Exact Context counters omit approximation marker; heuristic counters keep
+- [x] Exact Context counters omit approximation marker; heuristic counters keep
   it.
-- [ ] Unknown Cost/Cache render `—`, never zero.
-- [ ] Real zero cache renders `0%`.
-- [ ] Display formatting is deterministic and presentation-only.
-- [ ] Existing mode/model StatusBar information remains visible.
+- [x] Unknown Cost/Cache render `—`, never zero.
+- [x] Real zero cache renders `0%`.
+- [x] Display formatting is deterministic and presentation-only.
+- [x] Existing mode/model StatusBar information remains visible.
 
 **Verification:** focused StatusBar component tests.
 
@@ -2350,11 +2352,11 @@ external Provider call or fabricate Usage.
 
 **Acceptance criteria:**
 
-- [ ] Forced Usage append failure calls fake Provider exactly once.
-- [ ] Completed assistant output is not discarded solely for accounting retry.
-- [ ] Current observability state becomes incomplete/diagnostic.
-- [ ] Missing Usage is not reconstructed from Context estimates.
-- [ ] No duplicate Cost is created later.
+- [x] Forced Usage append failure calls fake Provider exactly once.
+- [x] Completed assistant output is not discarded solely for accounting retry.
+- [x] Current observability state becomes incomplete/diagnostic.
+- [x] Missing Usage is not reconstructed from Context estimates.
+- [x] No duplicate Cost is created later.
 
 **Verification:** fake Provider + rejecting Runtime Store regression.
 
@@ -2370,15 +2372,15 @@ Delivered.
 
 **Acceptance criteria:**
 
-- [ ] All slices in `USAGE-COST-CONTEXT-OBSERVABILITY-TEST.md` pass.
-- [ ] Existing Session/Tool/Context/Runtime recovery/security suites remain
+- [x] All slices in `USAGE-COST-CONTEXT-OBSERVABILITY-TEST.md` pass.
+- [x] Existing Session/Tool/Context/Runtime recovery/security suites remain
   green.
-- [ ] Relevant Harness/CLI/Runtime Store typechecks/builds pass.
-- [ ] Prisma validation confirms no unintended persistence migration.
-- [ ] `git diff --check` passes.
-- [ ] README/CONTEXT/PROJECT_ANALYSIS/CHANGELOG are updated only after all gates
+- [x] Relevant Harness/CLI/Runtime Store typechecks/builds pass.
+- [x] Prisma validation confirms no unintended persistence migration.
+- [x] `git diff --check` passes.
+- [x] README/CONTEXT/PROJECT_ANALYSIS/CHANGELOG are updated only after all gates
   are green.
-- [ ] Pre-existing unrelated root `AGENTS.md` modification remains outside the
+- [x] Pre-existing unrelated root `AGENTS.md` modification remains outside the
   Stage commit.
 
 **Verification:** full documented matrix plus repository instructions.
@@ -2403,6 +2405,269 @@ Delivered.
 - Stage 6.6 Cloud Session Sync/Entitlements;
 - Stage 6.7 Windows Native Sandbox;
 - MCP/Subagent/OAuth/unrelated UI work.
+
+---
+
+# Stage 6.5 UI Track — Agent Runtime Workbench
+
+**Status:** Planned — roadmap approved for detailed per-slice design. No
+production UI behavior is changed by this planning entry.
+
+**Roadmap:** `docs/UI-RUNTIME-WORKBENCH-ROADMAP.md`
+
+## Overview
+
+Close the presentation gap between the current OpenTUI conversation UI and the
+already-delivered Harness/Runtime capabilities. The UI track is intentionally
+downstream-only: it may add CLI UI projections and React/OpenTUI presentation,
+but it does not redesign Harness, Runtime Events, Session authority,
+persistence schemas, AgentLoop scheduling, Context policy, Provider execution,
+Permission/Approval semantics or Usage/Cost authority.
+
+The target information architecture is:
+
+```text
+Conversation
+  + Agent Activity
+  + Input / compact StatusBar
+  + one Session Inspector
+      -> Tree
+      -> Context
+      -> Usage
+      -> Runtime
+      -> Security
+```
+
+Every implementation slice below must first create its own detailed
+`DESIGN / TEST / DELIVERY` documents and must use CLI-owned UI projections
+instead of teaching React components to interpret raw Harness objects.
+
+## Priority P0 — Runtime Activity Foundation
+
+### Task UI-1: Design Agent Activity Projection
+
+**Description:** Define a pure CLI UI projection over current `AgentRun` /
+Turn / Step state so the presentation layer receives already-interpreted model
+and Tool activity.
+
+**Acceptance criteria:**
+- [ ] Projection distinguishes Run/Turn/Step status and Turn cause.
+- [ ] Model and Tool Steps are represented without Provider prompt/content.
+- [ ] Active Step, duration and available progress can be presented directly.
+- [ ] React does not traverse raw Harness structures to derive semantics.
+- [ ] No Harness/Runtime/Session persistence contract changes are required.
+
+**Verification:** projection test contract defined before implementation.
+
+### Task UI-2: Add main Session Activity surface
+
+**Description:** Add a compact Agent Activity region to `SessionShell` between
+Conversation and Input, preserving terminal-width usability and keeping the
+Conversation as the primary surface.
+
+**Acceptance criteria:**
+- [ ] Active execution is visible without relying only on the spinner.
+- [ ] Completed/failed/interrupted current-Run Steps remain understandable.
+- [ ] Steering/follow-up/interrupt hints remain consistent with actual Run
+  state.
+- [ ] Narrow terminals degrade without requiring a permanent side panel.
+
+**Dependencies:** UI-1.
+
+### Task UI-3: Redesign ToolUse presentation
+
+**Description:** Replace the current one-line Tool rendering with a compact,
+expandable semantic ToolUse component driven by existing Tool projection/state.
+
+**Acceptance criteria:**
+- [ ] Running/completed/failed/cancelled/timed-out/denied states are distinct.
+- [ ] Approval-waiting state is represented when it exists ephemerally.
+- [ ] Command/input detail and output detail are progressively disclosed.
+- [ ] No second durable Tool terminal state is created by UI code.
+- [ ] Incomplete historical Tool diagnostics remain fail-closed and explicit.
+
+**Dependencies:** UI-1.
+
+### Task UI-4: Normalize main Session information hierarchy
+
+**Description:** Finalize P0 layout after Activity and ToolUse integration.
+
+**Acceptance criteria:**
+- [ ] Conversation -> Activity -> Input -> StatusBar hierarchy is stable.
+- [ ] Context/Usage/Security detail is not dumped into the transcript.
+- [ ] Theme and keyboard-layer behavior remain consistent.
+- [ ] P0 focused tests, CLI typecheck/build and existing relevant regressions
+  pass.
+
+**Dependencies:** UI-2, UI-3.
+
+## Priority P1-A — Inspector Foundation, Context, Usage and Tree
+
+### Task UI-5: Design and implement one Session Inspector shell
+
+**Description:** Introduce one reusable Inspector architecture instead of one
+independent diagnostics dialog per subsystem.
+
+**Acceptance criteria:**
+- [ ] Tree / Context / Usage / Runtime / Security sections have one navigation
+  model.
+- [ ] Keyboard/search/close behavior is consistent.
+- [ ] Narrow-terminal behavior is specified.
+- [ ] Existing `/tree` can route into the Inspector Tree section without
+  changing Session navigation semantics.
+
+**Dependencies:** P0 complete.
+
+### Task UI-6: Add Context Inspector
+
+**Acceptance criteria:**
+- [ ] Shows current Context occupancy/window/budget/reserved output/safety
+  margin and counter quality from the existing Context observability seam.
+- [ ] Estimated vs exact remains explicit.
+- [ ] Any compaction/pruning detail shown comes only from already-approved
+  state; missing data is not fabricated.
+- [ ] Inspector reads are side-effect free.
+
+**Dependencies:** UI-5.
+
+### Task UI-7: Add Usage / Cost Inspector
+
+**Acceptance criteria:**
+- [ ] Shows Provider-reported input/output/cache buckets when present.
+- [ ] Shows Session cache hit, API Cost, completed Model Steps, coverage and
+  integrity.
+- [ ] `unknown != zero` and partial Cost remains visibly partial.
+- [ ] Current Context estimates are never presented as billable API Usage.
+- [ ] No day/week/project analytics are introduced in this slice.
+
+**Dependencies:** UI-5.
+
+### Task UI-8: Upgrade Session Tree presentation
+
+**Acceptance criteria:**
+- [ ] Existing Navigation Projection remains the semantic source.
+- [ ] Real branch points and active/sibling paths are visually easier to scan.
+- [ ] ToolUse rows avoid leaking raw persistence vocabulary where a semantic
+  label exists.
+- [ ] Branch Summary Carry / No Carry / Cancel behavior remains unchanged.
+- [ ] Hidden bookkeeping Entries remain hidden.
+
+**Dependencies:** UI-5.
+
+## Priority P1-B — Runtime Recovery and Security Audit
+
+### Task UI-9: Add Runtime / Recovery Inspector
+
+**Acceptance criteria:**
+- [ ] Recovery diagnostics are inspectable after the initial toast disappears.
+- [ ] Incomplete Run/operation information uses only existing approved runtime
+  facts.
+- [ ] Usage persistence incompleteness can be surfaced without fabricating
+  missing Usage.
+- [ ] UI does not add automatic external-side-effect replay controls.
+
+**Dependencies:** UI-5.
+
+### Task UI-10: Add Security Audit Inspector
+
+**Acceptance criteria:**
+- [ ] UI consumes a CLI-facing projection of `SecurityAuditTimeline`.
+- [ ] complete/pending/legacy/inconsistent states are distinct.
+- [ ] permission and approval lifecycle is readable at user level.
+- [ ] Durable audit UI never reconstructs redacted command/path/resource
+  values.
+- [ ] Audit surface is read-only.
+
+**Dependencies:** UI-5.
+
+## Priority P2 — Configuration, Sessions and Semantic Polish
+
+### Task UI-11: Evolve Settings into typed controls
+
+**Acceptance criteria:**
+- [ ] Existing typed safe settings can be changed without manually editing JSON.
+- [ ] Branch Summary policy and ProcessSandbox settings are first candidates.
+- [ ] Secret values are not exposed through generic config editing.
+- [ ] Opening config/instruction files remains available as an advanced path.
+
+### Task UI-12: Improve Session management UI
+
+**Acceptance criteria:**
+- [ ] Session list gains useful metadata without forcing expensive replay.
+- [ ] Archive is exposed through the existing authority semantics.
+- [ ] Rename/delete are added only if separately approved authority operations
+  exist; UI must not invent their semantics.
+- [ ] Session operations preserve local-first durable authority behavior.
+
+### Task UI-13: Correct Mode / Agent terminology
+
+**Acceptance criteria:**
+- [ ] Plan/Build are labeled as modes in visible UI.
+- [ ] `tab agents` becomes `tab mode` or semantically equivalent wording.
+- [ ] `/mode` becomes the preferred command or explicit equivalent.
+- [ ] `/agents` may remain a compatibility alias during migration.
+- [ ] “Agent” remains available for future actual agent/subagent identity.
+
+### Task UI-14: Final UI consistency and Provider polish
+
+**Acceptance criteria:**
+- [ ] Dialog/Inspector selection, status, error and destructive-action patterns
+  are consistent.
+- [ ] Provider UI receives presentation polish only; Provider Runtime contracts
+  are unchanged.
+- [ ] Terminal-width, keyboard-only and mouse interaction checks are recorded.
+
+## Per-Slice Delivery Protocol
+
+Before implementing each slice, create:
+
+```text
+docs/UI-<SLICE>-DESIGN.md
+docs/UI-<SLICE>-TEST.md
+docs/UI-<SLICE>-DELIVERY.md
+```
+
+Detailed design must define the UI projection seam, component/state ownership,
+interaction states and responsive terminal behavior. Tests begin with pure
+projection regressions, then component/keyboard/integration coverage. Delivery
+records actual behavior, test/build evidence, manual interaction checks,
+limitations and confirmation that frozen bottom-layer contracts were not
+changed.
+
+## Architecture Escalation Gate
+
+Stop UI implementation and request explicit architecture approval before any
+slice requires:
+
+- new Harness semantic state;
+- new Runtime Event field/type;
+- new Session Entry kind;
+- persistence schema/migration;
+- AgentLoop scheduling change;
+- Context/Compaction policy change;
+- Provider request change;
+- Permission/Approval semantic change;
+- Usage/Cost authority or pricing semantic change.
+
+## Recommended Implementation Order
+
+1. **UI Slice 1 — Runtime Activity Foundation:** UI-1 through UI-4.
+2. **UI Slice 2 — Inspector + Context/Usage/Tree:** UI-5 through UI-8.
+3. **UI Slice 3 — Runtime/Security:** UI-9 through UI-10.
+4. **UI Slice 4 — Settings/Sessions/Polish:** UI-11 through UI-14.
+
+Do not merge these into one monolithic UI branch. Each slice receives its own
+detailed design, Red/Green test contract, review and delivery record.
+
+## Explicitly Deferred from this UI Track
+
+- day/week/month/project analytics and budgets/alerts;
+- Provider invoice reconciliation/account quota UI;
+- cloud sync/commercial entitlement UI;
+- Subagent UI before a Subagent Runtime is approved;
+- Windows native sandbox architecture;
+- new Provider protocols/OAuth architecture;
+- web/desktop GUI migration away from OpenTUI.
 
 ---
 

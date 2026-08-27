@@ -106,6 +106,7 @@ function SessionChat({
     run,
     busy,
     runtimeRecovery,
+    observability,
     pendingApproval,
     resolveApproval,
     cancelApproval,
@@ -318,6 +319,7 @@ function SessionChat({
       }}
       inputDisabled={settling}
       loading={busy || status === "submitted" || status === "streaming"}
+      observability={observability}
       interruptible={runActive || status === "streaming" || status === "submitted"}
       sessionTree={sessionTreeCommands}
       onModeChange={(nextMode) => {

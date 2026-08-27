@@ -5,9 +5,13 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   recoverRuntime,
+  RuntimeSession,
   type RecoveryStore,
   type RuntimeEvent,
   type RuntimeEventInput,
+  type RuntimeJsonValue,
+  type RuntimeSessionProjection,
+  type RuntimeUsageEventPayload,
 } from "@more-more-code/harness";
 import { SqliteRuntimeStore } from "../src/index";
 
@@ -85,7 +89,91 @@ function systemPayload() {
   };
 }
 
+function usagePayload(stepId: string, inputTotal: number, cacheRead: number): RuntimeUsageEventPayload {
+  return {
+    schemaVersion: 1,
+    kind: "model.usage",
+    runId: `run-${stepId}`,
+    turnId: `turn-${stepId}`,
+    stepId,
+    providerId: "openai",
+    providerKind: "openai",
+    modelId: "gpt-5.5",
+    inputTokens: {
+      total: inputTotal,
+      noCache: inputTotal - cacheRead,
+      cacheRead,
+      cacheWrite: 0,
+    },
+    outputTokens: { total: 10 },
+    pricing: {
+      revisionId: "test-pricing-v1",
+      providerId: "openai",
+      modelId: "gpt-5.5",
+      effectiveFrom: 0,
+      currency: "USD",
+      rates: {
+        inputNoCacheUsdPerMillionTokens: 5,
+        cacheReadUsdPerMillionTokens: 1,
+        outputUsdPerMillionTokens: 30,
+      },
+    },
+    cost: {
+      inputUsd: (inputTotal - cacheRead) * 5 / 1_000_000,
+      cacheReadUsd: cacheRead / 1_000_000,
+      cacheWriteUsd: 0,
+      outputUsd: 10 * 30 / 1_000_000,
+      totalUsd: ((inputTotal - cacheRead) * 5 + cacheRead + 300) / 1_000_000,
+      quality: "calculated",
+    },
+  };
+}
+
 describe("SqliteRuntimeStore", () => {
+  test("restores cumulative Usage/Cost/Cache from a Runtime snapshot after SQLite restart", async () => {
+    const temporaryDatabase = await createTemporaryRuntimeDatabase();
+    const firstStore = new SqliteRuntimeStore<RuntimeSessionProjection & RuntimeJsonValue>({
+      databaseUrl: temporaryDatabase.databaseUrl,
+    });
+    const firstSession = new RuntimeSession({
+      sessionId: "usage-session",
+      store: firstStore,
+      snapshotPolicy: { maxEvents: 1, maxAgeMs: 60_000 },
+    });
+
+    try {
+      await firstSession.ready();
+      await firstSession.record({ type: "usage", payload: usagePayload("step-1", 100, 75) });
+      await firstSession.record({ type: "usage", payload: usagePayload("step-2", 100, 0) });
+      const beforeRestart = firstSession.getUsageSummary();
+      expect(beforeRestart).toMatchObject({
+        completedStepCount: 2,
+        tokens: { inputTotal: 200, cacheRead: 75, outputTotal: 20 },
+        cache: { hitRate: 0.375, coverage: "complete" },
+        cost: { coverage: "complete" },
+        integrity: "valid",
+      });
+      await firstStore.close();
+
+      const restartedStore = new SqliteRuntimeStore<RuntimeSessionProjection & RuntimeJsonValue>({
+        databaseUrl: temporaryDatabase.databaseUrl,
+      });
+      try {
+        const restartedSession = new RuntimeSession({
+          sessionId: "usage-session",
+          store: restartedStore,
+        });
+        await restartedSession.ready();
+        expect(restartedSession.getUsageSummary()).toEqual(beforeRestart);
+      } finally {
+        await restartedStore.close();
+      }
+    } catch (error) {
+      try { await firstStore.close(); } catch {}
+      throw error;
+    }
+  });
+
   test("rejects an invalid event type before it can pollute the durable stream", async () => {
     const temporaryDatabase = await createTemporaryRuntimeDatabase();
     const store = new SqliteRuntimeStore({ databaseUrl: temporaryDatabase.databaseUrl });

@@ -26,18 +26,23 @@ import {
     type AgentToolCall,
     type RuntimeSession,
     type RuntimeSessionRecoveryReport,
+    type SessionUsageSummary,
     type SessionEntryInput,
     type SessionEntryMetadata,
     type SessionRuntimeState,
     type SessionTreeState,
 } from "@more-more-code/harness";
 import { executeNativeTool, resolveNativeToolTimeoutMs } from "../lib/local-tools";
-import { getAgentEnvironment } from "../lib/agent-environment";
+import {
+    getAgentEnvironment,
+    subscribeAgentEnvironment,
+} from "../lib/agent-environment";
 import { ToolRuntime, type ToolExecutionResult } from "../lib/tool-runtime";
 import {
     LocalModelTransport,
     type ContextCompactionEvent,
     type ContextProjectionLifecycleEvent,
+    type CurrentContextUsage,
 } from "../lib/local-model-transport";
 import type { ChatTools, Message } from "../lib/chat-types";
 import {
@@ -64,6 +69,8 @@ import {
     projectDurableSessionMessages,
 } from "../lib/durable-session-message";
 import { getCliRunLifecycle } from "../lib/run-lifecycle";
+import { createRuntimeUsagePayload } from "../lib/provider-usage";
+import { createSessionObservability } from "../lib/session-observability";
 
 export type { Message } from "../lib/chat-types";
 
@@ -341,6 +348,14 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
     const [busy, setBusy] = useState(false);
     const [runtimeRecovery, setRuntimeRecovery] = useState<RuntimeSessionRecoveryReport | null>(null);
     const [runtimeError, setRuntimeError] = useState<Error | null>(null);
+    const [sessionUsage, setSessionUsage] = useState<SessionUsageSummary>(() =>
+        runtimeSession.getUsageSummary(),
+    );
+    const [contextUsage, setContextUsage] = useState<CurrentContextUsage | null>(null);
+    const [usagePersistenceIncomplete, setUsagePersistenceIncomplete] = useState(false);
+    const [agentEnvironmentRevision, setAgentEnvironmentRevision] = useState(() =>
+        getAgentEnvironment().loadedAt,
+    );
     const [pendingApprovals, setPendingApprovals] = useState(() => approvalBroker.getPending());
     const [sessionTree, setSessionTree] = useState<SessionTreeState<Message>>(() =>
         restoreSessionTree<Message>(persistedSessionState),
@@ -361,7 +376,10 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         setRuntimeRecovery(null);
         setRuntimeError(null);
         void runtimeSession.ready().then((report) => {
-            if (active) setRuntimeRecovery(report);
+            if (active) {
+                setRuntimeRecovery(report);
+                setSessionUsage(runtimeSession.getUsageSummary());
+            }
         }).catch((error) => {
             if (active) setRuntimeError(toError(error));
         });
@@ -379,6 +397,10 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
             approvalBroker.cancelAll();
         };
     }, [approvalBroker]);
+
+    useEffect(() => subscribeAgentEnvironment((environment) => {
+        setAgentEnvironmentRevision(environment.loadedAt);
+    }), []);
 
     const transport = useMemo(() => {
         return new LocalModelTransport({
@@ -419,6 +441,30 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
                         ...(metadata.stepId ? { stepId: metadata.stepId } : {}),
                     },
                 });
+            },
+            async onModelUsage(event) {
+                const metadata = activeModelStepMetadataRef.current;
+                if (!metadata.runId || !metadata.turnId || !metadata.stepId) {
+                    throw new Error("Completed Model Usage is missing active run/turn/step correlation");
+                }
+                await runtimeSession.record({
+                    type: "usage",
+                    payload: createRuntimeUsagePayload({
+                        correlation: {
+                            runId: metadata.runId,
+                            turnId: metadata.turnId,
+                            stepId: metadata.stepId,
+                        },
+                        completion: event,
+                    }),
+                });
+                setSessionUsage(runtimeSession.getUsageSummary());
+            },
+            onModelUsageError() {
+                // The Provider already completed. Keep the assistant result,
+                // but permanently downgrade this process/session aggregate so
+                // the StatusBar cannot claim complete Cost/Cache coverage.
+                setUsagePersistenceIncomplete(true);
             },
             getContextCheckpoint() {
                 const checkpoint = projectLatestSessionCompaction(sessionTreeRef.current);
@@ -466,6 +512,24 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
             },
         });
     }, [runtimeSession]);
+
+    useEffect(() => {
+        const runtime = projectSessionRuntimeState(sessionTree);
+        if ((runtime.mode !== "BUILD" && runtime.mode !== "PLAN") || !runtime.model) {
+            setContextUsage(null);
+            return;
+        }
+        try {
+            const model = normalizeModelRef(runtime.model, runtime.provider);
+            setContextUsage(transport.inspectCurrentContext({
+                messages: cloneMessages(projectDurableSessionMessages(sessionTree)),
+                mode: runtime.mode,
+                model,
+            }));
+        } catch {
+            setContextUsage(null);
+        }
+    }, [sessionTree, transport, agentEnvironmentRevision]);
 
     const chat = useAiChat<Message>({
         id: sessionId,
@@ -1143,6 +1207,12 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         trackInFlightWork,
     ]);
 
+    const observability = useMemo(() => createSessionObservability({
+        context: contextUsage,
+        usage: sessionUsage,
+        usagePersistenceIncomplete,
+    }), [contextUsage, sessionUsage, usagePersistenceIncomplete]);
+
     return {
         messages: chat.messages,
         status: chat.status,
@@ -1150,6 +1220,7 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         run,
         busy,
         runtimeRecovery,
+        observability,
         pendingApproval: pendingApprovals[0] ?? null,
         resolveApproval,
         cancelApproval,

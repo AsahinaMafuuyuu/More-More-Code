@@ -89,16 +89,19 @@ export const SUPPORTED_CHAT_MODELS = [
         id: "deepseek-v4-flash",
         provider: "deepseek",
         pricing: {
-            inputUsdPerMillionTokens: 0.14,
-            outputUsdPerMillionTokens: 0.28,
+            // Peak cache-miss/output hints. The Cost Engine resolves the
+            // authoritative DeepSeek peak/off-peak + cache-hit tariff.
+            inputUsdPerMillionTokens: 0.44,
+            outputUsdPerMillionTokens: 1.32,
         },
     },
     {
         id: "deepseek-v4-pro",
         provider: "deepseek",
         pricing: {
-            inputUsdPerMillionTokens: 0.435,
-            outputUsdPerMillionTokens: 0.87,
+            // Peak cache-miss/output hints; see the Cost Engine tariff.
+            inputUsdPerMillionTokens: 1.32,
+            outputUsdPerMillionTokens: 3.96,
         },
     },
 ] as const satisfies readonly RecommendedChatModelDefinition[];

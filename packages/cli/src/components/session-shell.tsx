@@ -6,6 +6,7 @@ import { usePromptConfig } from "../providers/prompt-config";
 import type { SessionTreeCommandApi } from "./command-menu/types";
 import type { ModeType, ModelRef } from "@more-more-code/shared";
 import type { ManualContextCompactionOutcome } from "../lib/local-model-transport";
+import type { SessionObservability } from "../lib/session-observability";
 
 type Props = {
     children?: ReactNode;
@@ -18,6 +19,7 @@ type Props = {
     onModeChange?: (mode: ModeType) => void | Promise<void>;
     onModelChange?: (model: ModelRef) => void | Promise<void>;
     onCompact?: () => Promise<ManualContextCompactionOutcome>;
+    observability?: SessionObservability;
 };
 
 export function SessionShell({ children,
@@ -30,6 +32,7 @@ export function SessionShell({ children,
     onModeChange,
     onModelChange,
     onCompact,
+    observability,
 }
     : Props) {
     const { mode } = usePromptConfig()
@@ -61,6 +64,7 @@ export function SessionShell({ children,
                     onModeChange={onModeChange}
                     onModelChange={onModelChange}
                     onCompact={onCompact}
+                    observability={observability}
                 />
             </box>
 

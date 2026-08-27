@@ -1,6 +1,6 @@
 # Usage, Cost & Context Observability Delivery Contract
 
-**Delivery state:** Planned / approved design only.
+**Delivery state:** Delivered — 2026-08-27.
 
 **Target:** Next active local-only Stage 6.5 follow-up after ADR-0026.
 
@@ -231,3 +231,43 @@ Because no SQLite schema migration is expected, rollback is code-level:
 - rolling back UI/Cost projection must not rewrite Session Entries;
 - never delete historical Usage facts merely because a pricing resolver or UI
   version changes.
+
+## 13. Delivered Implementation
+
+The approved V1 observability slice is implemented locally:
+
+- Provider completion normalizes AI SDK Usage into a strict
+  `usage/model.usage` Runtime Event correlated by Run/Turn/Step/provider/model;
+- Session Usage projection folds exact duplicate Steps once, rejects conflicting
+  duplicates as invalid, preserves unknown-vs-zero cache semantics, and is
+  included in Runtime snapshot/replay recovery;
+- pricing resolution is effective-time/version aware and the resolved pricing
+  basis is persisted with each Usage fact so historical cost does not reprice;
+- the Cost Engine calculates cache-aware input/output cost without using local
+  Context estimates or double charging reasoning output;
+- Current Context observability reuses the canonical model-input projection and
+  exposes counter quality/budget/window without issuing a Provider request;
+- `SessionObservability` supplies presentation-ready Context/Cost/Cache state to
+  the existing StatusBar;
+- Provider completion followed by Usage persistence failure does not retry the
+  external Provider call.
+
+No new Session Entry kind, Session Store schema change, Runtime Store SQLite
+migration, Server dependency, or Stage 6.6 cloud behavior was introduced.
+
+## 14. Verification Evidence
+
+Delivered verification on 2026-08-27:
+
+- focused Usage/Cost/Context/StatusBar suite: **38 passed / 0 failed**;
+- Harness full suite: **107 passed / 0 failed**;
+- CLI full suite: **191 passed / 0 failed**;
+- Runtime Store full suite: **9 passed / 0 failed**;
+- Shared, Harness, CLI, and Runtime Store TypeScript checks passed;
+- CLI production build passed;
+- Runtime Store Prisma schema validation passed;
+- `git diff --check` passed.
+
+The Session Store has no Prisma schema; its persistence schema was not modified
+by this delivery. Existing React test warnings about `act(...)` remain
+non-failing and are unrelated to this observability slice.

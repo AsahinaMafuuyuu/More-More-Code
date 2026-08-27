@@ -14,7 +14,7 @@ More More Code 是一个 local-first 的终端 Coding Agent 原型。CLI 是真�
 4. Tool 结果需要继续推理时，Harness 创建新的 `tool-continuation` Turn；
 5. Run 活跃期间，Enter 可排队 steering、Alt+Enter 可排队 follow-up，均只在 Turn-safe boundary 消费；
 6. 每个语义 Session 转换先由本地 SQLite `LocalSessionStore` 事务性提交，成功后才暴露给 UI 或触发 Provider/Tool 副作用；
-7. 再次进入会话、继续、分支、Context checkpoint/cache 和重启恢复均走本地 Session/Runtime Store；显式导入 legacy linear/v1/v2/v3 快照仍是非阻断 follow-up，尚未实现。
+7. 再次进入会话、继续、分支、Context checkpoint/cache、Provider Usage/Cost/Cache telemetry 和重启恢复均走本地 Session/Runtime Store；StatusBar 的 Context 占用来自 canonical Context 投影，累计 API 费用来自 Provider Usage + 每 Step 固化 pricing basis，显式导入 legacy linear/v1/v2/v3 快照仍是非阻断 follow-up，尚未实现。
 
 ## 2. 技术栈与仓库结构
 
