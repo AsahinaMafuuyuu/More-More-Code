@@ -1,8 +1,3 @@
-import type { DialogContextValue } from "../../providers/dialog";
-import type { ToastContextValue } from "../../providers/toast";
-import type { ModeType, ModelRef } from "@more-more-code/shared";
-import type { ManualContextCompactionOutcome } from "../../lib/local-model-transport";
-
 export type SessionTreeCommandEntry = {
     id: string;
     parentId: string | null;
@@ -48,22 +43,8 @@ export type SessionTreeCommandApi = {
     ) => Promise<SessionTreeNavigationResult>;
 };
 
-export type CommandContext = {
-    exit: () => void;
-    toast: ToastContextValue;
-    dialog: DialogContextValue
-    navigate: (path: string) => void;
-    mode: ModeType,
-    model: ModelRef;
-    setMode: (mode: ModeType) => void;
-    setModel: (model: ModelRef) => void | Promise<void>;
-    sessionTree?: SessionTreeCommandApi;
-    compact?: () => Promise<ManualContextCompactionOutcome>;
-}
-
 export type Command = {
     name: string;
     description?: string;
     value: string;
-    action?: (ctx: CommandContext) => void | Promise<void>;
 }

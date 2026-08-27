@@ -5,13 +5,10 @@ import path from "node:path";
 import { act, useEffect, useRef } from "react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { testRender } from "@opentui/react/test-utils";
-import { COMMANDS } from "../src/components/command-menu/commands";
-import { useDialog } from "../src/providers/dialog";
-import { usePromptConfig } from "../src/providers/prompt-config";
-import { useToast } from "../src/providers/toast";
 import { RootLayout } from "../src/layouts/root-layout";
 import { bootstrapAgentEnvironment, getAgentEnvironment } from "../src/lib/agent-environment";
 import { type CustomProviderConfig } from "../src/lib/provider-registry";
+import { useSessionCommandHandler } from "../src/ui/session/command/use-session-command-handler";
 
 const temporaryDirectories: string[] = [];
 
@@ -22,28 +19,18 @@ afterEach(async () => {
 });
 
 function OpenProvidersCommand() {
-    const dialog = useDialog();
-    const toast = useToast();
-    const promptConfig = usePromptConfig();
+    const execute = useSessionCommandHandler({});
     const opened = useRef(false);
 
     useEffect(() => {
         if (opened.current) return;
         opened.current = true;
-        const command = COMMANDS.find((candidate) => candidate.value === "/providers");
-        if (!command?.action) throw new Error("/providers command is not registered");
-
-        void command.action({
-            exit: () => {},
-            toast,
-            dialog,
-            navigate: () => {},
-            mode: promptConfig.mode,
-            model: promptConfig.model,
-            setMode: promptConfig.setMode,
-            setModel: promptConfig.setModel,
+        void execute({
+            type: "command",
+            commandName: "providers",
+            commandValue: "/providers",
         });
-    }, [dialog, promptConfig, toast]);
+    }, [execute]);
 
     return <text>command route</text>;
 }

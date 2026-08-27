@@ -4,7 +4,7 @@ import { modeSchema } from "@more-more-code/shared";
 import { useNavigate, useLocation } from "react-router";
 import { useTheme } from "../providers/theme";
 import { ErrorMessage, UserMessage, BotMessage } from "../components/messages";
-import { SessionShell } from "../components/session-shell";
+import { SessionLoadingWorkspace } from "../ui/session/workspace/session-loading-workspace";
 
 import { useToast } from "../providers/toast";
 import { getLocalSessionAuthority } from "../lib/session-environment";
@@ -81,9 +81,8 @@ export function NewSession() {
     if (!state?.message) return null;
 
     return (
-        <SessionShell onSubmit={() => { }} inputDisabled loading={true}>
-            {/* 由于用户消息不需要用到模型，因此不需要传递model */}
-            <UserMessage message={state.message} mode={state.mode} />
-        </SessionShell>
+        <SessionLoadingWorkspace
+            conversation={<UserMessage message={state.message} mode={state.mode} />}
+        />
     )
 };

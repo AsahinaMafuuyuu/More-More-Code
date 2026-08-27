@@ -2,7 +2,7 @@
 import prettyMs from "pretty-ms";
 import { TextAttributes } from "@opentui/core";
 import { useTheme } from "../../providers/theme";
-import type { Message } from "../../hooks/use-chat";
+import type { Message } from "../../lib/chat-types";
 import { Mode, type ModeType } from "@more-more-code/shared";
 import { EmptyBorder } from "../border";
 import type { ToolUseView } from "../../lib/tool-use-projection";

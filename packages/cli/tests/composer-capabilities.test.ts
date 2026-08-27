@@ -43,9 +43,6 @@ describe("Composer capabilities", () => {
       name: "compact",
       value: "/compact",
       description: "Compact context",
-      action: () => {
-        throw new Error("must not execute inside Composer");
-      },
     });
     expect(intent).toEqual({
       type: "command",

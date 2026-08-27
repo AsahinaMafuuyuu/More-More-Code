@@ -21,7 +21,7 @@ describe("SessionWorkspace layout", () => {
   });
 
   test("renders Conversation -> Activity -> Composer -> Status -> Hints in every width class", async () => {
-    for (const width of [60, 72, 100, 120, 160]) {
+    for (const [width, height] of [[60, 20], [72, 24], [100, 30], [120, 30], [160, 40]] as const) {
       let setup!: Awaited<ReturnType<typeof testRender>>;
       await act(async () => {
         setup = await testRender(
@@ -32,7 +32,7 @@ describe("SessionWorkspace layout", () => {
             status={<text>Status sentinel</text>}
             hints={<text>Hints sentinel</text>}
           />,
-          { width, height: width === 60 ? 20 : 30 },
+          { width, height },
         );
       });
       try {

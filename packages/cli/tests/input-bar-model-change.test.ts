@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { commitPromptModelChange } from "../src/components/input-bar";
+import { commitPromptModelChange } from "../src/ui/session/composer/composer-actions";
 
 const model = { providerId: "local", modelId: "durable-model" };
 
@@ -11,7 +11,7 @@ function deferred() {
   return { promise, resolve };
 }
 
-describe("InputBar model selection", () => {
+describe("Composer model selection", () => {
   test("does not update prompt model until the authority model_change commit resolves", async () => {
     const commit = deferred();
     const selected: string[] = [];

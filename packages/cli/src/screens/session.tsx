@@ -1,23 +1,19 @@
 // Local Session route + workspace composition. Runtime/UI subscriptions live
 // below this screen so one changing projection does not invalidate the route root.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useKeyboard } from "@opentui/react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { z } from "zod";
 import type { ModelRef, ModeType } from "@more-more-code/shared";
 import type { LocalSessionSnapshot } from "@more-more-code/session-store";
-import { SessionShell } from "../components/session-shell";
 import { getLocalSessionAuthority } from "../lib/session-environment";
 import type { Message } from "../lib/chat-types";
 import { useToast } from "../providers/toast";
-import { useKeyboardLayer } from "../providers/keyboard-layer";
 import { SessionController } from "../app/session/session-controller";
 import {
   createInitialSessionUiState,
   createSessionUiStore,
 } from "../ui/session/store/session-ui-store";
-import { SessionUiStoreProvider, useSessionUiSelector } from "../ui/session/store/react-session-ui";
-import { selectComposerRuntime } from "../ui/session/store/session-ui-selectors";
+import { SessionUiStoreProvider } from "../ui/session/store/react-session-ui";
 import { SessionRuntimeBridge } from "../ui/session/runtime/session-runtime-bridge";
 import { ConversationSurface } from "../ui/session/surfaces/conversation-surface";
 import { ActivitySurface } from "../ui/session/surfaces/activity-surface";
@@ -26,9 +22,10 @@ import { InteractionHintsSurface } from "../ui/session/surfaces/interaction-hint
 import { StatusSurface } from "../ui/session/surfaces/status-surface";
 import { SessionWorkspace } from "../ui/session/workspace/session-workspace";
 import { InspectorSurface } from "../ui/session/workspace/inspector-surface";
+import { SessionLoadingWorkspace } from "../ui/session/workspace/session-loading-workspace";
 import { ApprovalPresentation } from "../ui/session/presentation/approval-presentation";
 import { RecoveryPresentation } from "../ui/session/presentation/recovery-presentation";
-import { resolveInteractionAction } from "../ui/session/interaction/interaction-router";
+import { SessionRuntimeInteraction } from "../ui/session/interaction/session-runtime-interaction";
 
 type SessionData = LocalSessionSnapshot<Message>;
 
@@ -48,27 +45,6 @@ const sessionLocationSchema = z.object({
     }).strict(),
   }),
 });
-
-function RuntimeInterruptAdapter({ controller }: { controller: SessionController }) {
-  const runtime = useSessionUiSelector(selectComposerRuntime);
-  const { isTopLayer } = useKeyboardLayer();
-
-  useKeyboard((key) => {
-    if (key.name !== "escape") return;
-    const action = resolveInteractionAction("escape", {
-      dialog: isTopLayer("dialog"),
-      overlay: isTopLayer("command") ? "command" : isTopLayer("mention") ? "mention" : null,
-      inspector: isTopLayer("inspector"),
-      composer: isTopLayer("base"),
-      runInterruptible: runtime.canInterrupt,
-    });
-    if (action?.action !== "interrupt-run") return;
-    key.preventDefault();
-    controller.interrupt();
-  });
-
-  return null;
-}
 
 function SessionChat({
   session,
@@ -112,7 +88,7 @@ function SessionChat({
       <SessionRuntimeBridge controller={controller} store={store} />
       <ApprovalPresentation controller={controller} />
       <RecoveryPresentation />
-      <RuntimeInterruptAdapter controller={controller} />
+      <SessionRuntimeInteraction controller={controller} />
       <SessionWorkspace
         conversation={<ConversationSurface />}
         activity={<ActivitySurface />}
@@ -164,7 +140,7 @@ export function Session() {
   }, [id, navigate, prefetched, toast]);
 
   if (!session) {
-    return <SessionShell onSubmit={() => {}} inputDisabled loading />;
+    return <SessionLoadingWorkspace />;
   }
 
   return (
