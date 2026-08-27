@@ -125,6 +125,33 @@ export function projectAgentActivity(
   };
 }
 
+/**
+ * Advances only presentation elapsed-time fields from an already-sanitized
+ * AgentActivityView. This lets ActivityView own its clock locally without
+ * pushing a periodic timer through the Session/useChat root or re-reading raw
+ * Harness execution state.
+ */
+export function refreshAgentActivityElapsed(
+  activity: AgentActivityView,
+  now: number,
+): AgentActivityView {
+  const safeNow = finiteTimestamp(now);
+  if (safeNow === undefined) return activity;
+
+  return {
+    ...activity,
+    ...refreshTiming(activity, safeNow),
+    turns: activity.turns.map((turn) => ({
+      ...turn,
+      ...refreshTiming(turn, safeNow),
+      steps: turn.steps.map((step) => ({
+        ...step,
+        ...refreshTiming(step, safeNow),
+      })),
+    })),
+  };
+}
+
 function findActiveStepId(run: AgentRun): string | undefined {
   for (let turnIndex = run.turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
     const turn = run.turns[turnIndex]!;
@@ -152,6 +179,24 @@ function projectTiming(
     ...(endedAt === undefined ? {} : { endedAt }),
     ...(elapsedMs === undefined ? {} : { elapsedMs }),
   };
+}
+
+function refreshTiming(
+  value: {
+    startedAt?: number;
+    endedAt?: number;
+    elapsedMs?: number;
+    status: AgentRunStatus;
+  },
+  now: number,
+) {
+  if (value.status !== "running") {
+    return value.elapsedMs === undefined ? {} : { elapsedMs: value.elapsedMs };
+  }
+
+  const startedAt = finiteTimestamp(value.startedAt);
+  if (startedAt === undefined) return {};
+  return { elapsedMs: Math.max(0, now - startedAt) };
 }
 
 function finiteTimestamp(value: unknown): number | undefined {

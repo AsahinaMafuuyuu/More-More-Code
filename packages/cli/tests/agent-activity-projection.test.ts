@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { AgentLifecycleEvent, AgentRun } from "@more-more-code/harness";
 import {
   projectAgentActivity,
+  refreshAgentActivityElapsed,
   reduceAgentActivityProgress,
 } from "../src/lib/agent-activity-projection";
 
@@ -219,6 +220,43 @@ describe("Agent Activity projection", () => {
       type: "run_start",
       run: { ...run, id: "run-2" },
     })).toEqual({});
+  });
+
+  test("refreshes running elapsed time from the UI projection without raw Harness state", () => {
+    const activity = projectAgentActivity(runningInitialModelRun(), { now: 200 });
+    if (!activity) throw new Error("expected running activity projection");
+
+    const refreshed = refreshAgentActivityElapsed(activity, 1_200);
+
+    expect(refreshed).toEqual({
+      ...activity,
+      elapsedMs: 1_100,
+      turns: [{
+        ...activity.turns[0]!,
+        elapsedMs: 1_090,
+        steps: [{
+          ...activity.turns[0]!.steps[0]!,
+          elapsedMs: 1_080,
+        }],
+      }],
+    });
+    expect(activity.elapsedMs).toBe(100);
+  });
+
+  test("does not rewrite terminal elapsed time during a local UI clock refresh", () => {
+    const run = runningInitialModelRun();
+    run.status = "completed";
+    run.endedAt = 350;
+    run.turns[0]!.status = "completed";
+    run.turns[0]!.endedAt = 340;
+    run.turns[0]!.steps[0]!.status = "completed";
+    run.turns[0]!.steps[0]!.endedAt = 330;
+
+    const activity = projectAgentActivity(run, { now: 9_999 });
+    if (!activity) throw new Error("expected terminal activity projection");
+    const refreshed = refreshAgentActivityElapsed(activity, 50_000);
+
+    expect(refreshed).toEqual(activity);
   });
 
 });

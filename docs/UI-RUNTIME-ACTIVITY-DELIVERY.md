@@ -51,9 +51,11 @@
 
 `useChat` now subscribes to the already-existing AgentLoop lifecycle seam and
 retains only the latest process-local Step progress. It projects the current
-Run into `AgentActivityView`, updates running elapsed time on a one-second UI
-clock, and separately projects ToolUse state. React receives these CLI-owned
-projections instead of interpreting raw Harness Run semantics.
+Run into `AgentActivityView` and separately projects ToolUse state. Running
+elapsed time is advanced by a one-second clock owned inside `ActivityView`, so
+the clock rerenders only the Activity subtree rather than the Session root.
+React receives these CLI-owned projections instead of interpreting raw Harness
+Run semantics.
 
 Activity and ToolUse remain intentionally separate: Agent Step `completed`
 does not imply Tool success. Canonical `tool_result.status` is authoritative for
@@ -62,10 +64,9 @@ is never auto-replayed.
 
 ### Verification
 
-- focused P0 suite: **29 pass / 0 fail** across projection, formatter and
-  OpenTUI renderer tests;
-- Session hierarchy renderer test: **1 pass / 0 fail**;
-- full CLI suite: **221 pass / 0 fail** across 47 files;
+- focused P0 suite: **33 pass / 0 fail** across projection, formatter,
+  hierarchy and OpenTUI renderer tests;
+- full CLI suite: **224 pass / 0 fail** across 47 files;
 - full Harness suite: **107 pass / 0 fail** across 15 files;
 - CLI TypeScript typecheck: pass;
 - Harness TypeScript typecheck: pass;
@@ -78,6 +79,26 @@ a 100-column medium layout; pure view-model coverage exercises 120-column wide
 disclosure behavior. The OpenTUI test renderer emits the same non-failing React
 `act(...)` warning already present in existing provider-dialog renderer tests;
 no assertion or build failure results from it.
+
+## Native Renderer Panic Follow-up — 2026-08-27
+
+After initial P0 delivery, a long-running Windows session exposed a Bun
+segmentation fault whose crash report repeatedly referenced `opentui.dll`.
+The P0 implementation had placed the one-second elapsed clock in `useChat`,
+which caused the whole Session React tree (Conversation/scrollbox/messages,
+ToolUse, Activity and Input) to reconcile every second while a Run was active.
+
+The follow-up fix keeps the semantic projection unchanged but moves elapsed
+refresh entirely into `ActivityView`. `refreshAgentActivityElapsed()` advances
+only display-safe timing fields from the existing `AgentActivityView`; it does
+not need raw Harness state. A renderer regression proves that elapsed time
+advances after a timer tick while the parent render count remains unchanged.
+
+Post-fix native-renderer stress repeated that real local-clock renderer path
+20 times with no panic or segmentation fault. Because the minimal isolation
+fix passed, this follow-up deliberately does **not** upgrade Bun or OpenTUI;
+dependency changes remain a separate escalation only if the native crash is
+reproduced again after this isolation fix.
 
 ## Deferred / Not Changed
 

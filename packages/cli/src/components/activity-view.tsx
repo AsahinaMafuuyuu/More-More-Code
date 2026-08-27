@@ -2,7 +2,10 @@ import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/react";
 import { useEffect, useMemo, useState } from "react";
 import type { AgentRunStatus } from "@more-more-code/harness";
-import type { AgentActivityView } from "../lib/agent-activity-projection";
+import {
+  refreshAgentActivityElapsed,
+  type AgentActivityView,
+} from "../lib/agent-activity-projection";
 import { createActivityRows, formatActivityHeader } from "../lib/activity-view-model";
 import { useTheme } from "../providers/theme";
 import { EmptyBorder } from "./border";
@@ -16,23 +19,37 @@ export function ActivityView({ activity }: Props) {
   const dimensions = useTerminalDimensions();
   const [showHistory, setShowHistory] = useState(true);
   const [turnExpansion, setTurnExpansion] = useState<Record<string, boolean>>({});
+  const [activityNow, setActivityNow] = useState(() => Date.now());
 
   useEffect(() => {
     setShowHistory(true);
     setTurnExpansion({});
   }, [activity?.runId]);
 
-  const rows = useMemo(() => activity
-    ? createActivityRows(activity, {
+  useEffect(() => {
+    setActivityNow(Date.now());
+    if (activity?.status !== "running") return;
+
+    const timer = setInterval(() => setActivityNow(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, [activity?.runId, activity?.status]);
+
+  const displayActivity = useMemo(
+    () => activity ? refreshAgentActivityElapsed(activity, activityNow) : null,
+    [activity, activityNow],
+  );
+
+  const rows = useMemo(() => displayActivity
+    ? createActivityRows(displayActivity, {
         width: dimensions.width,
         showHistory,
         turnExpansion,
         maxTurns: dimensions.height < 24 ? 2 : dimensions.height < 36 ? 3 : 4,
         maxStepsPerTurn: dimensions.height < 24 ? 3 : 4,
       })
-    : [], [activity, dimensions.height, dimensions.width, showHistory, turnExpansion]);
+    : [], [displayActivity, dimensions.height, dimensions.width, showHistory, turnExpansion]);
 
-  if (!activity) return null;
+  if (!displayActivity) return null;
 
   const toggleTurn = (turnId: string, currentExpanded: boolean) => {
     setTurnExpansion((current) => ({
@@ -59,11 +76,11 @@ export function ActivityView({ activity }: Props) {
         gap={1}
         onMouseDown={() => setShowHistory((current) => !current)}
       >
-        <text fg={statusColor(activity.status, colors)}>
+        <text fg={statusColor(displayActivity.status, colors)}>
           {showHistory ? "▾" : "▸"}
         </text>
         <text attributes={TextAttributes.BOLD}>
-          {formatActivityHeader(activity, dimensions.width)}
+          {formatActivityHeader(displayActivity, dimensions.width)}
         </text>
       </box>
 

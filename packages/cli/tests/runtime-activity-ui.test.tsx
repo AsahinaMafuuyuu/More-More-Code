@@ -59,6 +59,48 @@ async function flush(setup: Awaited<ReturnType<typeof testRender>>) {
 }
 
 describe("Runtime Activity UI", () => {
+  test("advances elapsed time inside ActivityView without rerendering its parent", async () => {
+    const startedAt = Date.now() - 1_000;
+    const tickingActivity = activity();
+    tickingActivity.startedAt = startedAt;
+    tickingActivity.elapsedMs = 1_000;
+    tickingActivity.turns[1]!.startedAt = startedAt + 100;
+    tickingActivity.turns[1]!.elapsedMs = 900;
+    tickingActivity.turns[1]!.steps[0]!.startedAt = startedAt + 200;
+    tickingActivity.turns[1]!.steps[0]!.elapsedMs = 800;
+
+    let parentRenders = 0;
+    function Probe() {
+      parentRenders += 1;
+      return <ThemeProvider><ActivityView activity={tickingActivity} /></ThemeProvider>;
+    }
+
+    let setup!: Awaited<ReturnType<typeof testRender>>;
+    await act(async () => {
+      setup = await testRender(<Probe />, { width: 100, height: 30 });
+    });
+
+    try {
+      await flush(setup);
+      const initialParentRenders = parentRenders;
+      const before = setup.captureCharFrame();
+      const beforeSeconds = Number(before.match(/Agent Activity · running · ([0-9.]+)s/)?.[1]);
+      expect(Number.isFinite(beforeSeconds)).toBe(true);
+
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 1_100));
+        await setup.flush({ maxPasses: 10 });
+      });
+
+      const after = setup.captureCharFrame();
+      const afterSeconds = Number(after.match(/Agent Activity · running · ([0-9.]+)s/)?.[1]);
+      expect(afterSeconds).toBeGreaterThan(beforeSeconds + 0.5);
+      expect(parentRenders).toBe(initialParentRenders);
+    } finally {
+      setup.renderer.destroy();
+    }
+  });
+
   test("renders Activity with width-aware density", async () => {
     let medium!: Awaited<ReturnType<typeof testRender>>;
     await act(async () => {

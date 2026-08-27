@@ -76,6 +76,8 @@ Formatter/layout tests where feasible must cover:
 - medium/wide modes retain duration/progress according to design;
 - Session hierarchy is Conversation -> Activity -> Input/StatusBar -> secondary
   hints, with no permanent side pane.
+- running elapsed time advances from the existing `AgentActivityView` inside
+  `ActivityView` without causing its parent Session subtree to rerender.
 
 ## 7. Slice F — Regression / Integration
 
@@ -86,6 +88,8 @@ Formatter/layout tests where feasible must cover:
 - legacy/historical incomplete Tool state remains fail-closed and is never
   auto-replayed;
 - no Harness/Runtime/Session persistence schema changes occur.
+- no periodic elapsed timer exists in `useChat`; timer ownership is local to
+  the Activity presentation subtree.
 
 ## 8. Required Verification
 

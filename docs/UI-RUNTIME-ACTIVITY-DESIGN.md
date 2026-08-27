@@ -218,13 +218,16 @@ SessionShell
 
 ActivityView
   owns disclosure-only UI state
+  owns the local one-second elapsed display clock
 
 BotMessage -> ToolUse
   owns ToolUse disclosure-only UI state
 ```
 
-Expansion state, terminal-width density, hover/click state and scroll state are
-presentation-only and never enter Session/Runtime persistence.
+Expansion state, terminal-width density, hover/click state, scroll state and
+the elapsed display clock are presentation-only and never enter Session/Runtime
+persistence. The elapsed clock must stay below the Session/useChat root so a
+timer tick cannot reconcile Conversation, scrollbox, ToolUse and Input.
 
 ## 8. Status / Failure Semantics
 

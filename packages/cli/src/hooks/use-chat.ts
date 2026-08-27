@@ -352,7 +352,6 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
     );
     const [run, setRun] = useState<AgentRun | null>(null);
     const [activityProgressByStep, setActivityProgressByStep] = useState<AgentActivityProgressState>({});
-    const [activityNow, setActivityNow] = useState(() => Date.now());
     const [busy, setBusy] = useState(false);
     const [runtimeRecovery, setRuntimeRecovery] = useState<RuntimeSessionRecoveryReport | null>(null);
     const [runtimeError, setRuntimeError] = useState<Error | null>(null);
@@ -413,13 +412,6 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
     useEffect(() => agentLoop.subscribe((event) => {
         setActivityProgressByStep((current) => reduceAgentActivityProgress(current, event));
     }), [agentLoop]);
-
-    useEffect(() => {
-        if (run?.status !== "running") return;
-        setActivityNow(Date.now());
-        const timer = setInterval(() => setActivityNow(Date.now()), 1_000);
-        return () => clearInterval(timer);
-    }, [run?.id, run?.status]);
 
     const transport = useMemo(() => {
         return new LocalModelTransport({
@@ -1234,8 +1226,7 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
 
     const activity = useMemo(() => projectAgentActivity(run, {
         progressByStep: activityProgressByStep,
-        now: activityNow,
-    }), [run, activityNow, activityProgressByStep]);
+    }), [run, activityProgressByStep]);
 
     const toolUses = useMemo(() => projectToolUses({
         messages: chat.messages,
