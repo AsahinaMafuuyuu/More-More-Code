@@ -2042,6 +2042,370 @@ Pure legacy-aware Message/Navigation projection
 
 ---
 
+# Stage 6.5 Follow-up — Usage, Cost & Context Observability
+
+**Status:** Approved design / planned implementation. No production behavior has changed yet.
+
+**Design:** `docs/USAGE-COST-CONTEXT-OBSERVABILITY-DESIGN.md`
+
+**Test contract:** `docs/USAGE-COST-CONTEXT-OBSERVABILITY-TEST.md`
+
+**Delivery contract:** `docs/USAGE-COST-CONTEXT-OBSERVABILITY-DELIVERY.md`
+
+**Decision:** ADR-0027.
+
+## Overview
+
+Make current Session resource usage visible in the existing CLI StatusBar while
+preserving the separation between semantic Session history and runtime
+telemetry. V1 delivers three trusted user-facing metrics:
+
+```text
+Ctx ~42.8k/128k · API ~$0.0187 · Cache 72%
+```
+
+The implementation must distinguish Provider-reported API Usage, locally
+estimated current Context occupancy, and pricing-derived Cost. It must not use
+Context estimates as billable Usage or message metadata as a second durable
+Usage authority.
+
+Stage 6.6 Cloud Sync remains paused. This local-only follow-up does not resume
+cloud billing or subscription work.
+
+## Architecture Decisions
+
+- Runtime Store owns durable Usage telemetry through a new strict
+  `usage/model.usage` Runtime Event; Session Tree gains no Usage Entry kind.
+- One completed AgentLoop Model Step has one effective Usage fact identified by
+  `stepId`; exact duplicates fold once and incompatible duplicates invalidate
+  aggregation rather than double count.
+- Provider `LanguageModelUsage` buckets remain optional; missing is unknown,
+  not zero.
+- Current `Ctx` reuses the canonical Context construction/token-budget pipeline
+  and exposes estimator quality. It is not derived from cumulative Provider
+  input Usage.
+- Pricing is versioned/effective-time aware and the resolved pricing basis is
+  stored with each priced Usage fact so historical cost remains stable.
+- Cost is calculated telemetry, not Provider invoice truth.
+- Cache hit is `cacheRead / inputTotal`; cache writes and output are excluded.
+- Usage persistence happens after Provider completion; a persistence failure
+  must never trigger an automatic Provider retry.
+- Existing AI SDK/message metadata Usage is legacy/UI transport only and must
+  not be aggregated together with Runtime Usage facts.
+- Existing Runtime Store `type/payloadJson` schema is sufficient; no SQLite
+  migration is expected.
+
+## Dependency Graph
+
+```text
+Provider Usage normalization + strict Runtime Usage contract
+    -> Step-idempotent Usage projection + restart/snapshot recovery
+        -> versioned Pricing Resolver + Cost Engine
+            -> Cache/coverage aggregation
+                -> canonical Current Context observability projection
+                    -> Session observability state wiring
+                        -> StatusBar integration
+                            -> failure/legacy/full regression delivery
+```
+
+## Phase 1: Usage Authority Foundation
+
+### Task 1: Add Red contract tests and normalized Runtime Usage Event
+
+**Description:** Capture that Runtime Event contracts currently have no Usage
+type, then add a strict provider-independent normalized Usage payload without
+changing Session Store semantics.
+
+**Acceptance criteria:**
+
+- [ ] Red regression proves `usage` Runtime Event is not currently accepted.
+- [ ] Add `usage/model.usage` with strict schema-v1 allowlist.
+- [ ] Persist run/turn/step/provider/model correlation.
+- [ ] Preserve input total/no-cache/cache-read/cache-write and output
+  total/text/reasoning when reported.
+- [ ] Missing Provider fields remain absent rather than becoming zero.
+- [ ] Raw Provider payloads, prompts, message content, Tool content and secrets
+  cannot cross the Usage event seam.
+- [ ] Existing Runtime Event types remain backward compatible.
+
+**Verification:** Runtime Usage contract/validation tests plus existing Harness
+event-store tests.
+
+**Dependencies:** ADR-0027/design accepted.
+
+**Estimated scope:** Medium.
+
+### Task 2: Persist one effective Usage fact per completed Model Step
+
+**Description:** Wire Provider completion to Runtime Usage persistence and add a
+pure Session Usage projector with `stepId` idempotency/integrity semantics.
+
+**Acceptance criteria:**
+
+- [ ] Fake Provider completion records one effective Runtime Usage fact.
+- [ ] Exact duplicate facts for one `stepId` count once.
+- [ ] Incompatible duplicate facts fail aggregation integrity and never charge
+  twice.
+- [ ] Usage persistence uses current Session/Run/Turn/Step correlation.
+- [ ] No new Session Entry kind or Session Store schema change is introduced.
+- [ ] Usage metadata inside legacy/current messages is not counted as a second
+  authority.
+
+**Verification:** fake Provider integration + pure Usage projection tests.
+
+**Dependencies:** Task 1.
+
+**Estimated scope:** Medium.
+
+### Task 3: Add restart-efficient Usage recovery
+
+**Description:** Extend Runtime projection/snapshot state with a
+backward-compatible cumulative Usage projection so long Sessions do not require
+an unbounded event-zero replay on every open.
+
+**Acceptance criteria:**
+
+- [ ] Full replay and snapshot+tail replay yield identical Usage summaries.
+- [ ] Existing snapshots without Usage aggregate remain readable.
+- [ ] Runtime Store restart restores token/cache/cost state locally.
+- [ ] No Server/API URL dependency is added.
+- [ ] No Runtime Store SQLite migration is required.
+
+**Verification:** disposable SQLite restart/snapshot parity tests.
+
+**Dependencies:** Task 2.
+
+**Estimated scope:** Medium.
+
+## Checkpoint: Durable Usage Authority
+
+- Provider-reported Usage is durable in Runtime Store.
+- Session semantic history remains free of new Usage facts.
+- Step retries cannot inflate Usage totals.
+- Restart can restore cumulative Session Usage without cloud state.
+
+## Phase 2: Pricing and Cost
+
+### Task 4: Replace flat pricing hints with versioned Pricing revisions
+
+**Description:** Introduce a Pricing Resolver capable of historical effective
+revisions and cache-aware rates without restoring a closed model allowlist.
+
+**Acceptance criteria:**
+
+- [ ] Pricing revision identifies provider/model/effective time/currency.
+- [ ] Support uncached input, cache-read, optional cache-write and output rates.
+- [ ] Historical revisions required by persisted Usage are retained.
+- [ ] Usage facts persist the resolved pricing basis used at completion.
+- [ ] Unknown Custom Provider pricing does not inherit OpenAI pricing merely
+  because the protocol is OpenAI-compatible.
+- [ ] Missing required pricing bucket yields unavailable Cost, not guessed Cost.
+
+**Verification:** Pricing revision selection/time-boundary/custom-provider
+negative tests.
+
+**Dependencies:** Task 2.
+
+**Estimated scope:** Medium.
+
+### Task 5: Add deterministic Cost Engine and Session Cost projection
+
+**Description:** Calculate per-Step USD cost from Provider Usage and the stored
+pricing basis, then aggregate Session Cost with explicit coverage.
+
+**Acceptance criteria:**
+
+- [ ] Cost covers uncached input/cache-read/cache-write/output buckets.
+- [ ] Reasoning tokens are not double-charged when included in output total.
+- [ ] Deterministic rounding is tested for tiny and large totals.
+- [ ] `complete | partial | none` Cost coverage is explicit.
+- [ ] Historical Session totals do not change after catalog revisions.
+- [ ] Context estimates are never used by Cost Engine.
+
+**Verification:** table-driven Cost Engine + historical pricing regression.
+
+**Dependencies:** Task 4.
+
+**Estimated scope:** Medium.
+
+### Task 6: Add strict Cache hit aggregation
+
+**Description:** Aggregate Provider cache-read telemetry across the Session
+without conflating unknown with zero.
+
+**Acceptance criteria:**
+
+- [ ] Cache hit formula is `sum(cacheRead) / sum(inputTotal)`.
+- [ ] Explicit `cacheRead=0` produces real 0%.
+- [ ] Missing cache telemetry is unknown, not 0%.
+- [ ] Cache-write/output tokens do not enter the hit numerator.
+- [ ] Mixed incomplete telemetry yields partial/none coverage; V1 StatusBar does
+  not present it as a complete percentage.
+
+**Verification:** cache coverage matrix tests.
+
+**Dependencies:** Task 2.
+
+**Estimated scope:** Small.
+
+## Checkpoint: Cost and Cache Semantics
+
+- Cost is based only on Provider-reported Usage and resolved pricing.
+- Historical pricing is stable.
+- Cache 0% and Cache unavailable are distinct states.
+- Mixed models/providers retain per-Step pricing identity.
+
+## Phase 3: Current Context Observability
+
+### Task 7: Extract a pure current Context Usage projection
+
+**Description:** Reuse the same canonical Context source construction,
+Tool Result pruning, Compaction checkpoint, model profile and TokenCounter as
+the real Model Step path, but perform no Provider request.
+
+**Acceptance criteria:**
+
+- [ ] Expose current estimated/exact input tokens, Context Window, effective
+  input budget, reserved output, safety margin, utilization and counter ID.
+- [ ] Same current state produces the same Context record selection/token count
+  as the actual Model Step projection.
+- [ ] No Provider request or persistence mutation occurs.
+- [ ] Current heuristic counters are marked `estimated`.
+
+**Verification:** canonical Context parity/purity tests.
+
+**Dependencies:** existing Context pipeline.
+
+**Estimated scope:** Medium.
+
+### Task 8: Recompute Context observability on semantic/config changes
+
+**Description:** Keep current Context status fresh without recomputing on every
+render tick.
+
+**Acceptance criteria:**
+
+- [ ] Recompute after Session open/restart and active branch navigation.
+- [ ] Recompute after durable message/Tool/Compaction/Branch Summary changes.
+- [ ] Recompute after model/mode/ToolSet/Agent-source changes.
+- [ ] Model change immediately updates Context Window/profile.
+- [ ] Branch change updates Context occupancy but does not reduce Session-wide
+  historical API Cost.
+
+**Verification:** trigger matrix tests.
+
+**Dependencies:** Task 7.
+
+**Estimated scope:** Small/Medium.
+
+## Phase 4: StatusBar Integration
+
+### Task 9: Add Session observability state seam
+
+**Description:** Combine Runtime Session Usage summary and Current Context Usage
+into one immutable UI-facing state object. Keep calculations out of React
+components.
+
+**Acceptance criteria:**
+
+- [ ] UI state exposes Context, Cost, Cache plus quality/coverage flags.
+- [ ] Incremental Usage updates do not trigger full Runtime replay.
+- [ ] Status reads do not write Session/Runtime stores.
+- [ ] React/OpenTUI receives already-computed values.
+
+**Verification:** state/provider seam tests.
+
+**Dependencies:** Tasks 3, 5, 6, 8.
+
+**Estimated scope:** Medium.
+
+### Task 10: Render Context, API Cost and Cache in existing StatusBar
+
+**Description:** Extend the current `Build/Plan > provider/model` line with the
+three required compact metrics.
+
+**Acceptance criteria:**
+
+- [ ] Example complete state renders semantically equivalent to
+  `Ctx ~42.8k/128k · API ~$0.0187 · Cache 72%`.
+- [ ] Exact Context counters omit approximation marker; heuristic counters keep
+  it.
+- [ ] Unknown Cost/Cache render `—`, never zero.
+- [ ] Real zero cache renders `0%`.
+- [ ] Display formatting is deterministic and presentation-only.
+- [ ] Existing mode/model StatusBar information remains visible.
+
+**Verification:** focused StatusBar component tests.
+
+**Dependencies:** Task 9.
+
+**Estimated scope:** Small.
+
+## Phase 5: Failure, Compatibility & Delivery
+
+### Task 11: Verify post-Provider Usage persistence failure semantics
+
+**Description:** Prove observability failure cannot repeat an already-completed
+external Provider call or fabricate Usage.
+
+**Acceptance criteria:**
+
+- [ ] Forced Usage append failure calls fake Provider exactly once.
+- [ ] Completed assistant output is not discarded solely for accounting retry.
+- [ ] Current observability state becomes incomplete/diagnostic.
+- [ ] Missing Usage is not reconstructed from Context estimates.
+- [ ] No duplicate Cost is created later.
+
+**Verification:** fake Provider + rejecting Runtime Store regression.
+
+**Dependencies:** Tasks 2, 9.
+
+**Estimated scope:** Small/Medium.
+
+### Task 12: Complete compatibility/full verification and delivery docs
+
+**Description:** Run the complete test contract, architecture review and
+repository verification. Only then update current-state documentation to
+Delivered.
+
+**Acceptance criteria:**
+
+- [ ] All slices in `USAGE-COST-CONTEXT-OBSERVABILITY-TEST.md` pass.
+- [ ] Existing Session/Tool/Context/Runtime recovery/security suites remain
+  green.
+- [ ] Relevant Harness/CLI/Runtime Store typechecks/builds pass.
+- [ ] Prisma validation confirms no unintended persistence migration.
+- [ ] `git diff --check` passes.
+- [ ] README/CONTEXT/PROJECT_ANALYSIS/CHANGELOG are updated only after all gates
+  are green.
+- [ ] Pre-existing unrelated root `AGENTS.md` modification remains outside the
+  Stage commit.
+
+**Verification:** full documented matrix plus repository instructions.
+
+**Dependencies:** Tasks 1-11.
+
+**Estimated scope:** Small.
+
+## Explicitly Deferred / Out of Scope
+
+- `/usage` dashboard/dialog;
+- per-message Step Usage footer;
+- day/week/month/project/provider/model analytics;
+- spend budgets and alerts;
+- account quota/balance monitoring;
+- Provider billing portal reconciliation;
+- automatic online pricing refresh;
+- exact tokenizers for every model family;
+- Custom Provider pricing editor;
+- branch-scoped API spend projection;
+- Usage cloud sync/commercial billing;
+- Stage 6.6 Cloud Session Sync/Entitlements;
+- Stage 6.7 Windows Native Sandbox;
+- MCP/Subagent/OAuth/unrelated UI work.
+
+---
+
 # Stage 6.6 — Cloud Session Sync & Commercial Entitlements
 
 **Status:** Paused — Stage 6.5 is delivered; requires explicit product re-approval before cloud sync or commercial-account work resumes.

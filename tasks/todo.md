@@ -526,6 +526,93 @@
 
 ---
 
+# Stage 6.5 Follow-up — Usage, Cost & Context Observability
+
+**Status:** Approved design / implementation pending.
+
+## Usage Authority
+
+- [ ] Add Red regression for missing `usage/model.usage` Runtime Event support.
+- [ ] Add strict normalized Provider Usage event with Run/Turn/Step/Provider/Model correlation.
+- [ ] Preserve Provider-reported input total/no-cache/cache-read/cache-write and output total/text/reasoning buckets.
+- [ ] Keep missing Provider fields unknown instead of coercing them to zero.
+- [ ] Keep raw Provider payloads, prompts, messages, Tool content, commands/files, and secrets outside durable Usage payloads.
+- [ ] Persist one effective Usage fact per completed Model Step.
+- [ ] Fold identical duplicate `stepId` Usage once and fail integrity on incompatible duplicate Usage.
+- [ ] Make Runtime Usage facts the only new durable Usage authority; do not add a Session Entry kind.
+- [ ] Stop using legacy/current message metadata Usage as an aggregation source.
+
+## Restart & Projection
+
+- [ ] Add pure Session Usage projection with token/cache/cost coverage and integrity state.
+- [ ] Add backward-compatible cumulative Usage state to Runtime snapshot/replay projection.
+- [ ] Prove full replay == snapshot + tail replay.
+- [ ] Prove Runtime Store restart restores Usage locally with zero Server/API URL dependency.
+- [ ] Keep Runtime Store and Session Store SQLite schemas unchanged unless ADR-0027 is revised first.
+
+## Pricing & Cost
+
+- [ ] Replace flat pricing hints with versioned effective-time Pricing revisions.
+- [ ] Support uncached input, cache-read, optional cache-write, and output rates.
+- [ ] Persist the resolved pricing basis used by each priced Usage fact.
+- [ ] Keep historical Session cost stable across later pricing-catalog changes.
+- [ ] Do not implicitly price Custom OpenAI-compatible endpoints as OpenAI.
+- [ ] Add deterministic Cost Engine with tested rounding.
+- [ ] Do not double-charge reasoning tokens already included in output total.
+- [ ] Make unknown required rates produce unavailable/partial Cost rather than guessed values.
+- [ ] Aggregate Session Cost with explicit `complete | partial | none` coverage.
+
+## Cache
+
+- [ ] Define Cache hit as `sum(cacheRead) / sum(inputTotal)`.
+- [ ] Distinguish explicit `cacheRead=0` from missing telemetry.
+- [ ] Exclude cache-write and output tokens from hit numerator.
+- [ ] Mark mixed incomplete cache telemetry partial/none; V1 StatusBar shows `Cache —` unless coverage is complete.
+
+## Current Context
+
+- [ ] Add pure Current Context observability projection that reuses canonical Context construction.
+- [ ] Expose current input tokens, Context Window, input budget, reserved output, safety margin, utilization, counter ID, and estimated/exact quality.
+- [ ] Prove Context observability matches the actual Model Step Context pipeline without making a Provider request.
+- [ ] Recompute after Session open/restart, branch/history/Tool/Compaction/Branch Summary changes, model/mode changes, and Agent source/ToolSet reload.
+- [ ] Keep Context estimates separate from Provider-reported Usage and Cost calculation.
+
+## StatusBar UI
+
+- [ ] Add one Session observability state seam combining Usage summary + Current Context summary.
+- [ ] Keep all calculation/aggregation outside `status-bar.tsx`.
+- [ ] Render `Ctx ~current/window · API ~$sessionCost · Cache hit%` beside current mode/model.
+- [ ] Omit `~` only for exact Context counters.
+- [ ] Render unknown Cost/Cache as `—`, not zero.
+- [ ] Render real zero cache hit as `0%`.
+- [ ] Keep formatting compact and deterministic without changing metric semantics.
+
+## Failure, Compatibility & Delivery
+
+- [ ] Prove Usage Runtime append failure after Provider completion never retries the Provider.
+- [ ] Preserve already-received assistant result while surfacing incomplete observability state.
+- [ ] Never reconstruct missing actual Usage from local Context estimates.
+- [ ] Verify legacy Session message metadata cannot double-count Runtime Usage.
+- [ ] Verify mixed Provider/model Session cost uses each Step's own pricing basis while current Context uses the currently selected model.
+- [ ] Run all Red -> Green slices in `docs/USAGE-COST-CONTEXT-OBSERVABILITY-TEST.md`.
+- [ ] Run full relevant Harness/CLI/Runtime Store regression suites, typechecks/builds, Prisma validation, and `git diff --check`.
+- [ ] Update README/CONTEXT/PROJECT_ANALYSIS/CHANGELOG to Delivered only after all verification is green.
+- [ ] Preserve pre-existing unrelated root `AGENTS.md` modification outside the Stage commit.
+
+## Explicitly Deferred
+
+- [ ] `/usage` dashboard/dialog and per-message Step Usage footer.
+- [ ] Day/week/month/project/provider/model analytics and charts.
+- [ ] Spend budgets/alerts and account quota/balance monitoring.
+- [ ] Provider billing portal reconciliation or automatic online pricing updates.
+- [ ] Exact tokenizers for every Provider/model family.
+- [ ] Custom Provider pricing editor.
+- [ ] Branch-scoped cost views.
+- [ ] Usage cloud sync/commercial billing.
+- [ ] Stage 6.6 Cloud Sync, Stage 6.7 Windows Sandbox, MCP/Subagent/OAuth, and unrelated UI work.
+
+---
+
 # Stage 6.6 — Cloud Session Sync & Commercial Entitlements
 
 **Status:** Paused — requires explicit product re-approval after ADR-0024.
