@@ -107,7 +107,6 @@ function SessionChat({
     submit,
     steer,
     followUp,
-    abort,
     interrupt,
     error,
     run,
@@ -245,12 +244,6 @@ function SessionChat({
   ]);
 
   const hasSubmittedInitialPromptRef = useRef(false); // 用于标记是否已经提交了初始提示
-
-  useEffect(() => {
-    return () => { // 组件卸载时取消订阅
-      void abort();
-    }
-  }, [abort]);
 
   useKeyboard((key) => {
     if (
