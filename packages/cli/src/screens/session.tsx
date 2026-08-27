@@ -24,6 +24,8 @@ import { ActivitySurface } from "../ui/session/surfaces/activity-surface";
 import { ComposerSurface } from "../ui/session/surfaces/composer-surface";
 import { InteractionHintsSurface } from "../ui/session/surfaces/interaction-hints-surface";
 import { StatusSurface } from "../ui/session/surfaces/status-surface";
+import { SessionWorkspace } from "../ui/session/workspace/session-workspace";
+import { InspectorSurface } from "../ui/session/workspace/inspector-surface";
 import { ApprovalPresentation } from "../ui/session/presentation/approval-presentation";
 import { RecoveryPresentation } from "../ui/session/presentation/recovery-presentation";
 import { resolveInteractionAction } from "../ui/session/interaction/interaction-router";
@@ -111,19 +113,14 @@ function SessionChat({
       <ApprovalPresentation controller={controller} />
       <RecoveryPresentation />
       <RuntimeInterruptAdapter controller={controller} />
-      <SessionShell
-        onSubmit={() => {}}
-        activitySlot={<ActivitySurface />}
-        composerSlot={<ComposerSurface controller={controller} />}
-        footerSlot={(
-          <>
-            <StatusSurface />
-            <InteractionHintsSurface />
-          </>
-        )}
-      >
-        <ConversationSurface />
-      </SessionShell>
+      <SessionWorkspace
+        conversation={<ConversationSurface />}
+        activity={<ActivitySurface />}
+        composer={<ComposerSurface controller={controller} />}
+        status={<StatusSurface />}
+        hints={<InteractionHintsSurface />}
+        inspector={<InspectorSurface />}
+      />
     </SessionUiStoreProvider>
   );
 }
