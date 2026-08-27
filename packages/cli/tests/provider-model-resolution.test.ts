@@ -82,7 +82,7 @@ describe("provider model resolution", () => {
         await environment.providers.saveProvider({ ...openai, auth: { type: "codex-oauth" } });
 
         await expect(resolveChatModel({ providerId: "openai", modelId: "gpt-5.5" }, environment))
-            .rejects.toThrow("no supported broker");
+            .rejects.toThrow("documented OpenAI Responses contract");
     });
 
     test("uses conservative provider defaults for configured unknown models", () => {

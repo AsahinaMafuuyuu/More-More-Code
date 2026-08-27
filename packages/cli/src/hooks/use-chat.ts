@@ -5,7 +5,6 @@ import {
     isToolUIPart,
 } from "ai";
 import {
-    modelRefEquals,
     type ModelRef,
     type ModeType,
 } from "@more-more-code/shared";
@@ -37,13 +36,11 @@ import {
 import { executeNativeTool, resolveNativeToolTimeoutMs } from "../lib/local-tools";
 import { getAgentEnvironment } from "../lib/agent-environment";
 import { ToolRuntime, type ToolExecutionResult } from "../lib/tool-runtime";
-import { createAgentUserMessage } from "../lib/agent-chat-message";
 import {
     LocalModelTransport,
     type ContextCompactionEvent,
     type ContextProjectionLifecycleEvent,
 } from "../lib/local-model-transport";
-import { persistSessionState } from "../lib/session-store";
 import type { ChatTools, Message } from "../lib/chat-types";
 import {
     executeBranchNavigation,
@@ -57,6 +54,14 @@ import { createEffectivePermissionPolicy } from "../lib/permission-policy";
 import { ProcessSandbox } from "../lib/process-sandbox";
 import { InteractiveApprovalBroker } from "../lib/interactive-approval-broker";
 import { normalizeModelRef } from "../lib/models";
+import { getLocalSessionAuthority } from "../lib/session-environment";
+import { runDurableSessionTurn } from "../lib/durable-session-turn";
+import {
+    inspectDurableToolCall,
+    persistThenExposeToolTerminal,
+    type PersistThenExposeToolTerminalInput,
+} from "../lib/durable-tool-terminal";
+import { getCliRunLifecycle } from "../lib/run-lifecycle";
 
 export type { Message } from "../lib/chat-types";
 
@@ -323,6 +328,8 @@ function getStepMetadata(input: {
 
 export function useChat(sessionId: string, persistedSessionState: unknown) {
     const runtimeSession = useMemo(() => getRuntimeSession(sessionId), [sessionId]);
+    const localSessionAuthority = useMemo(() => getLocalSessionAuthority(), []);
+    const runLifecycle = useMemo(() => getCliRunLifecycle(), []);
     const approvalBroker = useMemo(() => new InteractiveApprovalBroker(), [sessionId]);
     const agentLoop = useMemo(
         () => new AgentLoop({ eventStore: runtimeSession }),
@@ -337,11 +344,12 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         restoreSessionTree<Message>(persistedSessionState),
     );
     const sessionTreeRef = useRef(sessionTree);
-    const persistQueueRef = useRef<Promise<void>>(Promise.resolve());
+    const treeWriteTailRef = useRef<Promise<void>>(Promise.resolve());
+    const inFlightWorkRef = useRef(new Set<Promise<unknown>>());
     const pendingModelStepRef = useRef<PendingModelStep | null>(null);
     const branchNavigationBusyRef = useRef(false);
     const activeModelStepMetadataRef = useRef<SessionEntryMetadata>({});
-    const contextCompactionHandlerRef = useRef<((event: ContextCompactionEvent) => void) | null>(null);
+    const contextCompactionHandlerRef = useRef<((event: ContextCompactionEvent) => Promise<void>) | null>(null);
     const latestMessagesRef = useRef<Message[]>(
         cloneMessages(projectSessionTreeMessages(sessionTree)),
     );
@@ -376,7 +384,7 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
                 latestMessagesRef.current = cloneMessages(messages);
             },
             onContextCompaction(event) {
-                contextCompactionHandlerRef.current?.(event);
+                return contextCompactionHandlerRef.current?.(event);
             },
             async onContextEvent(event: ContextProjectionLifecycleEvent) {
                 const metadata = event.operation === "model-step"
@@ -493,86 +501,159 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         },
     });
 
-    const persistTreeBestEffort = useCallback((state: SessionTreeState<Message>) => {
-        const snapshot = structuredClone(state) as SessionTreeState<Message>;
-        persistQueueRef.current = persistQueueRef.current
-            .catch(() => undefined)
-            .then(() => persistSessionState(sessionId, snapshot))
-            .catch((error) => {
-                console.error("Failed to sync session entry tree", {
-                    sessionId,
-                    error,
-                });
-            });
-    }, [sessionId]);
-
-    const applyTreeState = useCallback((state: SessionTreeState<Message>, persist = true) => {
+    const applyTreeState = useCallback((state: SessionTreeState<Message>) => {
         sessionTreeRef.current = state;
         setSessionTree(state);
-        if (persist) persistTreeBestEffort(state);
-    }, [persistTreeBestEffort]);
+    }, []);
 
-    const appendEntry = useCallback((input: SessionEntryInput<Message>) => {
-        const nextTree = appendSessionEntry(sessionTreeRef.current, input);
-        applyTreeState(nextTree);
-        return nextTree;
-    }, [applyTreeState]);
+    const trackInFlightWork = useCallback(<T,>(work: Promise<T>): Promise<T> => {
+        inFlightWorkRef.current.add(work);
+        void work.then(
+            () => {
+                inFlightWorkRef.current.delete(work);
+            },
+            () => {
+                inFlightWorkRef.current.delete(work);
+            },
+        );
+        return work;
+    }, []);
 
-    const syncMessagesToTree = useCallback((metadata: SessionEntryMetadata = {}) => {
+    const waitForDurableWork = useCallback(async () => {
+        // AgentLoop's idle signal is emitted before its caller performs the
+        // final Session Tree sync. Track the outer work promise as well as the
+        // serialized tree tail so shutdown cannot close SQLite in that gap.
+        while (true) {
+            const work = [...inFlightWorkRef.current];
+            const treeTail = treeWriteTailRef.current;
+            await Promise.all([treeTail, ...work]);
+            if (
+                treeTail === treeWriteTailRef.current
+                && work.every((operation) => !inFlightWorkRef.current.has(operation))
+            ) {
+                return;
+            }
+        }
+    }, []);
+
+    const queueTreeWrite = useCallback(async <T,>(operation: () => Promise<T>): Promise<T> => {
+        const previous = treeWriteTailRef.current;
+        let release!: () => void;
+        const completion = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        treeWriteTailRef.current = completion;
+        await previous;
+        try {
+            return await operation();
+        } finally {
+            release();
+        }
+    }, []);
+
+    const commitTreeNow = useCallback(async (state: SessionTreeState<Message>) => {
+        const snapshot = await localSessionAuthority.commit({ sessionId, state });
+        const committedState = restoreSessionTree<Message>(snapshot.state);
+        applyTreeState(committedState);
+        return committedState;
+    }, [applyTreeState, localSessionAuthority, sessionId]);
+
+    const commitTree = useCallback((state: SessionTreeState<Message>) => {
+        return queueTreeWrite(() => commitTreeNow(state));
+    }, [commitTreeNow, queueTreeWrite]);
+
+    const transitionTree = useCallback((
+        transition: (state: SessionTreeState<Message>) => SessionTreeState<Message>,
+    ) => queueTreeWrite(async () => {
         const currentTree = sessionTreeRef.current;
-        const nextTree = appendSessionTreeMessages(
-            currentTree,
+        const nextTree = transition(currentTree);
+        if (nextTree === currentTree) return currentTree;
+        return commitTreeNow(nextTree);
+    }), [commitTreeNow, queueTreeWrite]);
+
+    const appendEntry = useCallback(async (input: SessionEntryInput<Message>) => {
+        return transitionTree((state) => appendSessionEntry(state, input));
+    }, [transitionTree]);
+
+    const syncMessagesToTree = useCallback(async (metadata: SessionEntryMetadata = {}) => {
+        await transitionTree((state) => appendSessionTreeMessages(
+            state,
             latestMessagesRef.current,
             metadata,
-        );
-        if (nextTree !== currentTree) applyTreeState(nextTree);
-        return nextTree;
-    }, [applyTreeState]);
+        ));
+    }, [transitionTree]);
 
-    contextCompactionHandlerRef.current = (event) => {
+    const persistToolTerminal = useCallback(async (
+        input: Omit<
+            PersistThenExposeToolTerminalInput,
+            "authority" | "sessionId" | "state" | "onCommitted"
+        >,
+    ) => queueTreeWrite(() => persistThenExposeToolTerminal({
+        ...input,
+        authority: localSessionAuthority,
+        sessionId,
+        // Read after earlier queued semantic transitions settle, otherwise a
+        // Tool terminal could fork from a stale pre-tool-call tree.
+        state: sessionTreeRef.current,
+        onCommitted(committedState) {
+            applyTreeState(committedState);
+            latestMessagesRef.current = cloneMessages(projectSessionTreeMessages(committedState));
+        },
+    })), [applyTreeState, localSessionAuthority, queueTreeWrite, sessionId]);
+
+    contextCompactionHandlerRef.current = async (event) => {
         const metadata = activeModelStepMetadataRef.current;
-        syncMessagesToTree(metadata);
-        appendEntry({
-            type: "compaction",
-            summary: event.summary,
-            tokensBefore: event.tokensBefore,
-            trigger: event.trigger,
-            inputTokensBefore: event.inputTokensBefore,
-            inputTokensAfter: event.inputTokensAfter,
-            inputBudgetTokens: event.inputBudgetTokens,
-            targetInputTokens: event.targetInputTokens,
-            targetSummaryTokens: event.targetSummaryTokens,
-            ...(event.compactedThroughRecordId
-                ? { compactedThroughRecordId: event.compactedThroughRecordId }
-                : {}),
-            ...(event.compactedThroughMessageId
-                ? { compactedThroughMessageId: event.compactedThroughMessageId }
-                : {}),
-            compactedMessageIds: event.compactedMessageIds,
-            retainedTailMessageIds: event.retainedTailMessageIds,
-            compactedRecordIds: event.compactedRecordIds,
-            retainedTailRecordIds: event.retainedTailRecordIds,
-            ...metadata,
-        });
+        try {
+            // The history sync and its checkpoint form one semantic Session
+            // Tree transition. Applying it through one authority commit means
+            // neither the UI nor the next provider request can observe a
+            // checkpoint whose source history was not persisted with it.
+            await transitionTree((state) => appendSessionEntry(
+                appendSessionTreeMessages(
+                    state,
+                    latestMessagesRef.current,
+                    metadata,
+                ),
+                {
+                    type: "compaction",
+                    summary: event.summary,
+                    tokensBefore: event.tokensBefore,
+                    trigger: event.trigger,
+                    inputTokensBefore: event.inputTokensBefore,
+                    inputTokensAfter: event.inputTokensAfter,
+                    inputBudgetTokens: event.inputBudgetTokens,
+                    targetInputTokens: event.targetInputTokens,
+                    targetSummaryTokens: event.targetSummaryTokens,
+                    ...(event.compactedThroughRecordId
+                        ? { compactedThroughRecordId: event.compactedThroughRecordId }
+                        : {}),
+                    ...(event.compactedThroughMessageId
+                        ? { compactedThroughMessageId: event.compactedThroughMessageId }
+                        : {}),
+                    compactedMessageIds: event.compactedMessageIds,
+                    retainedTailMessageIds: event.retainedTailMessageIds,
+                    compactedRecordIds: event.compactedRecordIds,
+                    retainedTailRecordIds: event.retainedTailRecordIds,
+                    ...metadata,
+                },
+            ));
+        } catch (error) {
+            setRuntimeError(toError(error));
+            throw error;
+        }
     };
 
     const recordPromptSelection = useCallback((
         selection: PromptSelection,
         metadata: SessionEntryMetadata = {},
-    ) => {
-        const currentTree = sessionTreeRef.current;
+    ) => transitionTree((currentTree) => {
         const runtime = projectSessionRuntimeState(currentTree);
         let nextTree = currentTree;
 
-        let runtimeModel: ModelRef | null = null;
-        if (runtime.model) {
-            try {
-                runtimeModel = normalizeModelRef(runtime.model, runtime.provider);
-            } catch {
-                runtimeModel = null;
-            }
-        }
-        if (!modelRefEquals(runtimeModel, selection.model)) {
+        if (
+            runtime.model !== selection.model.modelId
+            || runtime.provider !== selection.model.providerId
+        ) {
             nextTree = appendSessionEntry(nextTree, {
                 type: "model_change",
                 model: selection.model.modelId,
@@ -587,10 +668,8 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
                 ...metadata,
             });
         }
-
-        if (nextTree !== currentTree) applyTreeState(nextTree);
         return nextTree;
-    }, [applyTreeState]);
+    }).then(() => undefined), [transitionTree]);
 
     const chatStopRef = useRef(chat.stop);
     chatStopRef.current = chat.stop;
@@ -611,6 +690,12 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         }
     }, [agentLoop, stopModelStep]);
 
+    useEffect(() => runLifecycle.register({
+        interrupt: interruptRun,
+        waitForIdle: () => agentLoop.waitForIdle(),
+        waitForPersistence: waitForDurableWork,
+    }), [agentLoop, interruptRun, runLifecycle, waitForDurableWork]);
+
     function runModelRequest(request: () => Promise<void>) {
         if (pendingModelStepRef.current) {
             return Promise.reject(new Error("A model step is already pending"));
@@ -629,19 +714,21 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         });
     }
 
-    const applyNavigationTreeState = useCallback((nextTree: SessionTreeState<Message>): SessionRuntimeState => {
+    const applyNavigationTreeState = useCallback(async (
+        nextTree: SessionTreeState<Message>,
+    ): Promise<SessionRuntimeState> => {
         if (agentLoop.isBusy) {
             throw new Error("Cannot jump session entries while the agent runtime is busy");
         }
 
-        const messages = cloneMessages(projectSessionTreeMessages(nextTree));
-        const runtime = projectSessionRuntimeState(nextTree);
+        const committedTree = await commitTree(nextTree);
+        const messages = cloneMessages(projectSessionTreeMessages(committedTree));
+        const runtime = projectSessionRuntimeState(committedTree);
 
         latestMessagesRef.current = messages;
         chat.setMessages(messages);
-        applyTreeState(nextTree);
         return runtime;
-    }, [agentLoop, applyTreeState, chat]);
+    }, [agentLoop, chat, commitTree]);
 
     const inspectNavigation = useCallback((entryId: string) => {
         if (agentLoop.isBusy || pendingModelStepRef.current || branchNavigationBusyRef.current) {
@@ -673,8 +760,8 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
                 targetEntryId: input.entryId,
                 policy: getAgentEnvironment().config.resolved.session.branchSummaryOnJump,
                 ...(input.decision ? { decision: input.decision } : {}),
-                onTargetState(nextTree) {
-                    runtime = applyNavigationTreeState(nextTree);
+                async onTargetState(nextTree) {
+                    runtime = await applyNavigationTreeState(nextTree);
                 },
                 async summarize(analysis) {
                     setBusy(true);
@@ -697,7 +784,7 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
                 runtime = projectSessionRuntimeState(result.state);
             }
             if (result.status === "carried") {
-                applyTreeState(result.state);
+                await commitTree(result.state);
             }
             if (result.status === "jumped") {
                 return { status: "jumped", intent: result.intent, runtime };
@@ -714,7 +801,7 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         } finally {
             branchNavigationBusyRef.current = false;
         }
-    }, [agentLoop, applyNavigationTreeState, applyTreeState, transport]);
+    }, [agentLoop, applyNavigationTreeState, commitTree, transport]);
 
     const navigateToParent = useCallback((input: {
         selection: PromptSelection;
@@ -747,6 +834,325 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         return approvalBroker.cancel(approvalId, "Approval dialog dismissed");
     }, [approvalBroker]);
 
+    const syncChatMessagesFromTree = useCallback((state = sessionTreeRef.current) => {
+        const messages = cloneMessages(projectSessionTreeMessages(state));
+        latestMessagesRef.current = messages;
+        chat.setMessages(messages);
+    }, [chat]);
+
+    const runAgentLoop = useCallback(async (input: {
+        params: PromptSelection & { userText: string };
+        inputMessageId: string;
+    }) => {
+        runLifecycle.assertCanStartWork();
+        let activeExecutionSelection: PromptSelection = {
+            mode: input.params.mode,
+            model: input.params.model,
+        };
+        let activeExecutionInputMessageId = input.inputMessageId;
+
+        const completedRun = await agentLoop.run({
+            sessionId,
+            inputMessageId: input.inputMessageId,
+            onStateChange: setRun,
+            adapter: {
+                async runModelStep({ continuation, interaction, run, turn, step }) {
+                    // A Run may have begun immediately before shutdown closed
+                    // the global work gate. Re-check at the actual provider
+                    // boundary so it cannot issue a new model request then.
+                    runLifecycle.assertCanStartWork();
+                    const prompt = interaction
+                        ? getInteractionPrompt(interaction, activeExecutionSelection)
+                        : continuation
+                            ? null
+                            : {
+                                id: input.inputMessageId,
+                                text: input.params.userText,
+                                mode: input.params.mode,
+                                model: input.params.model,
+                            };
+
+                    if (prompt) {
+                        activeExecutionSelection = {
+                            mode: prompt.mode,
+                            model: prompt.model,
+                        };
+                        activeExecutionInputMessageId = prompt.id;
+                    }
+
+                    const metadata = getStepMetadata({
+                        runId: run.id,
+                        turnId: turn.id,
+                        stepId: step.id,
+                        inputMessageId: activeExecutionInputMessageId,
+                    });
+                    activeModelStepMetadataRef.current = metadata;
+
+                    try {
+                        // Every user intent was already committed by the durable
+                        // turn gate. Reproject it here before each model step so
+                        // continuing, steering, and restart state share one path.
+                        if (prompt) syncChatMessagesFromTree();
+                        const responseMessage = await runModelRequest(() => chat.sendMessage());
+                        await syncMessagesToTree(metadata);
+                        return {
+                            toolCalls: getPendingToolCalls(responseMessage),
+                        };
+                    } catch (error) {
+                        await syncMessagesToTree(metadata);
+                        const resolved = toError(error);
+                        await appendEntry({
+                            type: "error",
+                            message: resolved.message,
+                            code: "model_step_failed",
+                            details: { cause: turn.cause },
+                            ...metadata,
+                        });
+                        throw resolved;
+                    }
+                },
+                async runToolStep(toolCall, { run, turn, step, signal }) {
+                    // Same race guard at the external Tool boundary. Terminal
+                    // persistence below intentionally remains allowed after a
+                    // Tool has already started and shutdown interrupts it.
+                    runLifecycle.assertCanStartWork();
+                    const metadata = getStepMetadata({
+                        runId: run.id,
+                        turnId: turn.id,
+                        stepId: step.id,
+                        inputMessageId: turn.inputMessageId,
+                    });
+                    const durableToolCall = inspectDurableToolCall(
+                        sessionTreeRef.current,
+                        toolCall.toolCallId,
+                    );
+                    if (durableToolCall.status === "terminal") {
+                        // A restart/recovery path may encounter the same model
+                        // tool call again. Its durable terminal already carries
+                        // the corresponding message_update, so restore that
+                        // output instead of repeating an external side effect.
+                        syncChatMessagesFromTree();
+                        return;
+                    }
+                    if (durableToolCall.status === "pending") {
+                        throw new Error(
+                            `Cannot automatically repeat incomplete tool call ${toolCall.toolCallId}; it may have produced an external side effect`,
+                        );
+                    }
+                    // Tool Runtime must not execute a Tool until its semantic
+                    // request is a durable Session Entry.
+                    await appendEntry({
+                        type: "tool_call",
+                        toolCallId: toolCall.toolCallId,
+                        toolName: toolCall.toolName,
+                        input: toolCall.input,
+                        ...metadata,
+                    });
+
+                    let toolRuntimeResult: ToolExecutionResult | null = null;
+                    try {
+                        const { runtime: toolRuntime, workspaceRoot } = createLocalToolRuntime(
+                            runtimeSession,
+                            approvalBroker,
+                        );
+                        toolRuntimeResult = await toolRuntime.run({
+                            toolName: toolCall.toolName,
+                            input: toolCall.input,
+                            context: {
+                                sessionId,
+                                runId: run.id,
+                                turnId: turn.id,
+                                stepId: step.id,
+                                toolCallId: toolCall.toolCallId,
+                                workspaceRoot,
+                                mode: activeExecutionSelection.mode,
+                                signal,
+                            },
+                        });
+                        if (toolRuntimeResult.status !== "completed") {
+                            const errorMessage = toolRuntimeResult.error
+                                ?? `Tool ended with status ${toolRuntimeResult.status}`;
+                            await persistToolTerminal({
+                                toolCallId: toolCall.toolCallId,
+                                toolName: toolCall.toolName,
+                                presentation: {
+                                    state: "output-error",
+                                    errorText: errorMessage,
+                                },
+                                result: {
+                                    status: toolRuntimeResult.status,
+                                    source: toolRuntimeResult.source,
+                                    startedAt: toolRuntimeResult.startedAt,
+                                    completedAt: toolRuntimeResult.completedAt,
+                                    durationMs: toolRuntimeResult.durationMs,
+                                },
+                                metadata,
+                                ...(toolRuntimeResult.status === "cancelled" ? {} : {
+                                    error: {
+                                        message: errorMessage,
+                                        code: toolFailureCode(toolRuntimeResult),
+                                        details: {
+                                            toolCallId: toolCall.toolCallId,
+                                            toolName: toolCall.toolName,
+                                            status: toolRuntimeResult.status,
+                                            source: toolRuntimeResult.source,
+                                            durationMs: toolRuntimeResult.durationMs,
+                                        },
+                                    },
+                                }),
+                                async expose() {
+                                    await chat.addToolOutput({
+                                        tool: toolCall.toolName as keyof ChatTools,
+                                        toolCallId: toolCall.toolCallId,
+                                        state: "output-error",
+                                        errorText: errorMessage,
+                                    });
+                                },
+                            });
+                            return;
+                        }
+                        const output = toolRuntimeResult.output;
+
+                        await persistToolTerminal({
+                            toolCallId: toolCall.toolCallId,
+                            toolName: toolCall.toolName,
+                            presentation: { state: "output-available", output },
+                            result: {
+                                status: toolRuntimeResult.status,
+                                source: toolRuntimeResult.source,
+                                startedAt: toolRuntimeResult.startedAt,
+                                completedAt: toolRuntimeResult.completedAt,
+                                durationMs: toolRuntimeResult.durationMs,
+                            },
+                            metadata,
+                            async expose() {
+                                await chat.addToolOutput({
+                                    tool: toolCall.toolName as keyof ChatTools,
+                                    toolCallId: toolCall.toolCallId,
+                                    output,
+                                });
+                            },
+                        });
+                    } catch (error) {
+                        const resolved = toError(error);
+                        // A ToolRuntime result that reaches this catch failed at
+                        // the durable terminal/UI bridge. Never manufacture a
+                        // conflicting second terminal, and never allow the
+                        // AgentLoop to take its continuation model step.
+                        if (toolRuntimeResult) throw resolved;
+
+                        // ToolRuntime itself failed before it returned a
+                        // normalized terminal. Persist one recoverable failed
+                        // terminal if possible, then fail the Run closed.
+                        await persistToolTerminal({
+                            toolCallId: toolCall.toolCallId,
+                            toolName: toolCall.toolName,
+                            presentation: {
+                                state: "output-error",
+                                errorText: resolved.message,
+                            },
+                            result: { status: "failed" },
+                            metadata,
+                            error: {
+                                message: resolved.message,
+                                code: "tool_execution_failed",
+                                details: {
+                                    toolCallId: toolCall.toolCallId,
+                                    toolName: toolCall.toolName,
+                                },
+                            },
+                            async expose() {
+                                await chat.addToolOutput({
+                                    tool: toolCall.toolName as keyof ChatTools,
+                                    toolCallId: toolCall.toolCallId,
+                                    state: "output-error",
+                                    errorText: resolved.message,
+                                });
+                            },
+                        });
+                        throw resolved;
+                    }
+                },
+                abortModelStep: stopModelStep,
+            },
+        });
+
+        await syncMessagesToTree({
+            runId: completedRun.id,
+            inputMessageId: input.inputMessageId,
+        });
+        if (completedRun.status === "failed" && completedRun.error) {
+            await appendEntry({
+                type: "error",
+                message: completedRun.error,
+                code: "run_failed",
+                runId: completedRun.id,
+                inputMessageId: input.inputMessageId,
+            });
+        }
+        return completedRun;
+    }, [
+        agentLoop,
+        approvalBroker,
+        appendEntry,
+        chat,
+        persistToolTerminal,
+        runtimeSession,
+        runLifecycle,
+        sessionId,
+        stopModelStep,
+        syncChatMessagesFromTree,
+        syncMessagesToTree,
+    ]);
+
+    const queueDurableInteraction = useCallback((input: {
+        kind: "steering" | "follow-up";
+        userText: string;
+        mode: ModeType;
+        model: ModelRef;
+    }) => trackInFlightWork((async () => {
+        runLifecycle.assertCanStartWork();
+        if (!agentLoop.isRunning) return false;
+        const inputMessageId = crypto.randomUUID();
+        return queueTreeWrite(() => runDurableSessionTurn({
+            authority: localSessionAuthority,
+            sessionId,
+            // Read this only after preceding semantic transitions have
+            // committed, so steering/follow-up cannot overwrite a queued
+            // message, branch, or compaction transition.
+            state: sessionTreeRef.current,
+            userText: input.userText,
+            selection: { mode: input.mode, model: input.model },
+            inputMessageId,
+            runAgent: async ({ state, inputMessageId: durableInputMessageId }) => {
+                applyTreeState(state);
+                const metadata = {
+                    mode: input.mode,
+                    model: input.model,
+                };
+                return input.kind === "steering"
+                    ? agentLoop.steer({
+                        text: input.userText,
+                        inputMessageId: durableInputMessageId,
+                        metadata,
+                    })
+                    : agentLoop.followUp({
+                        text: input.userText,
+                        inputMessageId: durableInputMessageId,
+                        metadata,
+                    });
+            },
+        }));
+    })()), [
+        agentLoop,
+        applyTreeState,
+        localSessionAuthority,
+        queueTreeWrite,
+        runLifecycle,
+        sessionId,
+        trackInFlightWork,
+    ]);
+
     return {
         messages: chat.messages,
         status: chat.status,
@@ -775,7 +1181,8 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
         recordCustomEntry: (customType: string, data: unknown) => {
             return appendEntry({ type: "custom", customType, data });
         },
-        compact: async (params: PromptSelection) => {
+        compact: (params: PromptSelection) => trackInFlightWork((async () => {
+            runLifecycle.assertCanStartWork();
             if (agentLoop.isBusy || pendingModelStepRef.current) {
                 throw new Error("Cannot compact context while the agent runtime is busy");
             }
@@ -791,247 +1198,52 @@ export function useChat(sessionId: string, persistedSessionState: unknown) {
             } finally {
                 setBusy(false);
             }
-        },
-        submit: async (params: {
+        })()),
+        submit: (params: {
             userText: string;
             mode: ModeType;
             model: ModelRef;
-        }) => {
-            await runtimeSession.ready();
-            const inputMessageId = crypto.randomUUID();
-            recordPromptSelection(params);
+        }) => trackInFlightWork((async () => {
+            runLifecycle.assertCanStartWork();
             setBusy(true);
-
             try {
-                let activeExecutionSelection: PromptSelection = {
-                    mode: params.mode,
-                    model: params.model,
-                };
-                let activeExecutionInputMessageId: string = inputMessageId;
-
-                const completedRun = await agentLoop.run({
+                // Let already-visible local transitions finish before taking
+                // the fresh durable user-intent snapshot.
+                await treeWriteTailRef.current;
+                return await runDurableSessionTurn({
+                    authority: localSessionAuthority,
                     sessionId,
-                    inputMessageId,
-                    onStateChange: setRun,
-                    adapter: {
-                        async runModelStep({ continuation, interaction, run, turn, step }) {
-                            const prompt = interaction
-                                ? getInteractionPrompt(interaction, activeExecutionSelection)
-                                : continuation
-                                    ? null
-                                    : {
-                                        id: inputMessageId,
-                                        text: params.userText,
-                                        mode: params.mode,
-                                        model: params.model,
-                                    };
-
-                            if (prompt) {
-                                activeExecutionSelection = {
-                                    mode: prompt.mode,
-                                    model: prompt.model,
-                                };
-                                activeExecutionInputMessageId = prompt.id;
-                            }
-
-                            const metadata = getStepMetadata({
-                                runId: run.id,
-                                turnId: turn.id,
-                                stepId: step.id,
-                                inputMessageId: activeExecutionInputMessageId,
-                            });
-                            if (prompt) recordPromptSelection(activeExecutionSelection, metadata);
-                            activeModelStepMetadataRef.current = metadata;
-
-                            try {
-                                const responseMessage = await runModelRequest(() => {
-                                    if (prompt) {
-                                        return chat.sendMessage(createAgentUserMessage(prompt));
-                                    }
-
-                                    return chat.sendMessage();
-                                });
-
-                                syncMessagesToTree(metadata);
-                                return {
-                                    toolCalls: getPendingToolCalls(responseMessage),
-                                };
-                            } catch (error) {
-                                syncMessagesToTree(metadata);
-                                const resolved = toError(error);
-                                appendEntry({
-                                    type: "error",
-                                    message: resolved.message,
-                                    code: "model_step_failed",
-                                    details: { cause: turn.cause },
-                                    ...metadata,
-                                });
-                                throw resolved;
-                            }
-                        },
-                        async runToolStep(toolCall, { run, turn, step, signal }) {
-                            const metadata = getStepMetadata({
-                                runId: run.id,
-                                turnId: turn.id,
-                                stepId: step.id,
-                                inputMessageId: turn.inputMessageId,
-                            });
-                            appendEntry({
-                                type: "tool_call",
-                                toolCallId: toolCall.toolCallId,
-                                toolName: toolCall.toolName,
-                                input: toolCall.input,
-                                ...metadata,
-                            });
-
-                            let toolRuntimeResult: ToolExecutionResult | null = null;
-                            try {
-                                const { runtime: toolRuntime, workspaceRoot } = createLocalToolRuntime(
-                                    runtimeSession,
-                                    approvalBroker,
-                                );
-                                toolRuntimeResult = await toolRuntime.run({
-                                    toolName: toolCall.toolName,
-                                    input: toolCall.input,
-                                    context: {
-                                        sessionId,
-                                        runId: run.id,
-                                        turnId: turn.id,
-                                        stepId: step.id,
-                                        toolCallId: toolCall.toolCallId,
-                                        workspaceRoot,
-                                        mode: activeExecutionSelection.mode,
-                                        signal,
-                                    },
-                                });
-                                if (toolRuntimeResult.status !== "completed") {
-                                    throw new Error(toolRuntimeResult.error ?? `Tool ended with status ${toolRuntimeResult.status}`);
-                                }
-                                const output = toolRuntimeResult.output;
-
-                                await chat.addToolOutput({
-                                    tool: toolCall.toolName as keyof ChatTools,
-                                    toolCallId: toolCall.toolCallId,
-                                    output,
-                                });
-                                appendEntry({
-                                    type: "tool_result",
-                                    toolCallId: toolCall.toolCallId,
-                                    toolName: toolCall.toolName,
-                                    output,
-                                    status: toolRuntimeResult.status,
-                                    source: toolRuntimeResult.source,
-                                    startedAt: toolRuntimeResult.startedAt,
-                                    completedAt: toolRuntimeResult.completedAt,
-                                    durationMs: toolRuntimeResult.durationMs,
-                                    ...metadata,
-                                });
-                            } catch (error) {
-                                const resolved = toError(error);
-                                await chat.addToolOutput({
-                                    tool: toolCall.toolName as keyof ChatTools,
-                                    toolCallId: toolCall.toolCallId,
-                                    state: "output-error",
-                                    errorText: resolved.message,
-                                });
-                                appendEntry({
-                                    type: "tool_result",
-                                    toolCallId: toolCall.toolCallId,
-                                    toolName: toolCall.toolName,
-                                    error: resolved.message,
-                                    status: toolRuntimeResult?.status ?? "failed",
-                                    ...(toolRuntimeResult ? {
-                                        source: toolRuntimeResult.source,
-                                        startedAt: toolRuntimeResult.startedAt,
-                                        completedAt: toolRuntimeResult.completedAt,
-                                        durationMs: toolRuntimeResult.durationMs,
-                                    } : {}),
-                                    ...metadata,
-                                });
-                                if (toolRuntimeResult?.status !== "cancelled") {
-                                    appendEntry({
-                                        type: "error",
-                                        message: resolved.message,
-                                        code: toolRuntimeResult ? toolFailureCode(toolRuntimeResult) : "tool_execution_failed",
-                                        details: {
-                                            toolCallId: toolCall.toolCallId,
-                                            toolName: toolCall.toolName,
-                                            ...(toolRuntimeResult ? {
-                                                status: toolRuntimeResult.status,
-                                                source: toolRuntimeResult.source,
-                                                durationMs: toolRuntimeResult.durationMs,
-                                            } : {}),
-                                        },
-                                        ...metadata,
-                                    });
-                                }
-                                // Executor outcomes are normalized by ToolRuntime. A thrown
-                                // error before any result therefore means policy/observer/
-                                // Runtime Store infrastructure failed; propagate it so
-                                // AgentLoop records a failed step/run and cannot continue to
-                                // another external side effect.
-                                if (!toolRuntimeResult) throw resolved;
-                            }
-                        },
-                        abortModelStep: stopModelStep,
+                    state: sessionTreeRef.current,
+                    userText: params.userText,
+                    selection: { mode: params.mode, model: params.model },
+                    runAgent: async ({ state, inputMessageId }) => {
+                        applyTreeState(state);
+                        syncChatMessagesFromTree(state);
+                        await runtimeSession.ready();
+                        return runAgentLoop({
+                            params,
+                            inputMessageId,
+                        });
                     },
                 });
-
-                syncMessagesToTree({
-                    runId: completedRun.id,
-                    inputMessageId,
-                });
-                if (completedRun.status === "failed" && completedRun.error) {
-                    appendEntry({
-                        type: "error",
-                        message: completedRun.error,
-                        code: "run_failed",
-                        runId: completedRun.id,
-                        inputMessageId,
-                    });
-                }
-
-                return completedRun;
+            } catch (error) {
+                const resolved = toError(error);
+                setRuntimeError(resolved);
+                throw resolved;
             } finally {
                 setBusy(false);
             }
-        },
+        })()),
         steer: (params: {
             userText: string;
             mode: ModeType;
             model: ModelRef;
-        }) => {
-            const queued = agentLoop.steer({
-                text: params.userText,
-                inputMessageId: crypto.randomUUID(),
-                metadata: {
-                    mode: params.mode,
-                    model: params.model,
-                },
-            });
-            if (queued) recordPromptSelection(params, {
-                runId: agentLoop.currentRun?.id,
-            });
-            return queued;
-        },
+        }) => queueDurableInteraction({ kind: "steering", ...params }),
         followUp: (params: {
             userText: string;
             mode: ModeType;
             model: ModelRef;
-        }) => {
-            const queued = agentLoop.followUp({
-                text: params.userText,
-                inputMessageId: crypto.randomUUID(),
-                metadata: {
-                    mode: params.mode,
-                    model: params.model,
-                },
-            });
-            if (queued) recordPromptSelection(params, {
-                runId: agentLoop.currentRun?.id,
-            });
-            return queued;
-        },
+        }) => queueDurableInteraction({ kind: "follow-up", ...params }),
         abort: interruptRun,
         interrupt: interruptRun,
         waitForIdle: () => agentLoop.waitForIdle(),

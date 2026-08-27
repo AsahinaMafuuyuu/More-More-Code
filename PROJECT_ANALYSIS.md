@@ -4,7 +4,7 @@
 
 ## 1. 项目定位
 
-More More Code 是一个 local-first 的终端 Coding Agent 原型。CLI 是真正的应用与 Agent Runtime：负责 TUI、Harness、模型调用、Tool Loop、本地工作区操作和消息编排；Hono Server 不参与模型执行。Stage 6.3 当前代码仍使用 Server 做 Session 创建/读取/快照持久化，但 ADR-0023 已接受下一阶段目标：Session authority 迁到本地，Server 降级为可选的多设备 Session Sync/Backup 与商业账户/订阅/Entitlement 服务。
+More More Code 是一个 local-first 的终端 Coding Agent 原型。CLI 是真正的应用与 Agent Runtime：负责 TUI、Harness、模型调用、Tool Loop、本地工作区操作、消息编排和 Session 持久化；Hono Server 不参与模型执行，也不在当前 CLI 路径中参与 Session 生命周期。Stage 6.4 Provider Runtime 与 Stage 6.5 Local Session Authority & Railway Retirement 已交付：本地 CLI 不依赖 Server、账户、`API_URL`、Cloudflare Worker 或 Railway。Server/database 仅作为暂停中的未来云能力保留，Stage 6.6 同步/商业账户工作须重新获得产品批准。
 
 项目当前的核心闭环为：
 
@@ -13,30 +13,33 @@ More More Code 是一个 local-first 的终端 Coding Agent 原型。CLI 是真�
 3. 模型产生 Tool Call 时，CLI 在同一 Turn 内执行对应 Tool Steps；
 4. Tool 结果需要继续推理时，Harness 创建新的 `tool-continuation` Turn；
 5. Run 活跃期间，Enter 可排队 steering、Alt+Enter 可排队 follow-up，均只在 Turn-safe boundary 消费；
-6. 当前过渡实现中，Run/Session 语义变化会 best-effort 把 Session Tree state 同步到 Server / PostgreSQL；
-7. 当前再次进入会话可从云端快照恢复；Stage 6.5 将把 create/list/get/append authority 迁到 Local Session Store，Stage 6.6 再把 Server 改为可选多设备增量同步。
+6. 每个语义 Session 转换先由本地 SQLite `LocalSessionStore` 事务性提交，成功后才暴露给 UI 或触发 Provider/Tool 副作用；
+7. 再次进入会话、继续、分支、Context checkpoint/cache 和重启恢复均走本地 Session/Runtime Store；显式导入 legacy linear/v1/v2/v3 快照仍是非阻断 follow-up，尚未实现。
 
 ## 2. 技术栈与仓库结构
 
-项目采用 Bun Workspaces 管理，根目录通过 `packages/*` 组织五个内部包。
+项目采用 Bun Workspaces 管理，根目录通过 `packages/*` 组织七个内部包。
 
 | 包 | 主要技术 | 职责 |
 | --- | --- | --- |
-| `packages/cli` | React 19、OpenTUI、AI SDK、Provider SDK、Hono RPC Client | 本地应用层：UI、模型调用、消息编排、本地工具执行、云会话同步 |
+| `packages/cli` | React 19、OpenTUI、AI SDK、Provider SDK | 本地应用层：UI、Local Session authority、模型调用、消息编排、本地工具执行 |
 | `packages/harness` | TypeScript | Agent Loop、Execution Events/Event Store、Run / Turn / Step Lifecycle/Projection、steering/follow-up、Context/Session Runtime |
-| `packages/server` | Bun、Hono、Sentry | 当前：云 Session 快照/认证；目标：可选 Session Sync + 商业订阅/Entitlement |
-| `packages/database` | Prisma 7、PostgreSQL、`@prisma/adapter-pg` | 当前云 Session Store；Stage 6.6 将演进为 sync/account cloud persistence |
+| `packages/session-store` | TypeScript、SQLite/libSQL | 本地 Session Entry Tree semantic authority；migrations、事务、topology、idempotency |
+| `packages/server` | Bun、Hono、Sentry | dormant future cloud service；不在本地 CLI 关键路径 |
+| `packages/database` | Prisma 7、PostgreSQL、`@prisma/adapter-pg` | dormant future cloud persistence；Stage 6.6 才可能演进为 optional sync/account boundary |
 | `packages/runtime-store` | Prisma 7、SQLite、`@prisma/adapter-libsql` | 本地 Runtime Event / Snapshot 持久化与恢复 adapter；兼容 Bun 运行时 |
 | `packages/shared` | TypeScript、Zod | 模型清单、价格信息、消息结构及流式事件协议 |
 
-根脚本提供两个主要开发入口：
+根脚本提供本地 CLI 开发入口；Server 脚本仅供维护暂停中的未来云代码：
 
 ```bash
-bun run dev:server
 bun run dev:cli
 ```
 
-服务端默认监听 `3000` 端口；CLI 默认连接 `http://localhost:3000`，也可通过 `API_URL` 修改。
+本地 CLI 不读取 `API_URL`，也不要求启动 Server。Session Store 默认位于
+`~/.more-more-code/sessions/sessions.db`，Runtime Store 默认位于
+`~/.more-more-code/runtime/runtime.db`；两者都可通过各自的绝对 `file:` URL
+环境变量覆盖。
 
 ## 3. 整体架构
 
@@ -50,51 +53,48 @@ OpenTUI + React CLI
 Agent Harness Runtime
   │  AgentLoop → Lifecycle + Execution Events → Run/Turn/Step Projection
   │  Turn = one Model response + requested Tool Steps
+  │  LocalSessionStore：Session Tree semantic authority
   │  Model Step: ProviderRegistry/ModelRef → CLI LocalModelTransport → Provider API
   │  Tool Step: CLI 本地执行
   │
-  ├──────────────► LLM Provider
+  ├──────────────► Local SQLite Session Store
+  ├──────────────► Local SQLite Runtime Store
   │
-  └─ best-effort session sync
-          ▼
-Hono Server
-  ├── /sessions：会话创建 / 查询 / Session Tree 状态持久化
-  ├── /auth：云账户认证
-  └── Sentry：云服务日志与异常
-          │
-          ▼
-Prisma Client
-  │
-  ▼
-PostgreSQL
+  └──────────────► LLM Provider APIs（本地直连）
+
+未来 Cloud（dormant；Stage 6.6 paused）
+  └── Server/database：仅保留待重新批准的账户、Entitlement、sync/backup 边界
 ```
 
-Harness 包位于 CLI 的执行路径中，负责显式驱动 Run → Turn → Step。Turn 定义为一次 Model response 加该 response 请求的全部 Tool Steps；后续 tool-result 推理会创建新的 Turn。AgentLoop 将 coarse-grained Run / Turn / Step 事实写成 append-only Execution Events，`AgentRun` 等状态通过 replay projection 得到，同时通过 awaited lifecycle stream 对外发送 `run_start/end`、`turn_start/end`、`step_start/update/end`。模型 Provider、System Prompt 与 `streamText()` 同样位于 CLI。Server 不参与 Agent Run，只接收会话快照用于云端恢复。
+Harness 包位于 CLI 的执行路径中，负责显式驱动 Run → Turn → Step。Turn 定义为一次 Model response 加该 response 请求的全部 Tool Steps；后续 tool-result 推理会创建新的 Turn。AgentLoop 将 coarse-grained Run / Turn / Step 事实写成 append-only Execution Events，`AgentRun` 等状态通过 replay projection 得到，同时通过 awaited lifecycle stream 对外发送 `run_start/end`、`turn_start/end`、`step_start/update/end`。模型 Provider、System Prompt 与 `streamText()` 同样位于 CLI。LocalSessionStore 负责 Session semantic state，Local Runtime Store 负责执行、安全、Context 和恢复事实；Server/database 不参与本地 Agent Run 或 Session 生命周期。
 
-Stage 6.0 将持久化边界拆为两个独立 Prisma store：`packages/database` 继续使用 PostgreSQL 服务云 Session；`packages/runtime-store` 使用 SQLite 保存本地 Runtime Event 与 Runtime Snapshot。二者拥有独立 schema/client/migration。Session Tree 是语义会话权威，Runtime Event 则为执行、安全、上下文和恢复事实；本地 store 不进入云同步关键路径。
+Stage 6.0 将 Runtime 持久化边界拆为独立的 `packages/runtime-store` SQLite store；Stage 6.5 又新增 `packages/session-store` SQLite semantic store。二者拥有独立 schema/client/migration。Session Store 保存 Session Tree、metadata、topology、active cursor 与 semantic Entries；Runtime Store 保存执行、安全、上下文和恢复事实，不能互相取代。
 
-ADR-0023 又进一步区分了“Session 语义权威”和“Cloud Sync”：当前 Stage 6.3 的 Session Tree 语义模型本身是 authoritative，但物理创建/读取/快照落盘仍依赖 Cloud Session Store。Stage 6.5 将新增独立 Local Session Store，使本地持久化成为 Session semantic authority；它与 `packages/runtime-store` 仍保持不同 schema/职责。Stage 6.6 才在其上实现 append-oriented、revision/cursor-aware 的多设备同步。
+ADR-0023/0024 进一步区分了“Session 语义权威”和“Cloud Sync”：Stage 6.5 已使 LocalSessionStore 成为物理持久化 authority。前 Cloud Session Store 的 whole-tree snapshot 路径已退出 CLI；Stage 6.6 未来才可能在其上实现 append-oriented、revision/cursor-aware 的多设备同步，目前处于暂停状态。
 
 ## 4. 核心数据结构
 
 ### 4.1 Session（会话）
 
-`Session` 表示一段独立对话。
+`Session` 表示一段独立对话，由本地 `LocalSessionStore` 管理。
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
 | `id` | String / CUID | 会话主键 |
-| `userId` | String | 云账户用户标识 |
+| `metadata` | JSON | 本地 Provider/model/mode 及其他 Session 元数据 |
 | `title` | String | 会话标题 |
-| `createdAt` | DateTime | 创建时间 |
-| `updatedAt` | DateTime | 自动更新时间 |
-| `messages` | Json | CLI UIMessage 会话快照，用于恢复 |
+| `rootEntryId` | String | `session_start` 根 Entry 标识 |
+| `activeEntryId` | String | 当前本地继续/分支游标 |
+| `createdAt` | number | 创建时间戳 |
+| `updatedAt` | number | 最近本地提交时间戳 |
+| `revision` | number | 本地提交修订号 |
+| `archivedAt` | number? | 本地归档时间戳 |
 
-`messages` 当前采用 JSON 快照，而不是独立 Message 表。它是云同步格式，不等价于 Harness 的 Run / Turn / Step 事件模型。
+Session Entry Tree 由独立的 `entries[]` 组成，每个 durable semantic event 都是带 `id / parentId / type` 的树节点。Store 以事务持久化 metadata、active cursor、Entry topology 和稳定 sequence，并对重复 Entry 做幂等处理；它不与 Harness 的 Run / Turn / Step Runtime Events 混用。
 
 ### 4.2 Message（消息）
 
-CLI 内部使用 AI SDK `UIMessage` 表示用户输入、模型输出和 Tool Call/Result；Server 仅将其作为 Session 的 JSON 快照保存。
+CLI 内部使用 AI SDK `UIMessage` 表示用户输入、模型输出和 Tool Call/Result；Local Session Store 将消息作为 Session Entry 的 payload 保存。Server/database 不参与本地 Session 恢复。
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
@@ -119,11 +119,11 @@ CLI 内部使用 AI SDK `UIMessage` 表示用户输入、模型输出和 Tool Ca
 - `reasoning`：推理文本；
 - `tool-call`：工具名称、参数、调用 ID 和可选结果。
 
-CLI 当前只实现文本分段的消费和展示，因此推理内容与工具调用属于协议预留能力，还不是完整可用功能。
+CLI 会消费并展示文本、reasoning 与 Tool 相关的归一化分段；对应的 Tool call/result 语义同时进入本地 Session Entry Tree，完整 UI 细节仍由 CLI 组件负责。
 
-### 4.4 SSE 流式事件
+### 4.4 流式事件与兼容协议
 
-服务端与 CLI 约定以下事件：
+当前 Model streaming 由 CLI 通过 AI SDK 直接连接 Provider，再归一化为 UI 消息和 Harness lifecycle；不经过 Server。共享包仍保留以下历史/兼容事件形状：
 
 - `text-delta`：回答文本增量；
 - `reasoning-delta`：推理内容增量；
@@ -132,7 +132,7 @@ CLI 当前只实现文本分段的消费和展示，因此推理内容与工具�
 - `done`：回答完成，携带消息 ID 和耗时；
 - `error`：流式处理失败。
 
-当前服务端实际发送的主要是 `text-delta`、`done` 和 `error`。
+这些事件不是本地 Session authority，也不是当前 CLI 的云端依赖；Server 侧旧 SSE 路径仅作为 dormant future-cloud 代码维护。
 
 ## 5. 已实现功能
 
@@ -165,46 +165,46 @@ CLI 使用 OpenTUI + React 渲染，包含：
 - `/agents`
 - `/models`
 - `/sessions`
+- `/tree` / `/jump` / `/parent` / `/root`
+- `/compact`
+- `/providers`
+- `/settings`
 - `/theme`
-- `/login`
-- `/logout`
-- `/upgrade`
-- `/usage`
 - `/exit`
 
-其中主题选择和退出具备实际行为；其余多为 Toast、占位 Dialog 或“coming soon”提示，尚未连接真实业务。
+其中 Session、Provider、Model、Context navigation/compaction、设置、主题和退出均属于本地 CLI 能力；云账户相关 `/login`、`/logout`、`/upgrade`、`/usage` 不再是本地 CLI 命令。
 
-### 5.3 会话管理 API
+### 5.3 本地会话管理
 
-服务端仅提供云会话状态能力：
+Stage 6.5 由 `packages/session-store` 和 CLI `LocalSessionAuthority` 提供本地语义会话能力：
 
-| 方法 | 路径 | 功能 |
-| --- | --- | --- |
-| GET | `/sessions/` | 按创建时间倒序返回会话摘要 |
-| GET | `/sessions/:id` | 返回完整 Session 快照 |
-| POST | `/sessions/` | 创建云 Session |
-| POST | `/sessions/:id/state` | 保存 CLI 当前 versioned Session Tree state |
-| POST | `/sessions/:id/messages` | 旧版线性消息快照兼容接口 |
+| 操作 | 功能 |
+| --- | --- |
+| `create` | 事务创建带 `session_start` 根 Entry 的本地 Session |
+| `list` | 返回未归档的本地 Session 摘要 |
+| `load/open` | 加载完整 Session Tree、metadata 和 active cursor |
+| `commit` | 原子追加/更新语义 Entries，校验 topology、sequence 和幂等性 |
+| `archive` | 本地归档 Session，使其不再出现在默认列表 |
 
-Server 不提供 `/chat` 或 `/resume` 模型执行接口。
+Session 必须先在本地提交成功，CLI 才会导航到它或开始 Provider/Tool 副作用。旧 Server `/sessions` API 及 whole-tree snapshot 上传已从本地 CLI 路径移除；Server/database 仅作为暂停中的未来云代码保留。
 
 ### 5.4 本地 Agent / Model 执行
 
 模型调用由 CLI 的 `LocalModelTransport` 直接发起。每个 Model Step 先把当前消息映射成 Harness `ContextRecord`，由 `ContextManager` 按输入预算生成 `ContextProjection`，再将投影结果转换为 ModelMessage 并调用 AI SDK `streamText()`；Harness 根据返回的 Tool Call 在当前 Turn 内执行 Tool Steps，并在工具链结束后决定启动 `steering`、`tool-continuation`、`follow-up` Turn，或结束 Run。
 
-Server 只通过 Session Store 接收会话树状态快照，因此云同步失败和 Agent Run 失败属于两个不同的故障域。
+Provider 请求、Context 编译、Tool 执行和 Session semantic commit 均在本地完成；云同步当前未启用，因此不会有云端故障进入 Agent Run 的关键路径。
 
 ### 5.5 流式中断与恢复
 
 CLI 通过 Escape 请求中断当前 Run；Model Step 可立即 abort，本地 Tool Step 由 Tool Runtime 传播同一个 AbortSignal。Bash executor 使用受监控的进程组，取消时会终止后代进程并等待命令组退出，避免 Tool 已返回但孙进程仍持有 workspace。Harness 依次追加对应 step/turn/run terminal execution events，并由事件 replay 得到中断状态。`run_end` lifecycle listeners 属于 settlement barrier，因此 Run projection 可能已 terminal，但 `isBusy` 会一直保持到 listeners 完成，`waitForIdle()` 才返回。
 
-Run 活跃期间，普通 Enter 将输入排入 steering queue；Alt+Enter 排入 follow-up queue。steering 在当前 Turn 完成后优先于自动 tool continuation，follow-up 只在 Run 原本将进入 idle 时消费。云端恢复仍基于 versioned Session Tree snapshot；本地执行恢复则默认使用 `~/.more-more-code/runtime/runtime.db` 中的 session-scoped Runtime Event/Snapshot。CLI 通过 `RuntimeSession` 在 Model/Tool 副作用前执行 awaited write-ahead append，恢复 snapshot 后的 event、预热 Projection Cache，并把未完成 Run/操作报告给 UI；它只重建状态，不自动重复外部调用。Cloud revision/conflict sync 仍未实现。
+Run 活跃期间，普通 Enter 将输入排入 steering queue；Alt+Enter 排入 follow-up queue。steering 在当前 Turn 完成后优先于自动 tool continuation，follow-up 只在 Run 原本将进入 idle 时消费。Session 恢复默认使用 `~/.more-more-code/sessions/sessions.db` 中的本地 Session Tree；本地执行恢复使用 `~/.more-more-code/runtime/runtime.db` 中的 session-scoped Runtime Event/Snapshot。CLI 通过 LocalSessionStore 在 Model/Tool/automatic compaction 副作用前执行 durable-first commit，再由 `RuntimeSession` 执行 awaited write-ahead append；重启时恢复两个 store、预热 Projection Cache，并把未完成 Run/操作报告给 UI，但不会自动重复外部调用。Cloud revision/conflict sync 尚未启用，Stage 6.6 暂停。
 
 ### 5.6 多模型抽象
 
 Stage 6.4 已完成多模型抽象迁移。shared 中的固定模型目录现在只承担推荐默认值、价格和 Context metadata，不再是 runtime allowlist；canonical 选择值为 `{ providerId, modelId }`。用户级 `~/.more-more-code/providers.json` 保存严格版本化、非敏感的 Provider Registry，`ProviderId` 与 `ProviderKind` 分离，因此可以同时存在多个 Custom OpenAI-compatible endpoint。
 
-内置 ProviderKind 固定为 OpenAI、Anthropic、Google、DeepSeek，Mistral 已移除。CLI resolver 通过 Registry/Auth seam 创建对应 AI SDK model：OpenAI 使用 Responses、Anthropic/DeepSeek 使用原生 SDK provider、Google 使用 Gemini OpenAI-compatible endpoint，Custom V1 使用可配置 OpenAI-compatible `baseURL`。API Key/Bearer 由独立 CredentialStore 获取；当前是 AES-256-GCM 本地加密适配器 + 环境变量只读兼容 fallback。Codex OAuth 已建独立实验性 broker seam，但在没有受支持 provider-execution contract 时明确 unavailable，不读取 `~/.codex` 私有 token 文件。
+内置 ProviderKind 固定为 OpenAI、Anthropic、Google、DeepSeek，Mistral 已移除。CLI resolver 通过 Registry/Auth seam 创建对应 AI SDK model：OpenAI 使用 Responses、Anthropic/DeepSeek 使用原生 SDK provider、Google 使用 Gemini OpenAI-compatible endpoint，Custom V1 使用可配置 OpenAI-compatible `baseURL`。API Key/Bearer 由独立 CredentialStore 获取；当前是 AES-256-GCM 本地加密适配器 + 环境变量只读兼容 fallback。`/providers` 还提供 secret-safe connection test 和最终请求 URL 预览，测试通过注入 transport 验证配置、凭据、协议、HTTP、模型错误。Codex OAuth 只保留 capability-gated seam，在没有受支持 provider-execution contract 时明确 unavailable 并从 UI 隐藏，不读取 `~/.codex` 私有 token 文件；本轮不声称真实 Provider E2E 或 Codex OAuth 执行已实现。
 
 ### 5.7 可观测性
 
@@ -222,8 +222,9 @@ Stage 6.4 已完成多模型抽象迁移。shared 中的固定模型目录现在
 
 ```text
 首页输入消息
-  → POST /sessions 创建云 Session
-  → 跳转 /sessions/:id
+  → LocalSessionAuthority.create 创建并提交本地 session_start
+  → LocalSessionAuthority.commit 提交 user_message
+  → 跳转本地 /sessions/:id
   → CLI 创建 Run / initial Turn execution events
   → ExecutionEventStore / Projection 建立当前 Run 状态
   → LocalModelTransport 直接调用模型 Provider
@@ -231,7 +232,7 @@ Stage 6.4 已完成多模型抽象迁移。shared 中的固定模型目录现在
   → Turn End 后按 steering → tool-continuation → follow-up 的规则决定下一 Turn
   → 无待处理工作时 Run End
   → completed Run 追加 Session Tree child node
-  → versioned Session Tree state 同步到 Server
+  → LocalSessionStore 原子提交语义 Entry、active cursor 和 metadata
 ```
 
 ### 6.2 会话内继续提问
@@ -246,30 +247,27 @@ Stage 6.4 已完成多模型抽象迁移。shared 中的固定模型目录现在
   → Harness 仅在 Turn-safe boundary 消费队列并决定下一 Turn
   → Run 完成 / 中断 / 失败
   → completed Run 追加当前 active node 的 child
-  → Session Store 将完整 Session Tree snapshot 同步到云端
+  → LocalSessionStore 原子提交本地 Session Tree 变化
 ```
 
 ### 6.3 错误处理
 
-- 请求参数错误：返回 400；
-- 会话不存在：返回 404；
-- 无可恢复用户消息或重复恢复：返回 409；
-- 模型生成错误：保存 `ERROR` 消息，并通过 SSE 发送 `error`；
-- 未处理服务端异常：记录日志并返回统一 500；
-- CLI 网络或协议解析错误：追加本地错误消息，并通过 Toast 处理页面级错误。
+- Local Session 输入/topology/幂等冲突：由 Store 返回明确的本地错误，拒绝提交；
+- 本地 Session commit 失败：在 Provider/Tool 副作用前 fail-closed，不暴露未提交树；
+- 模型生成错误：追加本地 `ERROR` Entry，并通过 CLI UI/生命周期反馈；
+- Provider connection test：区分配置、凭据、协议、HTTP、网络和模型错误，诊断不包含密钥或完整 provider error body；
+- Runtime/Context/Tool 基础设施错误：保持 durable-first/awaited write-ahead 约束，并向 CLI 报告，不静默转成可继续副作用的普通结果。
 
 ## 7. 配置与运行依赖
 
 项目运行至少依赖：
 
 - Bun；
-- PostgreSQL（云 Session Store）；
-- SQLite（本地 Runtime Store，无独立服务进程）；
-- `DATABASE_URL`；
+- SQLite（本地 Session Store + Runtime Store，无独立服务进程）；
 - 已配置的 Provider Registry；需要认证的 Provider 还需 CredentialStore/API Key（Custom `None` 可无需凭据）；
-- 可选的 `API_URL`。
+- 可选的 `LOCAL_SESSION_STORE_DATABASE_URL` / `RUNTIME_STORE_DATABASE_URL`（必须是绝对 `file:` URL）。
 
-云数据库代码在缺少 `DATABASE_URL` 时会在模块加载阶段直接抛错。云端与本地 Prisma Client 分别输出到 `packages/database/generated/prisma` 和 `packages/runtime-store/generated/prisma`，必须通过各自包的 `db:generate` 脚本独立生成。
+本地 CLI 不读取 `API_URL`，也不要求 Server、Clerk、Cloudflare、Railway 或 `DATABASE_URL`。Local Session Store 默认写入 `~/.more-more-code/sessions/sessions.db`；Runtime Store 默认写入 `~/.more-more-code/runtime/runtime.db`。Server/database 仍可能因维护未来云代码需要独立的 PostgreSQL 配置，但不属于本地 CLI 启动/运行依赖；云端与本地 Prisma Client 仍保持独立生成路径。
 
 ## 8. 当前实现边界与值得关注的问题
 
@@ -281,8 +279,8 @@ Stage 6.4 已完成多模型抽象迁移。shared 中的固定模型目录现在
 2. **Codex OAuth 目前只有安全 seam/status，尚不是可执行认证方式**
    OpenAI `codex-oauth` 与 API Key 已被建模为不同 Auth Strategy，但当前没有采用复制/解析私有 Codex token 文件的非正式方案。Broker 因此显式返回 unavailable，Provider execution 会 fail early 并要求 API Key；真正登录/登出和 token acquisition 需要后续建立在受支持、可维护的 Codex 集成协议上。
 
-3. **云 Session 已升级为 Session Entry Tree v3，但同步仍是 last-write-wins**
-   v3 直接持久化 append-only `entries[]`；message、tool、runtime-state change、compaction 与 branch summary 都是可分支的 Session Entries，旧 linear/v1/v2 状态在 CLI 恢复时兼容升级。`POST /sessions/:id/state` 仍没有 revision / optimistic concurrency / conflict resolution。
+3. **Local Session authority 已交付，云同步被移出当前 CLI**
+   `packages/session-store` 在 SQLite 中直接持久化 append-only `entries[]`、root/active cursor、metadata、stable sequence 和 revision；事务会校验 Session Tree topology，并对相同 Entry 做幂等处理。`packages/server` / `packages/database` 不再参与本地 create/list/open/continue/restart。显式导入 legacy linear/v1/v2/v3 快照的事务性/idempotent 命令尚未实现，属于不阻断新本地 Session 的 follow-up。
 
 4. **Durable Runtime Store、有效权限策略、交互式审批与派生安全审计已形成完整应用层安全链**
    Run / Turn / Step 通过 `RuntimeSession` 串行写入并投影本地 SQLite events；snapshot failure 不再把已提交 append 误报为失败。Tool Runtime 使用 Harness 的统一 `allow | deny | ask` contract，把 code defaults、global config 与 project config 合成为 last-match-wins effective policy，并按 command/path/resource/scope 在 executor 前执行；构造 Tool Runtime 必须显式注入 PermissionPolicy 与 ApprovalBroker。所有 capability 先完成评估：任一 deny 直接阻止，多个 ask 聚合为一次 Tool-call approval。CLI 只提供 Allow once / Deny，原始 command/path/resource 只在 process-local approval request 中展示，不写 permission config。Tool/Context/system 使用严格白名单 v1 payload；permission lifecycle 使用 v2，approval lifecycle 使用 v3，均兼容旧 v1 decision。Harness 的 `projectSecurityAuditTimeline` 关联 permission、approval 与 Tool terminal，检测缺失/重复/乱序、metadata mismatch 及 enforcement 冲突。Replay 只验证 lifecycle consistency，不从脱敏事件伪造 policy recomputation；审计历史也不复制进 RuntimeSession snapshot。
@@ -293,21 +291,23 @@ Stage 6.4 已完成多模型抽象迁移。shared 中的固定模型目录现在
 6. **Context reduction 已形成 Tool Working Set + Branch Summary + semantic Compaction 三种独立语义，但 tokenizer 仍是显式估算器**
    Tool Result Working Set 先对过大的 warm/cold shell、test/build、search/grep、file-read、generic 输出做 model-facing `truncated/summary/reference` 投影，canonical `tool_result` 不变。Branch Summary 则在跨路径导航确实会丢失 source-only 语义知识时按 `ask | always | never` 做 lazy transfer；Carry 使用独立 bounded reducer（上限 `min(4096, 4% input budget)`），并以 provenance/coverage 去重，No Carry/Cancel 均不制造 Session branch。Active-path Branch Summary 作为 historical Context record 参与普通 Compaction；checkpoint 使用 generic record IDs 防止已吸收知识重复投影。历史 Compaction 仍按 80% soft / 92% hard / 70% target 和完整 group/Turn cut point运行，`/compact` 复用同一 checkpoint pipeline并执行安全 eligibility gate。Harness 同时提供 exact tokenizer adapter 接口，但当前模型家族仍使用明确标记为 `estimated` 的计数器。
 
-7. **当前 Session 仍是 Cloud-backed snapshot persistence，不是真正完整 local-first**
-   同步失败不会让本地 Agent Run 失败，这是正确的故障域隔离；但 `NewSession`、Session list/open 和 restore 仍依赖 Server。Stage 6.5 将 Local Session Store 设为物理持久化 authority，Stage 6.6 再增加 offline queue、revision/cursor、idempotent push/pull 与 conflict-safe merge。
+7. **本地 Session 与 Runtime 已形成独立 durable authority**
+   `NewSession`、Session list/open/continue、branch、Context checkpoint/cache 和 restart recovery 均使用本地 Session/Runtime Store；提交失败会在 Provider/Tool 副作用前 fail-closed。云端 sync/backup 尚未启用，Stage 6.6 已暂停，恢复前需要显式产品重新批准。
 
-8. **Server 的目标职责已经收窄为 Optional Cloud**
-   ADR-0023 明确 Server 最终只保留多设备 Session Sync/Backup 与 MORE-MORE-CODE 自身商业账户/订阅/Entitlement。Provider credentials、Model Step、AgentLoop、Tool、Context、Runtime Event、Sandbox 不进入 Server；订阅检查也不得成为每次 Model Step 的关键路径。
+8. **Server/database 目前仅为 dormant future cloud 保留**
+   ADR-0024 暂时禁用云账户、Session API 和 Railway；Server/database 不进入本地 CLI startup、Session lifecycle、Provider credentials、Model Step、AgentLoop、Tool、Context、Runtime Event 或 Sandbox 路径。未来若重新启用，只能通过重新批准的 Stage 6.6 sync/backup 与商业 Entitlement 边界进入，并且不能成为每次 Model Step 的关键路径。
 
-9. **测试覆盖仍需扩展**
-   已有 AgentLoop、ExecutionEventStore/Projection、Runtime Store migration/restart、write-ahead/redaction/recovery、LocalModelTransport Context lifecycle、Tool Runtime 和 Session Tree 回归测试，但还缺真实 Cloud Session Sync、完整 CLI 键盘/节点跳转 UI 与真实多轮 Tool Loop 的端到端集成测试。
+9. **本地 Stage 6.5 覆盖已补齐，外部端到端仍有明确边界**
+   已有 Local Session Store migrations/transaction/topology/idempotency、离线 create/list/open/restart/continue、durable-first user/model/tool/automatic-compaction、Provider connection/default persistence、AgentLoop、ExecutionEventStore/Projection、Runtime Store migration/restart、write-ahead/redaction/recovery、LocalModelTransport Context lifecycle、Tool Runtime 和 Session Tree 回归测试。本轮不声称真实外部 Provider E2E、Codex OAuth execution、Cloud Session Sync 或完整 CLI 键盘/节点跳转 UI 集成测试已完成。
 
 10. **可观测性配置偏开发态**
     Sentry DSN 仍直接写在代码中，Trace 采样率较高，并保留测试异常路由，上线前应环境化。
 
 ## 9. 项目现阶段总结
 
-项目现在的核心性质已经从“Client + 远程 AI Chat Server”转为“**Local Coding Agent Runtime + transitional Cloud Session Store**”。CLI 已经是 authoritative execution runtime；ADR-0023 接受的最终产品边界进一步变为“**Local Coding Agent + Local Session/Provider Authority + Optional Cloud Sync/Subscription**”。
+项目现在的核心性质已经从“Client + 远程 AI Chat Server”转为“**Local Coding Agent + Local Session/Provider Authority**”。CLI 是 authoritative execution 与 semantic Session runtime；Cloudflare/Railway 和云账户路径已退出当前本地产品，Server/database 仅作为 Stage 6.6 重新批准后可能启用的 dormant future cloud 边界。
+
+本分析记录的是已实现架构与最终集成证据；Stage 6.5 已完成最终审查。审查期间发现并修复了 Bun 下默认 Session ID 生成器将 `crypto.randomUUID` 脱离 `Crypto` receiver 后触发 `ERR_INVALID_THIS` 的生产路径问题，并补充真实默认 ID 回归覆盖；完整验证后无残余 P0/P1 finding。
 
 现阶段最核心的已完成能力是：
 
@@ -317,10 +317,11 @@ Stage 6.4 已完成多模型抽象迁移。shared 中的固定模型目录现在
 - Turn-safe steering / follow-up queue；
 - CLI 本地 Model Step 与 Tool Step；
 - 终端流式交互和中断；
-- 云端 Session 创建、读取和 Session Entry Tree v3 snapshot 同步；
+- Local Session Store 的 SQLite Session Entry Tree v3 authority、事务/迁移/幂等提交与归档；
+- 无 Server/API URL 的本地 create/list/open/continue/restart/branch，以及 durable-first user/model/tool/automatic-compaction transitions；
 - Session Entry Tree v3、任意 Entry 投影、lazy navigation 与 coverage-aware Branch Summary knowledge transfer；
 - Harness ContextManager、ModelContextProfile、Turn-aware token budget、retained tail、Tool Result Working Set 与 automatic/manual semantic Compaction；
-- 多 Provider 的本地抽象；
+- 多 Provider 的本地抽象、`/providers` secret-safe connection test 与 `/models` 默认选择持久化；
 - 默认启用的本地 SQLite Runtime Store、严格脱敏 Runtime Event、snapshot-plus-replay recovery 与未完成工作提示；
 - Harness 统一 permission policy、global/project persisted overrides、Tool Runtime capability enforcement 与脱敏 permission lifecycle；
 - Tool-call-level Interactive Approval Broker、Allow once / Deny CLI 审批、same-Step resume、approval cancel/timeout 与脱敏 schema-v3 approval lifecycle；
@@ -328,4 +329,4 @@ Stage 6.4 已完成多模型抽象迁移。shared 中的固定模型目录现在
 - ProcessSandbox 深模块、strict sandbox config、safe child environment、Linux Bubblewrap launch plan，以及 `bash/grep` 统一 subprocess seam；
 - AgentLoop / lifecycle interaction / ExecutionEventStore / Execution Projection / ContextManager / Session Tree 确定性测试基础。
 
-Stage 6.2 已补齐原先 `ask -> approval_required` 的产品死路；Stage 6.3 又把 process creation 收口到可替换的 Sandbox seam，并在 Linux/Bubblewrap 上提供真实的 workspace-write/process/network 隔离能力；Stage 6.4 现已完成 Provider Runtime、Credential/Auth seam、动态 ModelRef 与 Provider 管理 UX。下一阶段按产品依赖顺序推进：**Stage 6.5 Local Session Authority & Server Optionalization → Stage 6.6 Cloud Session Sync & Commercial Entitlements → Stage 6.7 Windows Native Sandbox**。MCP transport/auth/remote Tool trust boundary、持久化 allow-for-session/project、shell-AST-aware authorization、exact tokenizer 与 OS-native Secret Store 继续独立演进。
+Stage 6.2 已补齐原先 `ask -> approval_required` 的产品死路；Stage 6.3 又把 process creation 收口到可替换的 Sandbox seam，并在 Linux/Bubblewrap 上提供真实的 workspace-write/process/network 隔离能力；Stage 6.4 完成 Provider Runtime、Credential/Auth seam、动态 ModelRef 与 Provider 管理 UX；Stage 6.5 完成本地 Session authority 与 Railway retirement。当前 Stage 6.6 Cloud Session Sync & Commercial Entitlements 暂停，Stage 6.7 Windows Native Sandbox 仍是后续工作。显式 legacy import、MCP transport/auth/remote Tool trust boundary、持久化 allow-for-session/project、shell-AST-aware authorization、exact tokenizer 与 OS-native Secret Store 继续独立演进。

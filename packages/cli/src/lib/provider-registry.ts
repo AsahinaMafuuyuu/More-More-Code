@@ -90,6 +90,18 @@ const httpUrlSchema = z.string().url().superRefine((value, ctx) => {
     if (url.username || url.password) {
         ctx.addIssue({ code: "custom", message: "Provider baseURL must not contain credentials" });
     }
+    if (url.search || url.hash) {
+        ctx.addIssue({
+            code: "custom",
+            message: "Provider baseURL must not contain query parameters or fragments",
+        });
+    }
+    if (/\/(?:chat\/completions|responses)\/?$/i.test(url.pathname)) {
+        ctx.addIssue({
+            code: "custom",
+            message: "Provider baseURL must be an API root, not a request endpoint such as /chat/completions",
+        });
+    }
 });
 
 const customProviderSchema = baseProviderSchema.extend({

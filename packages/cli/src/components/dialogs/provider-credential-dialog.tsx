@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import type { InputRenderable } from "@opentui/core";
 import { getAgentEnvironment } from "../../lib/agent-environment";
 import type { ProviderConfig } from "../../lib/provider-registry";
+import { resolveProviderRequestPreview } from "../../lib/provider-runtime";
 import { useDialog } from "../../providers/dialog";
 import { useToast } from "../../providers/toast";
 
@@ -25,6 +26,23 @@ export function ProviderCredentialDialogContent({
     const dialog = useDialog();
     const toast = useToast();
     const credentialRef = getCredentialRef(provider);
+    const requestPreview = provider.models[0]
+        ? (() => {
+            try {
+                return { preview: resolveProviderRequestPreview(provider, provider.models[0]!), error: null };
+            } catch (error) {
+                return {
+                    preview: null,
+                    error: error instanceof Error
+                        ? error.message
+                        : `Provider '${provider.id}' has an invalid request configuration.`,
+                };
+            }
+        })()
+        : {
+            preview: null,
+            error: "Add a model in /providers before testing this provider.",
+        };
 
     if (!credentialRef) {
         return <text>This provider does not use a locally stored credential.</text>;
@@ -61,7 +79,12 @@ export function ProviderCredentialDialogContent({
                 }}
             />
             <text>{"•".repeat(Math.min(length, 48))}{length > 48 ? ` (${length} chars)` : ""}</text>
-            <text>Enter: store in local CredentialStore</text>
+            {requestPreview.preview ? (
+                <text>Runtime request: {requestPreview.preview.method} {requestPreview.preview.url}</text>
+            ) : (
+                <text>{requestPreview.error}</text>
+            )}
+            <text>Enter: store locally. Connection tests are explicit in /providers.</text>
         </box>
     );
 }

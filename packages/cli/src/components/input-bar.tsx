@@ -19,7 +19,7 @@ import { useTheme } from "../providers/theme";
 import { usePromptConfig } from "../providers/prompt-config";
 import type { ModeType, ModelRef } from "@more-more-code/shared";
 import type { ManualContextCompactionOutcome } from "../lib/local-model-transport";
-import { shutdownRuntimeEnvironment } from "../lib/runtime-environment";
+import { shutdownCliEnvironment } from "../lib/cli-environment";
 
 // 这些变量主要用于@提及功能的实现
 const MAX_VISIBLE_MENTIONS = 8; // 最大可见的提及数量
@@ -341,9 +341,24 @@ interface Props {
     onFollowUp?: (text: string) => void,
     disabled?: boolean,
     sessionTree?: SessionTreeCommandApi,
-    onModeChange?: (mode: ModeType) => void,
-    onModelChange?: (model: ModelRef) => void,
+    onModeChange?: (mode: ModeType) => void | Promise<void>,
+    onModelChange?: (model: ModelRef) => void | Promise<void>,
     onCompact?: () => Promise<ManualContextCompactionOutcome>,
+}
+
+/**
+ * A model selection is visible in prompt state only after its Session
+ * `model_change` authority transition succeeds. Keeping this tiny seam async
+ * lets the Models dialog retain its error/loading behavior instead of closing
+ * as if a rejected local commit had succeeded.
+ */
+export async function commitPromptModelChange(input: {
+    model: ModelRef;
+    onModelChange?: (model: ModelRef) => void | Promise<void>;
+    setModel: (model: ModelRef) => void;
+}) {
+    await input.onModelChange?.(input.model);
+    input.setModel(input.model);
 }
 
 export const TEXTAREA_KEY_BINDING: KeyBinding[] = [
@@ -392,13 +407,24 @@ export default function InputBar({
     const { colors } = useTheme();
     const navigate = useNavigate();
     const changeMode = useCallback((nextMode: ModeType) => {
-        setMode(nextMode);
-        onModeChange?.(nextMode);
-    }, [onModeChange, setMode]);
-    const changeModel = useCallback((nextModel: ModelRef) => {
-        setModel(nextModel);
-        onModelChange?.(nextModel);
-    }, [onModelChange, setModel]);
+        if (!onModeChange) {
+            setMode(nextMode);
+            return;
+        }
+        void Promise.resolve(onModeChange(nextMode))
+            .then(() => setMode(nextMode))
+            .catch((error) => {
+                toast.show({
+                    variant: "error",
+                    message: error instanceof Error ? error.message : String(error),
+                });
+            });
+    }, [onModeChange, setMode, toast]);
+    const changeModel = useCallback((nextModel: ModelRef) => commitPromptModelChange({
+        model: nextModel,
+        onModelChange,
+        setModel,
+    }), [onModelChange, setModel]);
 
     // 结构useCommandsMenu()返回的对象
     const {
@@ -537,12 +563,24 @@ export default function InputBar({
         if (command.action) {
             command.action({
                 exit: () => {
-                    void shutdownRuntimeEnvironment().finally(() => renderer.destroy());
-                }, // 先关闭本地 Runtime Store，再销毁渲染器
+                    void shutdownCliEnvironment().then(
+                        () => renderer.destroy(),
+                        (error) => {
+                            // Quiescence/close failures deliberately leave the
+                            // renderer alive: destroying it here could abandon
+                            // an in-flight Tool with no durable terminal state.
+                            toast.show({
+                                variant: "error",
+                                message: `Exit cancelled safely: ${error instanceof Error ? error.message : String(error)}`,
+                            });
+                        },
+                    );
+                }, // Store quiescence + close succeeds before renderer teardown.
                 toast, // 显示toast
                 dialog,
                 navigate,
                 mode, // 获取模式
+                model,
                 setMode: changeMode, // 设置模式并记录 Session state event
                 setModel: changeModel, // 设置模型并记录 Session state event
                 sessionTree,
@@ -551,7 +589,7 @@ export default function InputBar({
         } else {
             textarea.insertText(command.value + ' ') // 插入命令的value
         }
-    }, [renderer, toast, dialog, navigate, mode, changeMode, changeModel, sessionTree, onCompact])
+    }, [renderer, toast, dialog, navigate, mode, model, changeMode, changeModel, sessionTree, onCompact])
 
     const handleCommandExecute = useCallback((index: number) => {
         // 当用户执行一个命令时，执行该命令的回调

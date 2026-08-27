@@ -52,8 +52,9 @@ export type CommandContext = {
     dialog: DialogContextValue
     navigate: (path: string) => void;
     mode: ModeType,
+    model: ModelRef;
     setMode: (mode: ModeType) => void;
-    setModel: (model: ModelRef) => void;
+    setModel: (model: ModelRef) => void | Promise<void>;
     sessionTree?: SessionTreeCommandApi;
     compact?: () => Promise<ManualContextCompactionOutcome>;
 }

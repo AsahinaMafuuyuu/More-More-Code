@@ -1,6 +1,6 @@
-import { mkdir, readFile, writeFile } from "fs/promises";
+import { mkdir, readFile, rename, writeFile } from "fs/promises";
 import { homedir } from "os";
-import { join, resolve } from "path";
+import { dirname, join, resolve } from "path";
 import { z } from "zod";
 import type {
     PermissionEffect,
@@ -50,12 +50,14 @@ const environmentVariableNameSchema = z.string()
     .trim()
     .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "Expected an environment variable name");
 
+const modelRefSchema = z.object({
+    providerId: z.string().trim().min(1),
+    modelId: z.string().trim().min(1),
+}).strict();
+
 const agentConfigFileSchema = z.object({
     version: z.literal(1).optional(),
-    model: z.object({
-        providerId: z.string().trim().min(1),
-        modelId: z.string().trim().min(1),
-    }).strict().optional(),
+    model: modelRefSchema.optional(),
     instructions: z.object({
         file: z.string().optional(),
     }).optional(),
@@ -199,6 +201,10 @@ function serializeDefaultConfig() {
     }, null, 2)}\n`;
 }
 
+function serializeAgentConfig(config: AgentConfigFile) {
+    return `${JSON.stringify(config, null, 2)}\n`;
+}
+
 async function writeIfMissing(path: string, content: string) {
     try {
         await writeFile(path, content, { encoding: "utf-8", flag: "wx" });
@@ -208,6 +214,13 @@ async function writeIfMissing(path: string, content: string) {
             : null;
         if (code !== "EEXIST") throw error;
     }
+}
+
+async function atomicWriteConfig(path: string, content: string) {
+    await mkdir(dirname(path), { recursive: true });
+    const temporaryPath = `${path}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    await writeFile(temporaryPath, content, { encoding: "utf-8", mode: 0o600 });
+    await rename(temporaryPath, path);
 }
 
 export function resolveAgentConfigPaths(options: {
@@ -347,5 +360,51 @@ export async function loadAgentConfig(options: {
         global: globalConfig,
         project: projectConfig,
         resolved: mergeAgentConfig(globalConfig, projectConfig),
+    };
+}
+
+/**
+ * Persist the model selected through /models into normal Agent Config storage.
+ * Project scope is the local default: it follows the existing global-then-
+ * project precedence and is restored on the next CLI bootstrap.
+ */
+export async function saveAgentConfigModel(input: {
+    model: ModelRef;
+    scope?: ConfigScope;
+    workspaceRoot?: string;
+    globalHome?: string;
+    ensureLayout?: boolean;
+}): Promise<AgentConfigBundle> {
+    const scope = input.scope ?? "project";
+    const model = modelRefSchema.parse(input.model);
+    const paths = resolveAgentConfigPaths({
+        workspaceRoot: input.workspaceRoot,
+        globalHome: input.globalHome,
+    });
+    if (input.ensureLayout !== false) {
+        await ensureAgentConfigLayout(paths);
+    }
+
+    const [globalConfig, projectConfig] = await Promise.all([
+        readConfigFile(paths.globalConfigPath),
+        readConfigFile(paths.projectConfigPath),
+    ]);
+    const nextGlobal = scope === "global"
+        ? agentConfigFileSchema.parse({ ...globalConfig, model })
+        : globalConfig;
+    const nextProject = scope === "project"
+        ? agentConfigFileSchema.parse({ ...projectConfig, model })
+        : projectConfig;
+
+    await atomicWriteConfig(
+        scope === "global" ? paths.globalConfigPath : paths.projectConfigPath,
+        serializeAgentConfig(scope === "global" ? nextGlobal : nextProject),
+    );
+
+    return {
+        paths,
+        global: nextGlobal,
+        project: nextProject,
+        resolved: mergeAgentConfig(nextGlobal, nextProject),
     };
 }

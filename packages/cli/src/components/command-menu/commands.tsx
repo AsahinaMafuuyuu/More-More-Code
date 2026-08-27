@@ -1,9 +1,6 @@
 import { Children } from "react";
 import type { Command } from "./types";
 import { ThemeDialogContent, AgentsDialogContent, SessionsDialogContent, ModelsDialogContent, ProvidersDialogContent, SessionTreeDialogContent, SettingsDialogContent, BranchSummaryDecisionDialogContent, showNavigationResultToast } from "../dialogs";
-import { performLogin } from "../../lib/oauth";
-import { clearAuth } from "../../lib/auth";
-import { openBillingPortal, openUpgradeCheckout } from "../../lib/upgrade";
 import { getAgentEnvironment } from "../../lib/agent-environment";
 
 async function requestSessionTreeJump(
@@ -84,7 +81,7 @@ export const COMMANDS: Command[] = [
         action: (ctx) => {
             ctx.dialog.open({
                 title: "Providers",
-                children: <ProvidersDialogContent />,
+                children: <ProvidersDialogContent liveModel={ctx.model} />,
             });
         },
     },
@@ -233,96 +230,6 @@ export const COMMANDS: Command[] = [
             })
         }
 
-    },
-    {
-        name: 'login',
-        description: "Log in to your account",
-        value: "/login",
-        action: async (ctx) => {
-            ctx.toast.show({
-                message: "Opening browser to sign in...",
-            })
-
-            try {
-                await performLogin();
-                ctx.toast.show({
-                    message: "Successfully signed in!",
-                    variant: "success",
-                })
-            } catch (error) {
-                const message = error instanceof Error 
-                ? error.message 
-                : String(error);
-                ctx.toast.show({
-                    message: `Login failed: ${message}`,
-                    variant: "error",
-                })
-            }
-        }
-    },
-    {
-        name: 'logout',
-        description: "Log out of your account",
-        value: "/logout",
-        action: (ctx) => {
-            clearAuth(); // 清除身份验证数据
-            ctx.toast.show({
-                message: "Signed out...",
-                variant: "success", // 显示成功消息
-            })
-        }
-    },
-    {
-        name: 'upgrade',
-        description: "Buy more credits or upgrade your plan",
-        value: "/upgrade",
-        action: async (ctx) => {
-            ctx.toast.show({
-                message: "Opening credits checkout...",
-            })
-
-            try {
-                await openUpgradeCheckout();
-                ctx.toast.show({
-                    message: "Opened checkout in browser.",
-                    variant: "success",
-                })
-            } catch (error) {
-                const message = error instanceof Error 
-                ? error.message 
-                : String(error);
-                ctx.toast.show({
-                    message: `Failed to open checkout: ${message}`,
-                    variant: "error",
-                })
-            }
-        }
-    },
-    {
-        name: 'usage',
-        description: "Open billing portal in your browser",
-        value: "/usage",
-        action: async (ctx) => {
-            ctx.toast.show({
-                message: "Opening billing portal...",
-            })
-
-            try {
-                await openBillingPortal();
-                ctx.toast.show({
-                    message: "Opened billing portal in browser.",
-                    variant: "success",
-                })
-            } catch (error) {
-                const message = error instanceof Error 
-                ? error.message 
-                : String(error);
-                ctx.toast.show({
-                    message: `Failed to open billing portal: ${message}`,
-                    variant: "error",
-                })
-            }
-        }
     },
     {
         name: "exit",

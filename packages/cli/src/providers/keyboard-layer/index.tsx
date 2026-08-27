@@ -14,7 +14,7 @@ import React, {
 } from 'react';
 import { useKeyboard, useRenderer } from '@opentui/react'; // 导入useKeyboard和useRenderer钩子函数
 import { resolveCtrlCExit } from '../../lib/ctrl-c-exit-guard';
-import { shutdownRuntimeEnvironment } from '../../lib/runtime-environment';
+import { shutdownCliEnvironment } from '../../lib/cli-environment';
 
 type Responder = () => boolean;
 
@@ -91,7 +91,18 @@ export function KeyboardLayerProvider({ children }: { children: React.ReactNode 
         lastUnhandledCtrlCAt.current = decision.nextPressedAt;
 
         if (decision.shouldExit) {
-            void shutdownRuntimeEnvironment().finally(() => renderer.destroy());
+            void shutdownCliEnvironment().then(
+                () => renderer.destroy(),
+                (error) => {
+                    // Fail closed: a timed-out/incomplete Tool must keep the
+                    // terminal alive rather than destroying its only control
+                    // surface while local Stores remain intentionally open.
+                    console.error(
+                        "Exit cancelled safely; active Run/Tool state is still being preserved:",
+                        error instanceof Error ? error.message : String(error),
+                    );
+                },
+            );
             return;
         }
 

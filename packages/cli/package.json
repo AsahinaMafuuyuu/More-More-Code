@@ -11,7 +11,6 @@
     "build": "bun build src/index.tsx --outdir dist --target bun --external @opentui/core --external @opentui/react"
   },
   "devDependencies": {
-    "@more-more-code/server": "workspace:*",
     "@types/bun": "latest",
     "@types/react": "^19.2.17"
   },
@@ -26,11 +25,11 @@
     "@ai-sdk/react": "^4.0.40",
     "@more-more-code/harness": "workspace:*",
     "@more-more-code/runtime-store": "workspace:*",
+    "@more-more-code/session-store": "workspace:*",
     "@more-more-code/shared": "workspace:*",
     "@opentui/core": "^0.4.2",
     "@opentui/react": "^0.4.2",
     "ai": "^7.0.37",
-    "hono": "^4.12.28",
     "open": "^11.0.0",
     "opentui-spinner": "^0.0.7",
     "pretty-ms": "^9.3.0",

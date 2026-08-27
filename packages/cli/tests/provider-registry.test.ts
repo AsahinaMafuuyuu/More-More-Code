@@ -125,5 +125,27 @@ describe("ProviderRegistry", () => {
             auth: { type: "api-key", credentialRef: defaultCredentialRef("plaintext-secret") },
             apiKey: "TOP-SECRET-CREDENTIAL",
         } as never)).rejects.toThrow();
+
+        await expect(registry.saveProvider({
+            id: "endpoint-as-base-url",
+            kind: "custom",
+            displayName: "Endpoint as base URL",
+            enabled: true,
+            protocol: "openai-compatible",
+            baseURL: "https://example.com/v1/chat/completions",
+            models: ["x"],
+            auth: { type: "none" },
+        })).rejects.toThrow("API root");
+
+        await expect(registry.saveProvider({
+            id: "query-secret",
+            kind: "custom",
+            displayName: "Query Secret",
+            enabled: true,
+            protocol: "openai-compatible",
+            baseURL: "https://example.com/v1?api_key=TOP-SECRET-CREDENTIAL",
+            models: ["x"],
+            auth: { type: "none" },
+        })).rejects.toThrow("query parameters");
     });
 });

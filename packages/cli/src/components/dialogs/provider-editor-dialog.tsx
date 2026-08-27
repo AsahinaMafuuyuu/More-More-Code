@@ -4,7 +4,8 @@ import { useKeyboard } from "@opentui/react";
 import { useKeyboardLayer } from "../../providers/keyboard-layer";
 import { useDialog } from "../../providers/dialog";
 import { useToast } from "../../providers/toast";
-import { getAgentEnvironment } from "../../lib/agent-environment";
+import { saveAgentEnvironmentProvider } from "../../lib/agent-environment";
+import type { ModelRef } from "@more-more-code/shared";
 import {
     defaultCredentialRef,
     providerConfigSchema,
@@ -13,10 +14,12 @@ import {
 
 export function ProviderEditorDialogContent({
     provider,
+    liveModel,
     onSaved,
     closeOnSave = true,
 }: {
     provider?: CustomProviderConfig;
+    liveModel: ModelRef;
     onSaved?: () => void;
     closeOnSave?: boolean;
 }) {
@@ -60,7 +63,7 @@ export function ProviderEditorDialogContent({
             };
             const parsed = providerConfigSchema.parse(rawProvider);
             if (parsed.kind !== "custom") throw new Error("Expected a custom provider");
-            await getAgentEnvironment().providers.saveProvider(parsed);
+            await saveAgentEnvironmentProvider(parsed, { liveModel });
             toast.show({ variant: "success", message: `Saved provider '${parsed.id}'` });
             onSaved?.();
             if (closeOnSave) dialog.close();
@@ -72,7 +75,7 @@ export function ProviderEditorDialogContent({
         } finally {
             setSaving(false);
         }
-    }, [closeOnSave, dialog, onSaved, provider, saving, toast]);
+    }, [closeOnSave, dialog, liveModel, onSaved, provider, saving, toast]);
 
     useKeyboard((key) => {
         if (!isTopLayer("dialog")) return;

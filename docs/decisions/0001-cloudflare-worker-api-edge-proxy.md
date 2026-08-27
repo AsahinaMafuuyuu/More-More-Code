@@ -2,7 +2,11 @@
 
 ## Status
 
-Accepted
+Superseded by ADR-0024
+
+This record is retained as historical context. The Cloudflare Worker and its
+Railway origin are retired from the local CLI architecture; see ADR-0024 for
+the local-only Session authority decision.
 
 ## Date
 

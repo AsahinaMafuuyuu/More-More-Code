@@ -2,7 +2,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useParams, useLocation, useNavigate } from "react-router";
 import { z } from "zod";
-import type { InferResponseType } from "hono/client";
 import { SessionShell } from "../components/session-shell";
 import { useKeyboard } from "@opentui/react";
 import {
@@ -13,8 +12,7 @@ import {
 import { useToast } from "../providers/toast";
 import { useDialog } from "../providers/dialog";
 import { ApprovalDialogContent } from "../components/dialogs";
-import { apiClient } from "../lib/api-client";
-import { getErrorMessage } from "../lib/http-errors";
+import { getLocalSessionAuthority } from "../lib/session-environment";
 import {
   type ModelRef,
   type ModeType,
@@ -31,12 +29,16 @@ import {
 import { useKeyboardLayer } from "../providers/keyboard-layer";
 import { formatRuntimeRecoveryNotice } from "../lib/runtime-recovery";
 import { normalizeModelRef } from "../lib/models";
+import type { LocalSessionSnapshot } from "@more-more-code/session-store";
 
-type SessionData = InferResponseType<(typeof apiClient.sessions)[":id"]["$get"], 200>; // 获取SessionData的类型
+type SessionData = LocalSessionSnapshot<Message>;
 
 const sessionLocationSchema = z.object({
-  session: z.custom<SessionData>((val) => {
-    return val !== null && typeof val === "object" && "id" in val; //  验证session对象是否包含id属性
+  snapshot: z.custom<SessionData>((val) => {
+    return val !== null
+      && typeof val === "object"
+      && "session" in val
+      && "state" in val;
   }),
   initialPrompt: z.object({
     message: z.string(),
@@ -142,7 +144,7 @@ function SessionChat({
     navigateToNode,
     recordPromptSelection,
     compact,
-  } = useChat(session.id, session.messages); // 使用自定义hook管理消息状态与会话树
+  } = useChat(session.session.id, session.state); // 使用自定义hook管理本地会话树
   const runActive = run?.status === "running";
   const settling = busy && !runActive;
   const reportedRecoveryKeyRef = useRef<string | null>(null);
@@ -301,14 +303,24 @@ function SessionChat({
         userText: initialPrompt.message,
         mode: initialPrompt.mode,
         model: initialPrompt.model,
+    }).catch((error) => {
+      toast.show({
+        variant: "error",
+        message: error instanceof Error ? error.message : String(error),
+      });
     });
-}, [initialPrompt, submit]);
+}, [initialPrompt, submit, toast]);
 
   return (
     <SessionShell
       onSubmit={(text) => {
         if (runActive) {
-          steer({ userText: text, mode, model });
+          void steer({ userText: text, mode, model }).catch((error) => {
+            toast.show({
+              variant: "error",
+              message: error instanceof Error ? error.message : String(error),
+            });
+          });
           return;
         }
 
@@ -316,11 +328,21 @@ function SessionChat({
           userText: text,
           mode,
           model,
-        })
+        }).catch((error) => {
+          toast.show({
+            variant: "error",
+            message: error instanceof Error ? error.message : String(error),
+          });
+        });
       }}
       onFollowUp={(text) => {
         if (runActive) {
-          followUp({ userText: text, mode, model });
+          void followUp({ userText: text, mode, model }).catch((error) => {
+            toast.show({
+              variant: "error",
+              message: error instanceof Error ? error.message : String(error),
+            });
+          });
           return;
         }
 
@@ -328,17 +350,22 @@ function SessionChat({
           userText: text,
           mode,
           model,
-        })
+        }).catch((error) => {
+          toast.show({
+            variant: "error",
+            message: error instanceof Error ? error.message : String(error),
+          });
+        });
       }}
       inputDisabled={settling}
       loading={busy || status === "submitted" || status === "streaming"}
       interruptible={runActive || status === "streaming" || status === "submitted"}
       sessionTree={sessionTreeCommands}
       onModeChange={(nextMode) => {
-        recordPromptSelection({ mode: nextMode, model });
+        return recordPromptSelection({ mode: nextMode, model });
       }}
       onModelChange={(nextModel) => {
-        recordPromptSelection({ mode, model: nextModel });
+        return recordPromptSelection({ mode, model: nextModel });
       }}
       onCompact={() => compact({ mode, model })}
     >
@@ -367,26 +394,25 @@ export function Session() {
     return parsed.success ? parsed.data : null; // 如果验证成功，返回session数据，否则返回null
   }, [location.state])
 
-  const [session, setSession] = useState<SessionData | null>(prefetched?.session ?? null); // 创建session状态
+  const [session, setSession] = useState<SessionData | null>(prefetched?.snapshot ?? null); // 创建session状态
   useEffect(() => {
-    if (prefetched?.session) return;
+    if (prefetched?.snapshot) return;
     setSession(null); // 如果没有预取数据，设置session为null
     if (!id) return; // 如果没有id，返回
     let ignore = false;
     const fetchSession = async () => {
       try {
-        const res = await apiClient.sessions[':id'].$get({
-          param: { id },
-        });
+        const resolvedSession = await getLocalSessionAuthority().open(id);
         if (ignore) return;
-        if (!res.ok) throw new Error(await getErrorMessage(res));
-        const resolvedSession = await res.json()
+        if (!resolvedSession) throw new Error(`Local session ${id} was not found`);
         setSession(resolvedSession); // 如果响应ok，则设置session为响应数据
       } catch (error) {
         if (ignore) return;
         toast.show({
           variant: "error",
-          message: error instanceof Error ? error.message : "Failed to fetch session",
+          message: error instanceof Error
+            ? `Unable to open local session: ${error.message}`
+            : "Unable to open local session",
         });
 
         navigate("/", { replace: true }); // 如果获取会话失败，导航回主页
@@ -408,7 +434,7 @@ export function Session() {
 
   return (
     <SessionChat
-      key={session.id}
+      key={session.session.id}
       session={session}
       initialPrompt={prefetched?.initialPrompt}
     />

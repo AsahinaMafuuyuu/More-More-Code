@@ -7,8 +7,7 @@ import { ErrorMessage, UserMessage, BotMessage } from "../components/messages";
 import { SessionShell } from "../components/session-shell";
 
 import { useToast } from "../providers/toast";
-import { apiClient } from "../lib/api-client";
-import { getErrorMessage } from "../lib/http-errors";
+import { getLocalSessionAuthority } from "../lib/session-environment";
 
 // 新对话可以传入mode和model
 const newSessionSchema = z.object({
@@ -46,32 +45,30 @@ export function NewSession() {
         let ignore = false; // 标记是否忽略
         const createSession = async () => {
             try {
-                const res = await apiClient.sessions.$post({
-                    json: {
-                        title: state.message.slice(0, 100),
-                    }
+                // The root Session Tree is persisted before the conversation is
+                // exposed. The first user message follows through the durable
+                // turn gate in useChat.
+                const snapshot = await getLocalSessionAuthority().create({
+                    title: state.message.trim().slice(0, 100) || "New session",
                 });
                 if (ignore) return;
-                if (!res.ok) {
-                    throw new Error(await getErrorMessage(res));
-                }
 
-                // 如果创建会话成功，导航到新会话页面
-                const session = await res.json(); // 解析响应为JSON
                 navigate(
-                    `/sessions/${session.id}`, 
+                    `/sessions/${snapshot.session.id}`,
                     { 
                         replace: true, 
                         state: { 
-                            session,
+                            snapshot,
                             initialPrompt: state
-                        } }); // 导航到新会话页面, 并传递session数据
+                        } }); // 导航到新会话页面, 并传递本地快照
             }
             catch (error) {
                 if (ignore) return; // 如果忽略，则返回
                 toast.show({
                     variant: "error",
-                    message: error instanceof Error ? error.message : "Failed to create session",
+                    message: error instanceof Error
+                        ? `Unable to create a local session: ${error.message}`
+                        : "Unable to create a local session",
                 })
                 navigate("/", { replace: true }); // 如果创建会话失败，导航回主页
             }

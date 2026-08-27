@@ -19,11 +19,24 @@ Stage 6.4 (Provider Runtime & Local Model Configuration) was delivered on 2026-0
 - `/providers` manages provider definitions/auth state and `/models` lists configured model references dynamically;
 - OpenAI Codex OAuth is represented by an experimental broker seam but remains explicitly unavailable until a supported native provider-execution contract exists; no private Codex token files are read or copied.
 
-The broader ADR remains only partially implemented: Local Session authority is Stage 6.5, optional cloud sync/commercial separation is Stage 6.6, and therefore the Cloud Session Store remains transitional today.
+Stage 6.5 (Local Session Authority & Railway Retirement) was delivered on
+2026-08-26. The CLI now uses the local SQLite Session Store as its semantic
+authority, and the retired Cloudflare/Railway path is not part of the local
+runtime. Stage 6.6 (optional cloud sync and commercial separation) is paused
+pending explicit product re-approval; Server/database code is dormant future
+cloud code rather than a local CLI dependency. Final integrated review of the
+current Stage 6.5 implementation completed on 2026-08-26 with no residual
+P0/P1 finding; explicit legacy Session import remains a documented non-blocking
+follow-up.
+
+This ADR does not claim a real external-provider end-to-end test or a working
+Codex OAuth execution path. Provider connection coverage uses injected/fake
+transport seams, and Codex OAuth remains unavailable until a supported,
+documented broker can execute model requests.
 
 ## Context
 
-ADR-0003 moved model/tool execution out of the Server and into the local CLI, but the current application still depends on the Server for Session creation, listing, retrieval, and whole-tree snapshot persistence. Provider selection is also still represented by a hard-coded model catalog plus a provider switch, and credentials are primarily discovered through ambient environment variables.
+ADR-0003 moved model/tool execution out of the Server and into the local CLI. Before the Stage 6.5 delivery recorded here, the application still depended on the Server for Session creation, listing, retrieval, and whole-tree snapshot persistence; Provider selection was also represented by a hard-coded model catalog plus a provider switch, and credentials were primarily discovered through ambient environment variables.
 
 That shape no longer matches the product direction. MORE-MORE-CODE is intended to be a complete local-first coding agent whose core runtime remains usable without a MORE-MORE-CODE account or cloud connection. The cloud product is still valuable, but for two narrower capabilities: commercial account/subscription entitlements and multi-device Session synchronization.
 
@@ -57,13 +70,15 @@ MORE-MORE-CODE Cloud
   └── Multi-device Session Sync / Backup
 ```
 
-The CLI must be able to create, list, open, continue, branch, and persist Sessions without contacting the Server.
+The CLI must be able to create, list, open, continue, branch, and persist
+Sessions without contacting the Server. Stage 6.5 delivers this requirement
+through the local Session authority.
 
 This decision supersedes ADR-0003 only where ADR-0003 treats the Cloud Session Store as the creation/retrieval authority. ADR-0003 remains valid for the more fundamental rule that Agent/model/tool execution is local and the Server must not own AgentLoop or Model Steps.
 
 ### 2. Server is optional and has only cloud-product responsibilities
 
-The Server may own:
+For a future, explicitly re-enabled cloud product, the Server may own:
 
 - MORE-MORE-CODE account identity;
 - commercial subscription state;
@@ -161,7 +176,7 @@ Codex OAuth is represented as its own auth strategy. The implementation should p
 
 ### 7. Provider configuration is user-global and secrets are stored separately
 
-Provider account/endpoint configuration belongs in a user-global local file, planned as:
+Provider account/endpoint configuration belongs in a user-global local file:
 
 ```text
 ~/.more-more-code/providers.json
@@ -173,9 +188,12 @@ Raw secrets are owned by a `CredentialStore` seam. The preferred production adap
 
 ### 8. Local Session Store becomes semantic Session authority
 
-The current cloud-first `POST /sessions` / `GET /sessions/:id` / whole-state persistence flow is transitional.
+The former cloud-first `POST /sessions` / `GET /sessions/:id` / whole-state
+persistence flow is no longer used by the local CLI. Stage 6.5 makes the local
+Store authoritative; any future cloud path must be an explicit Stage 6.6 sync
+adapter.
 
-Stage 6.5 introduces a local Session Store that owns at minimum:
+Stage 6.5 implements a local Session Store that owns at minimum:
 
 ```text
 create
@@ -200,10 +218,11 @@ Semantic Session Entries and shareable Session metadata may synchronize. Device-
 
 The accepted roadmap becomes:
 
-1. **Stage 6.4 — Provider Runtime & Local Model Configuration**
-2. **Stage 6.5 — Local Session Authority & Server Optionalization**
-3. **Stage 6.6 — Cloud Session Sync & Commercial Entitlements**
-4. **Stage 6.7 — Windows Native Sandbox**
+1. **Stage 6.4 — Provider Runtime & Local Model Configuration** — delivered
+2. **Stage 6.5 — Local Session Authority & Railway Retirement** — delivered
+3. **Stage 6.6 — Cloud Session Sync & Commercial Entitlements** — paused,
+   pending explicit product re-approval
+4. **Stage 6.7 — Windows Native Sandbox** — future work
 
 Windows native isolation remains important, but it no longer precedes the product-architecture migration that removes Server dependence and hard-coded provider configuration.
 
@@ -241,16 +260,12 @@ Windows native isolation remains important, but it no longer precedes the produc
 
 ## Consequences
 
-- Stage 6.4 must replace the hard-coded `SupportedProvider`/closed model assumptions with Provider Registry + `ProviderId`/`ProviderKind` + `ModelRef` semantics.
+- Stage 6.4 replaced the hard-coded `SupportedProvider`/closed model assumptions with Provider Registry + `ProviderId`/`ProviderKind` + `ModelRef` semantics.
 - Mistral is removed from the built-in provider surface.
 - Provider account configuration becomes user-global local state; project config may only refer to providers/models without owning their credentials.
 - Credential persistence receives an explicit deep module rather than relying on ambient process environment as the only mechanism.
 - Codex OAuth can be implemented without contaminating OpenAI provider/session semantics, and can remain experimental until the integration contract is verified.
-- Stage 6.5 must remove mandatory Server calls from Session creation/open/persistence before the product can accurately claim full local-first operation.
+- Stage 6.5 removed mandatory Server calls from Session creation/open/persistence before the product can accurately claim full local-first operation.
 - Stage 6.6 must replace whole-state last-write-wins synchronization with an append-oriented, idempotent, conflict-aware multi-device protocol.
 - Cloud subscription/entitlements remain optional product capabilities rather than an Agent Runtime dependency.
 - Stage 6.7 resumes the Windows native sandbox work on top of the same ProcessSandbox seam delivered in Stage 6.3.
-
-## Implementation Status
-
-Architecture accepted and roadmap planned on 2026-08-23. The current code is transitional: model execution is already local, but Session authority is still cloud-backed and provider/model configuration is still partly hard-coded. Stages 6.4-6.6 implement this ADR incrementally.

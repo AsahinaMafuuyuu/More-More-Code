@@ -2,7 +2,7 @@
 
 ## Session
 
-A durable history of one agent conversation/workflow, including conversational content, semantic runtime events, state changes, context-control events, and branches.
+A durable local history of one agent conversation/workflow, owned by the Local Session Store and including conversational content, semantic runtime events, state changes, context-control events, and branches. Cloud synchronization is not part of the current CLI path.
 
 ## Session Entry
 
@@ -14,7 +14,7 @@ The append-only, branchable history formed by Session Entries and their parent r
 
 ## Active Entry
 
-The current continuation cursor of a Session Entry Tree. New durable Session facts become descendants of the Active Entry.
+The current device-local continuation cursor of a Session Entry Tree. New durable Session facts become descendants of the Active Entry; it is not a cloud synchronization field in the current CLI.
 
 ## Branch
 
@@ -82,7 +82,7 @@ A provider-independent selection value shaped as `{ providerId, modelId }`. Buil
 
 ## Provider Authentication Strategy
 
-The provider-specific credential acquisition seam used by Provider Runtime. Initial strategies are OpenAI API key or experimental Codex OAuth, API key for Anthropic/Google/DeepSeek, and API key/Bearer/None for custom OpenAI-compatible endpoints. Anthropic OAuth is explicitly outside the initial design; Google OAuth and other provider login mechanisms require later research. Codex OAuth must not be implemented by scraping private token files or assuming undocumented tokens are stable generic OpenAI API credentials.
+The provider-specific credential acquisition seam used by Provider Runtime. The local CLI supports an OpenAI API key, API keys for Anthropic/Google/DeepSeek, and API key/Bearer/None for custom OpenAI-compatible endpoints. Codex OAuth is modeled as a capability-gated seam but is currently unavailable and hidden because no supported documented broker can provide native model execution. Anthropic OAuth is explicitly outside the initial design; Google OAuth and other provider login mechanisms require later research. Codex OAuth must not be implemented by scraping private token files or assuming undocumented tokens are stable generic OpenAI API credentials.
 
 ## Credential Store
 
@@ -106,19 +106,19 @@ A session-scoped checkpoint of a Runtime projection at a specific durable event 
 
 ## Cloud Session Store
 
-The current PostgreSQL persistence boundary implemented by `packages/database` and consumed by `packages/server`. As of Stage 6.3 it still stores account-scoped Session Tree snapshots for cloud retrieval, but ADR-0023 marks this authority model as transitional. Stage 6.6 evolves the cloud layer into optional multi-device synchronization/backup over locally authoritative Sessions instead of whole-tree last-write-wins ownership.
+The dormant PostgreSQL persistence boundary implemented by `packages/database` and consumed by `packages/server`. It is not the Session authority of the local CLI and is not opened or called by local startup, Session lifecycle, Provider, Context, cache, or Tool execution. A future Stage 6.6 product may evolve it into optional multi-device synchronization/backup over locally authoritative Sessions instead of whole-tree last-write-wins ownership; Stage 6.6 is currently paused.
 
 ## Local Session Store
 
-The planned Stage 6.5 semantic Session authority. It owns local Session creation/list/get and append-only Session Entry persistence so the CLI can run fully without Server availability or a MORE-MORE-CODE account. It is intentionally separate from the Local Runtime Store: Session Entries are durable conversation semantics and branch topology, while Runtime Events are execution/security/recovery facts.
+The implemented Stage 6.5 semantic Session authority, backed by the local SQLite `packages/session-store` package (default `~/.more-more-code/sessions/sessions.db`). It owns `create`, `load/open`, `list`, atomic `commit`, and `archive`; validates Session Tree topology; persists root/active Entry identity, metadata, stable append sequence, migrations, and idempotency; and commits semantic transitions before UI exposure or Provider/Tool side effects. It is intentionally separate from the Local Runtime Store: Session Entries are durable conversation semantics and branch topology, while Runtime Events are execution/security/recovery facts. Explicit transactional/idempotent import of legacy linear/v1/v2/v3 snapshots remains a non-blocking follow-up.
 
 ## Cloud Session Sync
 
-The planned optional synchronization module between the Local Session Store and MORE-MORE-CODE Cloud. Its target protocol is append-oriented, idempotent, and revision/cursor-aware so independent device branches can coexist. Semantic Session Entries and shareable metadata may sync; device-local navigation/presentation state such as `activeEntryId`, expanded nodes, and scroll position remains local by default.
+The paused, future optional synchronization module between the Local Session Store and MORE-MORE-CODE Cloud. Its target protocol is append-oriented, idempotent, and revision/cursor-aware so independent device branches can coexist. Semantic Session Entries and shareable metadata may sync; device-local navigation/presentation state such as `activeEntryId`, expanded nodes, and scroll position remains local by default. It is not part of the current local CLI critical path and requires explicit Stage 6.6 product re-approval.
 
 ## Cloud Entitlement
 
-The optional account/subscription capability record returned by MORE-MORE-CODE Cloud for commercial features such as multi-device synchronization or backup. Entitlements may be cached locally and must not become a per-Model-Step authorization dependency for the core local Agent Runtime.
+The future optional account/subscription capability record returned by MORE-MORE-CODE Cloud for commercial features such as multi-device synchronization or backup. Entitlements are disabled in the current local CLI; if reintroduced, they may be cached locally but must not become a per-Model-Step authorization dependency for the core local Agent Runtime.
 
 ## Local Runtime Store
 

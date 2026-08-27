@@ -65,6 +65,10 @@ All notable changes to MORE MORE CODE are recorded here.
 - Deep `CredentialStore` and provider-auth seams with AES-256-GCM local encrypted storage, read-only environment credential compatibility, API-key/Bearer/None strategies, and an explicitly unavailable experimental Codex OAuth broker that never reads private Codex token files.
 - `/providers` provider/status/config/credential UX and dynamic `/models` selection driven by configured Provider Registry entries.
 - Provider Registry/Credential/ModelRef regression coverage for disposable homes, invalid config, multiple custom endpoints, encrypted secret round-trip, migration, auth failure, and unknown-model Context fallback.
+- `packages/session-store` LocalSessionStore with SQLite migrations, transactionally validated Session Tree topology, root/active metadata, stable append sequences, archive, and idempotent commits.
+- CLI Local Session Authority for offline create/list/open/continue/restart/branch flows, with durable-first user/model/tool/automatic-compaction transitions.
+- Focused local-only coverage for Session Store persistence/restart/migration/transaction/idempotency, fetch-free Session lifecycle, durable-first ordering, compaction durability, secret-safe Provider connection probes, and persisted model defaults.
+- ADR-0024 documenting local-only Session authority, Railway retirement, disabled cloud surfaces, and capability-gated Codex OAuth.
 
 ### Changed
 
@@ -94,13 +98,25 @@ All notable changes to MORE MORE CODE are recorded here.
 - Approval request/resolution observer failures are fail-closed: broker interaction cannot start before a durable request fact, and executor invocation cannot start before a durable approval-allow fact.
 - Native `bash` and `grep` subprocesses now share the `ProcessSandbox` seam; `local-tools.ts` no longer creates child processes directly, while existing Bash descendant cancellation remains intact for direct/MSYS execution.
 - Native `grep` now resolves Git-for-Windows' `usr/bin/grep.exe` when GNU grep is available inside Git Bash but not exposed on the Windows process PATH, eliminating the previous `ENOENT` path on that setup.
-- The post-Stage-6.3 roadmap is reordered to Provider Runtime → Local Session Authority → Cloud Session Sync/Commercial Entitlements → Windows Native Sandbox. Stage 6.4 Provider Runtime is now implemented; Stages 6.5-6.7 remain planned.
+- The post-Stage-6.3 roadmap is reordered to Provider Runtime → Local Session Authority/Railway Retirement → Cloud Session Sync/Commercial Entitlements → Windows Native Sandbox. Stage 6.4 and the local-only Stage 6.5 implementation are delivered; Stage 6.6 is paused and Stage 6.7 remains planned.
 - Provider execution no longer treats the shared recommended model catalog as the runtime allowlist: configured Provider Registry accounts now create AI SDK models through one resolver seam, including Google through its OpenAI-compatible Gemini endpoint and Custom V1 through configurable OpenAI-compatible base URLs.
 - Project/global Agent Config may select the default `providerId/modelId`, while provider account/endpoint configuration stays user-global and credentials stay outside Agent Config/Provider Registry JSON.
+- Local CLI Session creation, listing, opening, continuation, Context/cache/checkpoint handling, and restart recovery no longer depend on Server, `API_URL`, Clerk, Cloudflare, or Railway; `packages/server` and `packages/database` remain dormant future-cloud code.
+- The Cloudflare Worker, Railway origin/deployment material, root Wrangler dependency/scripts, CLI cloud helpers, and `/login`/`/logout` surfaces are retired from the local workflow.
+- `/providers` connection validation now reports a secret-safe resolved URL and typed configuration/credential/protocol/HTTP/model/network failures; `/models` defaults persist locally across restart.
+- Codex OAuth is hidden while no supported documented model-execution broker exists; OpenAI API Key remains the supported local path, and the CLI never reuses private Codex token files.
+- Stage 6.5 Local Session Authority & Railway Retirement is delivered; Stage 6.6 Cloud Session Sync & Commercial Entitlements is paused pending explicit product re-approval.
+
+### Fixed
+
+- Local Session creation now preserves the Web Crypto receiver when using the production default UUID generator, preventing Bun `ERR_INVALID_THIS` / `Expected this to be instanceof Crypto` failures before Provider execution; regression coverage now exercises the real default-ID path.
+- The `/providers` custom-provider editor integration test now drives OpenTUI keyboard state through React test transactions instead of depending on batched synthetic key events that could observe stale selection state.
 
 ### Deferred
 
 - Windows/macOS native OS Sandbox adapters, MCP transport/auth/remote tool execution, persistent allow-for-session/project rules, and product-level Subagent runtime remain outside this delivery slice.
+- Explicit transactional/idempotent import of legacy linear/v1/v2/v3 Session snapshots remains a non-blocking follow-up; it is not required for new local Sessions and does not add a startup cloud fetch.
+- Real external-Provider E2E coverage and Codex OAuth model execution remain unclaimed until the corresponding supported contracts exist.
 
 ## [2.0.1] - 2026-08-13
 

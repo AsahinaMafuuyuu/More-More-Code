@@ -14,6 +14,7 @@ import type { AgentEnvironment } from "./agent-environment";
 import { getAgentEnvironment } from "./agent-environment";
 import { resolveProviderAuth } from "./provider-auth";
 import type { ProviderConfig } from "./provider-registry";
+import { BUILT_IN_PROVIDER_BASE_URLS } from "./provider-runtime";
 
 export type ResolvedModel = {
     model: LanguageModel;
@@ -96,7 +97,10 @@ export async function resolveChatModel(
             if (auth.type !== "api-key" && auth.type !== "codex-oauth") {
                 throw new Error(`Unsupported OpenAI auth strategy: ${auth.type}`);
             }
-            const openai = createOpenAI({ apiKey: auth.value });
+            const openai = createOpenAI({
+                apiKey: auth.value,
+                baseURL: BUILT_IN_PROVIDER_BASE_URLS.openai,
+            });
             return {
                 model: openai.responses(modelRef.modelId),
                 provider: provider.kind,
@@ -106,7 +110,10 @@ export async function resolveChatModel(
         }
         case "anthropic": {
             if (auth.type !== "api-key") throw new Error(`Unsupported Anthropic auth strategy: ${auth.type}`);
-            const anthropic = createAnthropic({ apiKey: auth.value });
+            const anthropic = createAnthropic({
+                apiKey: auth.value,
+                baseURL: BUILT_IN_PROVIDER_BASE_URLS.anthropic,
+            });
             return {
                 model: anthropic(modelRef.modelId),
                 provider: provider.kind,
@@ -116,7 +123,10 @@ export async function resolveChatModel(
         }
         case "deepseek": {
             if (auth.type !== "api-key") throw new Error(`Unsupported DeepSeek auth strategy: ${auth.type}`);
-            const deepseek = createDeepSeek({ apiKey: auth.value });
+            const deepseek = createDeepSeek({
+                apiKey: auth.value,
+                baseURL: BUILT_IN_PROVIDER_BASE_URLS.deepseek,
+            });
             return {
                 model: deepseek(modelRef.modelId),
                 provider: provider.kind,
@@ -132,7 +142,7 @@ export async function resolveChatModel(
             // choices into AgentLoop/Context and avoids a second model runtime.
             const google = createOpenAI({
                 name: "google",
-                baseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
+                baseURL: BUILT_IN_PROVIDER_BASE_URLS.google,
                 apiKey: auth.value,
             });
             return {

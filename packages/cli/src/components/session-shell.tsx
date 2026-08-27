@@ -15,8 +15,8 @@ type Props = {
     loading?: boolean;
     interruptible?: boolean;
     sessionTree?: SessionTreeCommandApi;
-    onModeChange?: (mode: ModeType) => void;
-    onModelChange?: (model: ModelRef) => void;
+    onModeChange?: (mode: ModeType) => void | Promise<void>;
+    onModelChange?: (model: ModelRef) => void | Promise<void>;
     onCompact?: () => Promise<ManualContextCompactionOutcome>;
 };
 

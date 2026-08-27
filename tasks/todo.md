@@ -385,29 +385,42 @@
 
 ---
 
-# Stage 6.5 — Local Session Authority & Server Optionalization
+# Stage 6.5 — Local Session Authority & Railway Retirement
+
+**Status:** Delivered — 2026-08-26. Final integrated review and full repository verification are complete with no residual P0/P1 finding. Explicit legacy import remains a non-blocking follow-up.
 
 ## Local Session Store
 
-- [ ] Define a LocalSessionStore deep interface and independent local persistence schema.
-- [ ] Persist append-only Session Entries/branch topology locally without merging them into Runtime Event storage.
-- [ ] Move Session create/list/get/open to LocalSessionStore.
-- [ ] Make new/existing Session flows work with Server/API_URL unavailable.
-- [ ] Replace whole-tree cloud persistence as the local authority with durable local append/update transactions.
-- [ ] Define `activeEntryId` and other navigation state as device-local unless an explicit semantic sync field is introduced.
+- [x] Define a LocalSessionStore deep interface with create/load/list/atomic commit/archive.
+- [x] Persist root/active Entry identity, append-only topology, stable sequence, metadata, migrations, and idempotency locally.
+- [x] Move Session create/list/get/open to LocalSessionStore.
+- [x] Make new/existing Session flows work with Server/API_URL unavailable.
+- [x] Replace whole-tree cloud persistence with durable-first local transactions that fail before Provider/Tool side effects.
+- [x] Define `activeEntryId` and other navigation state as device-local unless an explicit semantic sync field is introduced.
+- [x] Keep semantic Session Store separate from Runtime Event/Snapshot Store.
 
-## Migration & Optional Cloud
+## Provider & Cloud Removal
 
-- [ ] Import legacy linear/v1/v2/v3 cloud Session state into local storage idempotently.
-- [ ] Preserve stable Entry IDs and prevent duplicate import.
-- [ ] Remove mandatory cloud login/Server dependency from the core coding-agent workflow.
-- [ ] Keep optional cloud failures outside local Run and local Session durability failure domains.
-- [ ] Add offline/restart/branching/migration integration tests.
-- [ ] Update ADR-0023/current-state docs to mark Local Session Store as delivered authority.
+- [x] Remove the Railway Cloudflare Worker, root Wrangler scripts/dependency, and Railway deployment documentation.
+- [x] Remove cloud `/login` and `/logout` from the local CLI and remove CLI runtime/type dependence on Server Session routes.
+- [x] Preserve `/providers` API-key configuration, direct Provider execution, Harness Context, and local cache/checkpoint behavior.
+- [x] Persist `/models` default selection and add a secret-safe Provider connection test/resolved URL preview.
+- [x] Hide unsupported OAuth; expose Codex OAuth only through a supported documented broker contract.
+
+## Migration, Tests & Delivery
+
+- [ ] Import legacy linear/v1/v2/v3 Session state transactionally and idempotently without startup cloud fetches. Non-blocking follow-up; no explicit import command is implemented in this delivery.
+- [x] Add Store contract/migration plus offline create/continue/restart/branch/cache/Provider integration tests.
+- [x] Assert cloud/API URL fetches are zero throughout the local end-to-end path.
+- [x] Update ADR-0023/ADR-0024, README, CONTEXT, PROJECT_ANALYSIS, CHANGELOG, and current-state docs.
+- [x] Run focused tests, package typechecks/builds, and documentation checks.
+- [x] Complete final integrated review and full repository verification after fixing the production default Session UUID path and the Provider-dialog test transaction boundary; no residual P0/P1 finding remains.
 
 ---
 
 # Stage 6.6 — Cloud Session Sync & Commercial Entitlements
+
+**Status:** Paused — requires explicit product re-approval after ADR-0024.
 
 ## Multi-device Session Sync
 

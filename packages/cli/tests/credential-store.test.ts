@@ -50,4 +50,14 @@ describe("CredentialStore", () => {
         await store.set(ref, "local-key");
         expect(await store.get(ref)).toBe("local-key");
     });
+
+    test("reads the documented Google environment variable name", async () => {
+        const googleRef = defaultCredentialRef("google");
+        const store = new EnvironmentCredentialStore({
+            GOOGLE_GENERATIVE_AI_API_KEY: "google-ambient-key",
+            GOOGLE_GENERATIVE_API_KEY: "legacy-name-must-not-be-used",
+        });
+
+        expect(await store.get(googleRef)).toBe("google-ambient-key");
+    });
 });

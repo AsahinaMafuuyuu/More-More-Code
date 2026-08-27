@@ -4,18 +4,11 @@ import { format } from "date-fns";
 import { useNavigate } from "react-router";
 import { useDialog } from "../../providers/dialog";
 import { useToast } from "../../providers/toast";
-import { apiClient } from "../../lib/api-client";
-import { getErrorMessage } from "../../lib/http-errors";
+import { getLocalSessionAuthority } from "../../lib/session-environment";
+import type { LocalSessionSummary } from "../../lib/local-session-authority";
 import { DialogSearchList } from "../dialog-search-list";
-import type { InferResponseType } from "hono";
 
-type SessionData = InferResponseType<typeof apiClient.sessions[":id"]["$get"], 200>;
-
-type Session = {
-    id: string;
-    title: string;
-    createdAt: string;
-}
+type Session = LocalSessionSummary;
 
 // 用于在对话框中显示会话列表，并允许用户选择和浏览过去的会话。
 export const SessionsDialogContent = () => {
@@ -31,12 +24,7 @@ export const SessionsDialogContent = () => {
 
         const fetchSessions = async () => {
             try {
-                const res = await apiClient.sessions.$get(); // 获取会话列表
-                if (!res.ok) {
-                    throw new Error(await getErrorMessage(res));
-                }
-
-                const data = await res.json();
+                const data = await getLocalSessionAuthority().list();
 
                 if (!ignore) {
                     setSessions(data); // 如果响应ok，则设置sessions为响应数据 
@@ -48,7 +36,7 @@ export const SessionsDialogContent = () => {
                     show({
                         variant: "error",
                         message: error instanceof Error ?
-                            error.message : "Failed to fetch sessions",
+                            `Unable to read local sessions: ${error.message}` : "Unable to read local sessions",
                     })
 
                     close(); // 关闭对话框
@@ -93,7 +81,7 @@ export const SessionsDialogContent = () => {
                         fg={isSelected ? "black" : undefined}
                         attributes={TextAttributes.DIM}
                     >
-                        {format(new Date(session.createdAt), "hh:mm a")}
+                        {format(new Date(session.updatedAt), "hh:mm a")}
                     </text>
                 </>
             )}

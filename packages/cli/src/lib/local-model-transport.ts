@@ -109,14 +109,25 @@ export type BranchSummaryContextAnchor = {
     afterMessageId: string | null;
 };
 
-type LocalModelTransportOptions = {
+/**
+ * Narrow collaborator overrides used by transport integration tests. Production
+ * callers leave this unset and retain the normal local Provider Runtime.
+ */
+type LocalModelTransportDependencies = {
+    resolveChatModel?: typeof resolveChatModel;
+    resolveModelContextProfile?: typeof resolveModelContextProfile;
+};
+
+export type LocalModelTransportOptions = {
     onMessageSnapshot?: (messages: Message[]) => void;
-    onContextCompaction?: (event: ContextCompactionEvent) => void;
+    onContextCompaction?: (event: ContextCompactionEvent) => void | Promise<void>;
     getContextCheckpoint?: () => PersistedContextCheckpoint | null;
     getToolResultSourceEntryId?: (toolCallId: string) => string | undefined;
     getBranchSummaryContext?: () => BranchSummaryContextAnchor[];
     onProviderTelemetry?: (telemetry: ProviderCacheTelemetry) => void;
     onContextEvent?: (event: ContextProjectionLifecycleEvent) => void | Promise<void>;
+    /** @internal Injectable only to make provider ordering deterministic in tests. */
+    dependencies?: LocalModelTransportDependencies;
 };
 
 export type ManualContextCompactionOutcome = {
@@ -406,7 +417,8 @@ export class LocalModelTransport implements ChatTransport<Message> {
     }): Promise<BranchSummaryReductionOutcome> {
         const environment = getAgentEnvironment();
         const provider = resolveConfiguredProvider(input.model, environment);
-        const contextProfile = resolveModelContextProfile(input.model, provider.kind);
+        const contextProfile = (this.options.dependencies?.resolveModelContextProfile
+            ?? resolveModelContextProfile)(input.model, provider.kind);
         const systemPrompt = buildSystemPrompt({ mode: input.mode, environment });
         const effectiveInputBudgetTokens = Math.max(
             0,
@@ -423,7 +435,8 @@ export class LocalModelTransport implements ChatTransport<Message> {
             effectiveInputBudgetTokens,
             targetTokens,
             reduce: async ({ instructions, prompt, maxOutputTokens }) => {
-                const resolvedModel = await resolveChatModel(input.model, environment);
+                const resolvedModel = await (this.options.dependencies?.resolveChatModel
+                    ?? resolveChatModel)(input.model, environment);
                 const result = await generateText({
                     model: resolvedModel.model,
                     system: instructions,
@@ -447,7 +460,8 @@ export class LocalModelTransport implements ChatTransport<Message> {
         const environment = getAgentEnvironment();
         const tools = environment.tools.getModelTools(input.mode) as ToolContracts;
         const provider = resolveConfiguredProvider(input.model, environment);
-        const contextProfile = resolveModelContextProfile(input.model, provider.kind);
+        const contextProfile = (this.options.dependencies?.resolveModelContextProfile
+            ?? resolveModelContextProfile)(input.model, provider.kind);
         const validatedMessages = await validateUIMessages<Message>({
             messages: input.messages,
             tools,
@@ -465,7 +479,8 @@ export class LocalModelTransport implements ChatTransport<Message> {
         const contextCompactor = createSemanticContextCompactor({
             profile: contextProfile,
             reduce: async ({ instructions, prompt, maxOutputTokens }) => {
-                const resolvedModel = await resolveChatModel(input.model, environment);
+                const resolvedModel = await (this.options.dependencies?.resolveChatModel
+                    ?? resolveChatModel)(input.model, environment);
                 const result = await generateText({
                     model: resolvedModel.model,
                     system: instructions,
@@ -491,7 +506,7 @@ export class LocalModelTransport implements ChatTransport<Message> {
             resolveToolResultSourceEntryId: this.options.getToolResultSourceEntryId,
         });
         if (projected.manualResult?.status === "compacted") {
-            this.emitContextCompaction({
+            await this.emitContextCompaction({
                 projection: projected.projection,
                 compactedSource: projected.compactedSource,
                 generatedSummaryId: projected.generatedSummaryId,
@@ -544,8 +559,10 @@ export class LocalModelTransport implements ChatTransport<Message> {
         const { mode, model } = resolveExecutionConfig(messages);
         const environment = getAgentEnvironment();
         const tools = environment.tools.getModelTools(mode) as ToolContracts;
-        const resolvedModel = await resolveChatModel(model, environment);
-        const contextProfile = resolveModelContextProfile(model, resolvedModel.provider);
+        const resolvedModel = await (this.options.dependencies?.resolveChatModel
+            ?? resolveChatModel)(model, environment);
+        const contextProfile = (this.options.dependencies?.resolveModelContextProfile
+            ?? resolveModelContextProfile)(model, resolvedModel.provider);
         const startedAt = Date.now();
 
         const validatedMessages = await validateUIMessages<Message>({
@@ -602,6 +619,19 @@ export class LocalModelTransport implements ChatTransport<Message> {
             branchSummaries: this.options.getBranchSummaryContext?.() ?? [],
             resolveToolResultSourceEntryId: this.options.getToolResultSourceEntryId,
         });
+        const modelMessages = await compileProjectedModelMessages(projection.records, tools);
+
+        this.emitMessageSnapshot(validatedMessages);
+        // A generated checkpoint changes the durable Session Tree. It must be
+        // committed before this projection is allowed to cross the provider
+        // boundary, otherwise a crash/restart can issue a request from state
+        // the local authority has never accepted.
+        await this.emitContextCompaction({
+            projection,
+            compactedSource,
+            generatedSummaryId,
+            checkpoint,
+        });
         await this.options.onContextEvent?.({
             phase: "completed",
             operationId,
@@ -616,15 +646,6 @@ export class LocalModelTransport implements ChatTransport<Message> {
             prunedToolResultCount: toolResultPruning.prunedResults,
             overBudget: toolResultPruning.overBudget,
             ...(projection.compaction ? { compactionTrigger: projection.compaction.trigger } : {}),
-        });
-        const modelMessages = await compileProjectedModelMessages(projection.records, tools);
-
-        this.emitMessageSnapshot(validatedMessages);
-        this.emitContextCompaction({
-            projection,
-            compactedSource,
-            generatedSummaryId,
-            checkpoint,
         });
 
         let completedUsage: LanguageModelUsage | undefined;
@@ -675,7 +696,7 @@ export class LocalModelTransport implements ChatTransport<Message> {
         return null;
     }
 
-    private emitContextCompaction(input: {
+    private async emitContextCompaction(input: {
         projection: ContextProjection<ContextCompactionPayload>;
         compactedSource: readonly ContextRecord<ContextCompactionPayload>[];
         generatedSummaryId: string | null;
@@ -705,7 +726,7 @@ export class LocalModelTransport implements ChatTransport<Message> {
             }),
         ].filter((id, index, ids) => ids.indexOf(id) === index);
         const retainedHistory = input.projection.records.filter((record) => record.kind === "history");
-        this.options.onContextCompaction?.({
+        await this.options.onContextCompaction?.({
             summary: structuredClone(summaryRecord.payload),
             tokensBefore: input.compactedSource.reduce(
                 (total, record) => total + record.estimatedTokens,

@@ -1406,7 +1406,7 @@ Agent Config sandbox contract
 
 # Stage 6.4 — Provider Runtime & Local Model Configuration
 
-**Status:** Completed — delivered 2026-08-23. ADR-0023 remains broader than this Stage because Local Session authority/cloud optionalization are delivered in later Stages.
+**Status:** Completed — delivered 2026-08-23. ADR-0023 remains broader than this Stage because cloud synchronization and commercial-account work are deferred to the paused Stage 6.6.
 
 ## Overview
 
@@ -1624,13 +1624,13 @@ Provider domain model
 
 ---
 
-# Stage 6.5 — Local Session Authority & Server Optionalization
+# Stage 6.5 — Local Session Authority & Railway Retirement
 
-**Status:** Planned — depends on Stage 6.4.
+**Status:** Delivered — 2026-08-26. Final integrated review and full repository verification are complete with no residual P0/P1 finding. Explicit legacy import remains a non-blocking follow-up; depends on completed Stage 6.4.
 
 ## Overview
 
-Make the local CLI authoritative for semantic Session lifecycle so MORE-MORE-CODE can create/list/open/continue Sessions with the Server unavailable. The existing cloud `POST /sessions`, `GET /sessions/:id`, and whole-state persistence calls become optional synchronization concerns rather than Session prerequisites.
+Make the local CLI authoritative for semantic Session lifecycle so MORE-MORE-CODE can create/list/open/continue Sessions with no Server, account, `API_URL`, Cloudflare Worker, or Railway application. The existing cloud `POST /sessions`, `GET /sessions/:id`, and whole-state persistence calls are removed from the CLI path rather than retained as a fallback.
 
 The Local Session Store is separate from the Local Runtime Store even when both use SQLite: Session Entries are durable conversation semantics/branch topology; Runtime Events are execution/security/recovery facts.
 
@@ -1639,22 +1639,24 @@ The Local Session Store is separate from the Local Runtime Store even when both 
 ### Task 1: Define the LocalSessionStore interface and persistence schema
 
 **Acceptance criteria:**
-- Deep interface supports local create/get/list plus append-oriented semantic Session persistence.
-- Schema preserves Session Entry identity/parent topology and versioned migration semantics.
-- Runtime Event/Snapshot schema is not merged into the Session Store.
+- [x] Deep interface supports local create/load/list/atomic commit/archive using validated Harness Session Tree semantics.
+- [x] Schema preserves root/active Entry identity, parent topology, stable sequence, metadata, idempotency, and versioned migrations.
+- [x] Runtime Event/Snapshot schema is not merged into the Session Store.
+- [x] The package typechecks and has a focused test script.
 
-**Verification:** disposable-database persistence/restart/migration tests.
+**Verification:** `bun run --cwd packages/session-store test` (11 pass) and `bunx tsc --noEmit -p packages/session-store/tsconfig.json` (pass).
 
 **Dependencies:** Stage 6.4 complete.
 
 ### Task 2: Make local Session creation/list/open independent of apiClient
 
 **Acceptance criteria:**
-- `NewSession`, Session list, and Session open work with no Server/API URL available.
-- Local Session IDs/titles/timestamps and Session Tree restore are authoritative.
-- Cloud/account login is not required to use the coding agent.
+- [x] `NewSession`, Session list, and Session open work with no Server/API URL available.
+- [x] Local Session IDs/titles/timestamps and Session Tree restore are authoritative.
+- [x] Cloud/account login is not required to use the coding agent.
+- [x] A Session is locally committed before the CLI navigates to it.
 
-**Verification:** offline/local-only CLI integration tests.
+**Verification:** focused CLI local-session tests pass, including create/list/open/restart/continue with a fetch guard that rejects Server access.
 
 **Dependencies:** Task 1.
 
@@ -1663,49 +1665,77 @@ The Local Session Store is separate from the Local Runtime Store even when both 
 ### Task 3: Replace whole-tree best-effort persistence with local append/update transactions
 
 **Acceptance criteria:**
-- New semantic Entries are durably local before they are considered available for later local restore.
-- Append-after-history preserves branch topology without rewriting sibling history.
-- Device UI/navigation state such as `activeEntryId` has an explicitly local persistence policy rather than being conflated with cloud semantic state.
+- [x] New semantic Entries are durably local before they are considered available for later local restore.
+- [x] Append-after-history preserves branch topology without rewriting sibling history.
+- [x] Device UI/navigation state such as `activeEntryId` has an explicitly local persistence policy rather than being conflated with cloud semantic state.
+- [x] Local commit failure prevents the corresponding Provider/Tool side effect and does not expose an uncommitted tree.
 
-**Verification:** branching/restart/crash-adjacent persistence tests.
+**Verification:** Session Store transaction/topology/idempotency tests and focused CLI durable-first/compaction tests pass.
 
 **Dependencies:** Task 2.
 
-### Task 4: Import existing cloud/legacy Sessions into local authority
+### Task 4: Retire Railway and disable cloud account/Session surfaces
 
 **Acceptance criteria:**
-- Existing linear/v1/v2/v3 cloud state can be imported into the Local Session Store idempotently.
-- Import never duplicates already-known semantic Entry IDs.
-- Migration failure does not silently destroy the remote or local copy.
+- [x] The Cloudflare Railway proxy, root Wrangler scripts/dependency, and Railway instructions are removed.
+- [x] CLI startup, Session lifecycle, Provider execution, and local builds do not import the Server or read `API_URL`.
+- [x] `/login` and `/logout` are absent while cloud accounts are disabled; Server/database packages may remain dormant.
 
-**Verification:** fixture-based import/idempotency tests.
+**Verification:** removed-file/reference review plus `bunx tsc --noEmit -p packages/cli/tsconfig.json` and `bun run build:cli` (both pass). Historical ADR references are retained intentionally.
 
-**Dependencies:** Task 3.
+**Dependencies:** None; may run in parallel with Tasks 1-3 after file ownership is separated.
 
-## Phase 3: Server Optionalization & Delivery
-
-### Task 5: Remove mandatory Session Server dependency and document offline guarantees
+### Task 5: Make Provider selection verifiable and capability-gate OAuth
 
 **Acceptance criteria:**
-- Core CLI startup/session/model/tool workflow has no mandatory Server call.
-- Cloud sync hooks are optional and failures cannot terminate the local Run/Session write path.
-- README/current-state/ADR-0023 accurately state that Local Session Store is semantic authority.
+- [x] `/providers` reports configured credential state and can test the resolved Provider endpoint without revealing a secret.
+- [x] `/models` selection persists as the local default and is restored after restart.
+- [x] Unsupported OAuth choices are hidden; Codex OAuth is exposed only if a supported broker provides a documented model-execution contract.
 
-**Verification:** local-only end-to-end flow, Server-offline regression, package tests/typechecks/builds, `git diff --check`.
+**Verification:** provider connection/default persistence tests pass with injected/fake transports; no real credential or external-provider E2E is claimed.
 
-**Dependencies:** Tasks 1-4.
+**Dependencies:** Stage 6.4 complete; may run in parallel after the Session/Provider persistence contract is fixed.
+
+## Phase 3: Local-only Delivery & Follow-up
+
+### Task 6: Add explicit idempotent legacy import
+
+**Acceptance criteria:**
+- [ ] Linear/v1/v2/v3 fixtures import transactionally with deterministic identity where source IDs are absent.
+- [ ] Repeating the same import does not duplicate Entries; content conflicts are explicit.
+- [ ] Import never fetches remote state during startup/open and never destroys its source.
+
+**Verification:** fixture-based import, rollback, and idempotency tests.
+
+**Dependencies:** Tasks 1 and 3.
+
+**Current status:** [ ] Not implemented. This is an explicit, non-blocking follow-up for importing legacy linear/v1/v2/v3 snapshots; it must remain transactional and idempotent without adding a startup cloud fetch.
+
+### Task 7: Verify and document the local-only guarantee
+
+**Acceptance criteria:**
+- [x] Core CLI startup/session/model/tool workflow has no mandatory Server call.
+- [x] With global `fetch` rejecting cloud/API URL access, create -> list -> open -> submit fake Provider -> checkpoint/cache -> restart -> continue succeeds.
+- [x] Session Store and Runtime Store remain separate and both recover after restart.
+- [x] README/current-state/ADR-0023/ADR-0024 accurately state that Local Session Store is semantic authority and Railway is retired.
+
+**Verification:** final integrated review completed after fixing the production default Session UUID path and stabilizing the Provider-dialog interaction test. Local Session Store tests pass (11), Runtime Store tests pass (8), Harness tests pass (99), CLI tests pass (143), Shared/Harness/CLI/Runtime Store/Session Store/Server/Database TypeScript checks pass, CLI and Server builds pass, both Prisma schemas validate, CLI source has no mandatory `API_URL`/Server/login Session dependency, and `git diff --check` passes. No real external-Provider E2E is claimed.
+
+**Dependencies:** Tasks 1-5; legacy import is a non-blocking follow-up.
 
 ## Explicitly Deferred from Stage 6.5
 
-- Multi-device cloud merge protocol itself (Stage 6.6).
+- Explicit transactional/idempotent import of legacy linear/v1/v2/v3 Session state (non-blocking follow-up).
+- All cloud sync and commercial-account integration, including Stage 6.6, until explicitly re-approved.
 - Cloud Runtime Event synchronization.
 - Team/collaborative live editing.
+- Codex/ChatGPT OAuth through undocumented cached-token reuse or an external-Agent substitution.
 
 ---
 
 # Stage 6.6 — Cloud Session Sync & Commercial Entitlements
 
-**Status:** Planned — depends on Stage 6.5 local Session authority.
+**Status:** Paused — Stage 6.5 is delivered; requires explicit product re-approval before cloud sync or commercial-account work resumes.
 
 ## Overview
 
