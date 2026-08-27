@@ -26,6 +26,7 @@ import { InteractionHintsSurface } from "../ui/session/surfaces/interaction-hint
 import { StatusSurface } from "../ui/session/surfaces/status-surface";
 import { ApprovalPresentation } from "../ui/session/presentation/approval-presentation";
 import { RecoveryPresentation } from "../ui/session/presentation/recovery-presentation";
+import { resolveInteractionAction } from "../ui/session/interaction/interaction-router";
 
 type SessionData = LocalSessionSnapshot<Message>;
 
@@ -51,7 +52,15 @@ function RuntimeInterruptAdapter({ controller }: { controller: SessionController
   const { isTopLayer } = useKeyboardLayer();
 
   useKeyboard((key) => {
-    if (key.name !== "escape" || !runtime.canInterrupt || !isTopLayer("base")) return;
+    if (key.name !== "escape") return;
+    const action = resolveInteractionAction("escape", {
+      dialog: isTopLayer("dialog"),
+      overlay: isTopLayer("command") ? "command" : isTopLayer("mention") ? "mention" : null,
+      inspector: isTopLayer("inspector"),
+      composer: isTopLayer("base"),
+      runInterruptible: runtime.canInterrupt,
+    });
+    if (action?.action !== "interrupt-run") return;
     key.preventDefault();
     controller.interrupt();
   });

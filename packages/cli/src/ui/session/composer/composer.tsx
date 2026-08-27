@@ -11,6 +11,7 @@ import { searchMentionCandidates } from "./mention-search";
 import { MentionMenu } from "./mention-menu";
 import { ComposerCommandMenu, resolveComposerCommandIntent } from "./command-menu";
 import type { ComposerIntent } from "./composer-intent";
+import { resolveInteractionAction, type InteractionState } from "../interaction/interaction-router";
 
 export type ComposerProps = {
   onSubmit: (text: string) => void;
@@ -44,6 +45,14 @@ export function Composer({
   const commandOpen = text.startsWith("/") && !text.slice(1).includes(" ");
   const commandQuery = commandOpen ? text.slice(1) : "";
   const mentionOpen = !commandOpen && activeMention !== null;
+
+  const getInteractionState = useCallback((): InteractionState => ({
+    dialog: isTopLayer("dialog"),
+    overlay: commandOpen ? "command" : mentionOpen ? "mention" : null,
+    inspector: isTopLayer("inspector"),
+    composer: isTopLayer("base"),
+    runInterruptible: false,
+  }), [commandOpen, isTopLayer, mentionOpen]);
 
   useEffect(() => {
     if (commandOpen) push("command", () => true);
@@ -112,19 +121,21 @@ export function Composer({
 
   const submit = useCallback(() => {
     if (disabled) return;
-    if (commandOpen) {
+    const action = resolveInteractionAction("enter", getInteractionState());
+    if (action?.action === "select-command") {
       executeCommand(commandSelectedIndex);
       return;
     }
-    if (mentionOpen) {
+    if (action?.action === "select-mention") {
       executeMention(mentionSelectedIndex);
       return;
     }
+    if (action?.action !== "submit") return;
     const value = editorRef.current?.getText().trim() ?? "";
     if (!value) return;
     onSubmit(value);
     clearEditor();
-  }, [clearEditor, commandOpen, commandSelectedIndex, disabled, executeCommand, executeMention, mentionOpen, mentionSelectedIndex, onSubmit]);
+  }, [clearEditor, commandSelectedIndex, disabled, executeCommand, executeMention, getInteractionState, mentionSelectedIndex, onSubmit]);
 
   const followUp = useCallback(() => {
     if (disabled || !onFollowUp || commandOpen || mentionOpen) return;
@@ -136,45 +147,46 @@ export function Composer({
 
   useKeyboard((key) => {
     if (disabled) return;
+    const interactionKey = (key.name === "enter" || key.name === "return") && (key.option || key.meta)
+      ? "follow-up"
+      : key.name === "escape" || key.name === "up" || key.name === "down" || key.name === "tab"
+        ? key.name
+        : null;
+    if (!interactionKey) return;
 
-    if (commandOpen && isTopLayer("command")) {
-      if (key.name === "escape") {
-        key.preventDefault();
+    const action = resolveInteractionAction(interactionKey, getInteractionState());
+    if (!action) return;
+    key.preventDefault();
+
+    switch (action.action) {
+      case "close-command":
         editorRef.current?.clear();
-      } else if (key.name === "up" || key.name === "down") {
-        key.preventDefault();
-        const count = getFilteredCommands(commandQuery).length;
-        setCommandSelectedIndex((index) => key.name === "up"
-          ? Math.max(0, index - 1)
-          : Math.min(Math.max(0, count - 1), index + 1));
-      }
-      return;
-    }
-
-    if (mentionOpen && isTopLayer("mention")) {
-      if (key.name === "escape") {
-        key.preventDefault();
+        return;
+      case "close-mention":
         activeMentionRef.current = null;
         setActiveMention(null);
-      } else if (key.name === "up" || key.name === "down") {
-        key.preventDefault();
-        setMentionSelectedIndex((index) => key.name === "up"
+        return;
+      case "command-prev":
+      case "command-next": {
+        const count = getFilteredCommands(commandQuery).length;
+        setCommandSelectedIndex((index) => action.action === "command-prev"
+          ? Math.max(0, index - 1)
+          : Math.min(Math.max(0, count - 1), index + 1));
+        return;
+      }
+      case "mention-prev":
+      case "mention-next":
+        setMentionSelectedIndex((index) => action.action === "mention-prev"
           ? Math.max(0, index - 1)
           : Math.min(Math.max(0, mentionCandidates.length - 1), index + 1));
-      }
-      return;
-    }
-
-    if (!isTopLayer("base")) return;
-    if ((key.name === "enter" || key.name === "return") && (key.option || key.meta)) {
-      key.preventDefault();
-      key.stopPropagation();
-      followUp();
-      return;
-    }
-    if (key.name === "tab") {
-      key.preventDefault();
-      void onIntent?.({ type: "change-mode", mode: mode === "BUILD" ? "PLAN" : "BUILD" });
+        return;
+      case "toggle-mode":
+        void onIntent?.({ type: "change-mode", mode: mode === "BUILD" ? "PLAN" : "BUILD" });
+        return;
+      case "follow-up":
+        key.stopPropagation();
+        followUp();
+        return;
     }
   });
 
