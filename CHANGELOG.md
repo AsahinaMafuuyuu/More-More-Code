@@ -6,6 +6,11 @@ All notable changes to MORE MORE CODE are recorded here.
 
 ### Added
 
+- ADR-0029 plus the OpenTUI Framework Stability DESIGN/PLAN/TEST/DELIVERY
+  contracts, inserting a mandatory native-renderer stabilization stage before
+  Inspector work. The planned stage retains OpenTUI, validates Bun/OpenTUI
+  versions explicitly, removes autonomous spinner render pressure, bounds
+  presentation commits and requires real Windows native soak evidence.
 - ADR-0028 plus the UI Architecture Foundation DESIGN/PLAN/TEST/DELIVERY contracts, inserting a mandatory controller/store/render-isolation refactor between Runtime Activity P0 and the planned Unified Session Inspector.
 - CLI-owned `AgentActivityProjection` and responsive `ActivityView`, exposing current Run/Turn/Model Step/Tool Step lifecycle, Turn cause, active Step, duration and bounded process-local progress between Conversation and Input.
 - Semantic expandable ToolUse projection/presentation with canonical `tool_result` precedence and explicit requested/running/completed/failed/cancelled/timed-out/denied/approval-waiting/incomplete states; historical missing terminals remain fail-closed and are never auto-replayed.

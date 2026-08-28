@@ -2665,6 +2665,128 @@ store, Composer and interaction architecture; run the final architecture audit.
 **Stage gate:** UI-5 / Inspector implementation must not begin until UI-A7 is
 complete and `docs/UI-ARCHITECTURE-FOUNDATION-DELIVERY.md` is marked Delivered.
 
+## Priority P0.6 — OpenTUI Framework Stability
+
+**Status:** Planned — mandatory native-renderer stabilization before P1 Inspector.
+
+**Architecture decision:**
+`docs/decisions/0029-opentui-native-renderer-stability-and-render-budget.md`.
+
+**Primary documents:**
+
+```text
+docs/UI-OPENTUI-STABILITY-DESIGN.md
+docs/UI-OPENTUI-STABILITY-PLAN.md
+docs/UI-OPENTUI-STABILITY-TEST.md
+docs/UI-OPENTUI-STABILITY-DELIVERY.md
+```
+
+This stage retains OpenTUI and the delivered ADR-0028 UI application
+architecture. It addresses the remaining Windows Bun/OpenTUI native crash
+surface through runtime/version baselining, render-pressure control and real
+native soak validation. It must not redesign Harness/Session semantics.
+
+### Task UI-S1: Establish renderer/runtime diagnostics seam
+
+**Acceptance criteria:**
+- [ ] Bun-version policy and normal/safe render profiles are pure/testable.
+- [ ] process-local stability diagnostics contain technical counters only.
+- [ ] diagnostics are disabled by default and create no Session Entry or Runtime
+  Event.
+- [ ] known Bun 1.3.14/OpenTUI 0.4.2 native crash is recorded as the baseline.
+
+### Task UI-S2: Move to the Bun 1.4 runtime baseline
+
+**Acceptance criteria:**
+- [ ] repository records Bun 1.4.0 as the initial validated development baseline.
+- [ ] Bun versions below 1.4.0 fail before OpenTUI renderer creation with an
+  actionable diagnostic.
+- [ ] exact Bun version/revision is captured in native-smoke evidence.
+- [ ] OpenTUI version is not changed in this checkpoint so the runtime-only
+  transition remains attributable.
+
+**Dependencies:** UI-S1.
+
+### Task UI-S3: Migrate and exact-pin OpenTUI 0.5.x
+
+**Acceptance criteria:**
+- [ ] `@opentui/core` and `@opentui/react` move together to one exact 0.5.x
+  version.
+- [ ] 0.5.9 is the first candidate; 0.5.8 is used only for a reproducible 0.5.9
+  regression.
+- [ ] renderer/input/scroll/keyboard/dialog/component compatibility tests pass.
+- [ ] dependency migration does not include unrelated UI redesign.
+- [ ] real Windows smoke result is recorded before render-policy changes.
+
+**Dependencies:** UI-S2.
+
+### Task UI-S4: Remove autonomous render storm and bound presentation commits
+
+**Acceptance criteria:**
+- [ ] `opentui-spinner` is removed from the normal runtime dependency graph.
+- [ ] running/busy UI is static and owns no sub-second render timer.
+- [ ] normal OpenTUI profile caps target/max FPS at 30 using public selected
+  version APIs.
+- [ ] renderer remains automatic/on-demand and is not continuously started at
+  application startup.
+- [ ] Conversation/Activity/Status presentation commits are coalesced to at most
+  20Hz in the normal profile.
+- [ ] Approval/Recovery/Composer-runtime interaction state remains immediate.
+- [ ] terminal stream flush preserves the final Conversation state.
+- [ ] scheduler disposal prevents post-destroy SessionUiStore writes.
+- [ ] presentation scheduling changes no Provider/Tool/durable side-effect
+  ordering.
+
+**Dependencies:** UI-S3.
+
+### Task UI-S5: Separate watch mode and provide bounded diagnostic safe profile
+
+**Acceptance criteria:**
+- [ ] default `dev:cli` runs without `--watch`.
+- [ ] explicit `dev:cli:watch` remains available.
+- [ ] safe profile caps renderer at 15 FPS and presentation commits at 10Hz.
+- [ ] safe profile disables presentation-only elapsed timers.
+- [ ] safe mode is documented as mitigation/diagnostic only and cannot satisfy
+  the normal-profile release gate.
+
+**Dependencies:** UI-S4.
+
+### Task UI-S6: Add and pass real Windows native renderer soak gates
+
+**Acceptance criteria:**
+- [ ] native soak entrypoint uses real `createCliRenderer()` rather than only
+  `testRender()`.
+- [ ] idle 10-minute workload passes normal non-watch profile.
+- [ ] synthetic streaming 15-minute workload passes and proves UI coalescing.
+- [ ] churn 15-minute workload passes repeated ToolUse/message/renderable changes.
+- [ ] real non-watch application session runs at least 30 minutes without Bun
+  panic, Windows access violation or `opentui.dll` crash.
+- [ ] real session covers multiple model interactions, resize, scroll and at
+  least one ToolUse path when feasible.
+- [ ] watch-mode >=10-minute secondary soak is recorded after normal passes.
+- [ ] exact Bun/OpenTUI/profile/terminal/Windows evidence is written to DELIVERY.
+
+**Dependencies:** UI-S5.
+
+### Task UI-S7: Close framework-stability delivery
+
+**Acceptance criteria:**
+- [ ] full CLI tests pass.
+- [ ] full Harness tests pass.
+- [ ] CLI and Harness typechecks pass.
+- [ ] CLI production build passes.
+- [ ] `git diff --check` passes.
+- [ ] OpenTUI test-renderer stress passes.
+- [ ] authority audit confirms no Harness/Session/Provider/Usage semantics changed.
+- [ ] `docs/UI-OPENTUI-STABILITY-DELIVERY.md` is populated with exact checkpoint,
+  matrix, native-soak and limitation evidence and marked Delivered.
+- [ ] ADR/DESIGN/PLAN/TEST/Roadmap/CHANGELOG statuses are updated consistently.
+
+**Dependencies:** UI-S6.
+
+**Stage gate:** UI-5 / Inspector implementation must not begin until UI-S7 is
+complete and `docs/UI-OPENTUI-STABILITY-DELIVERY.md` is marked Delivered.
+
 ## Priority P1-A — Inspector Foundation, Context, Usage and Tree
 
 ### Task UI-5: Design and implement one Session Inspector shell
@@ -2680,7 +2802,8 @@ independent diagnostics dialog per subsystem.
 - [ ] Existing `/tree` can route into the Inspector Tree section without
   changing Session navigation semantics.
 
-**Dependencies:** P0 complete **and UI-A1 through UI-A7 delivered**.
+**Dependencies:** P0 complete, **UI-A1 through UI-A7 delivered, and UI-S1 through
+UI-S7 / OpenTUI Framework Stability delivered**.
 
 ### Task UI-6: Add Context Inspector
 

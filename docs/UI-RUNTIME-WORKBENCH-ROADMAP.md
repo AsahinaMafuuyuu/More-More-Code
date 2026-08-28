@@ -1,9 +1,9 @@
 # UI Runtime Workbench Roadmap
 
 **Status:** Active — UI Slice 1 / P0 Runtime Activity Foundation and UI Slice
-1.5 / UI Architecture Foundation delivered on 2026-08-27. UI Slice 2 is now
-the next implementation slice.
-stage; Inspector and later slices are blocked until Slice 1.5 is delivered.
+1.5 / UI Architecture Foundation delivered on 2026-08-27. UI Slice 1.6 /
+OpenTUI Framework Stability is now the mandatory next implementation slice;
+Inspector and later slices are blocked until Slice 1.6 is delivered.
 
 **Target:** Local CLI / OpenTUI presentation layer after the Stage 6.5 local
 Session, Runtime, Provider, Context, Usage and Cost foundations.
@@ -483,6 +483,33 @@ This slice was delivered as architecture refactoring, not visible feature growth
 It must preserve current Harness/Session/Runtime semantics and must not create
 a second UI-owned semantic authority.
 
+### UI Slice 1.6 — OpenTUI Framework Stability (required next stage)
+
+Scope:
+
+- Bun runtime compatibility/baseline policy;
+- exact validated OpenTUI 0.5.x renderer pair;
+- removal of autonomous `opentui-spinner` render pressure;
+- explicit renderer max/target FPS budget;
+- bounded presentation-only Session UI commit scheduling;
+- separation of normal `dev:cli` from `--watch` development mode;
+- process-local renderer stability diagnostics;
+- real Windows native idle/stream/churn soak harness;
+- real non-watch application stability gate.
+
+Primary documents:
+
+```text
+docs/decisions/0029-opentui-native-renderer-stability-and-render-budget.md
+docs/UI-OPENTUI-STABILITY-DESIGN.md
+docs/UI-OPENTUI-STABILITY-PLAN.md
+docs/UI-OPENTUI-STABILITY-TEST.md
+docs/UI-OPENTUI-STABILITY-DELIVERY.md
+```
+
+This slice explicitly **retains OpenTUI**. It is a framework/runtime stability
+stage, not a Harness redesign and not a renderer replacement project.
+
 ### UI Slice 2 — Inspector Foundation + Context/Usage/Tree (P1-A)
 
 Scope:
@@ -494,7 +521,8 @@ Scope:
 - entry commands/keyboard navigation.
 
 These areas are grouped because their data seams already exist and are mostly
-read-only projections. **Dependency satisfied: UI Slice 1.5 is delivered.**
+read-only projections. **Dependency: UI Slice 1.5 is delivered, but UI Slice
+1.6 must also be fully delivered before Inspector implementation begins.**
 
 ### UI Slice 3 — Runtime Recovery + Security Audit (P1-B)
 
