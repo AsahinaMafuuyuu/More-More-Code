@@ -1,6 +1,10 @@
 {
   "name": "more-more-code",
   "version": "2.0.1",
+  "packageManager": "bun@1.4.0",
+  "engines": {
+    "bun": ">=1.4.0"
+  },
   "description": "",
   "workspaces": [
     "packages/*"

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -20,18 +20,12 @@ import {
   persistThenExposeToolTerminal,
 } from "../src/lib/durable-tool-terminal";
 import { projectDurableSessionMessages } from "../src/lib/durable-session-message";
+import { removeTemporaryRoot } from "./test-temp-cleanup";
 
 const temporaryRoots: string[] = [];
 
 afterEach(async () => {
-  // libsql releases Windows file handles shortly after Client.close().
-  await Bun.sleep(500);
-  await Promise.all(temporaryRoots.splice(0).map((root) => rm(root, {
-    recursive: true,
-    force: true,
-    maxRetries: 20,
-    retryDelay: 100,
-  })));
+  await Promise.all(temporaryRoots.splice(0).map(removeTemporaryRoot));
 });
 
 function deferred<T>() {

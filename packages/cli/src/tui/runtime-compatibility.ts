@@ -57,6 +57,19 @@ export function classifyBunRuntime(
   });
 }
 
+export function assertSupportedBunRuntime(
+  version: string,
+  revision?: string,
+): BunRuntimeCompatibility {
+  const compatibility = classifyBunRuntime(version, revision);
+  if (compatibility.status === "unsupported") {
+    throw new Error(
+      `MORE-MORE-CODE requires Bun ${MINIMUM_BUN_VERSION} or newer for the OpenTUI runtime; detected Bun ${version}. Please upgrade Bun before starting the CLI.`,
+    );
+  }
+  return compatibility;
+}
+
 function compareVersions(left: ParsedRuntimeVersion, right: ParsedRuntimeVersion): number {
   if (left.major !== right.major) return left.major - right.major;
   if (left.minor !== right.minor) return left.minor - right.minor;

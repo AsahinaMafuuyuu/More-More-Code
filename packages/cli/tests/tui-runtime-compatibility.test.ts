@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  assertSupportedBunRuntime,
   classifyBunRuntime,
   parseBunVersion,
 } from "../src/tui/runtime-compatibility";
@@ -25,5 +26,12 @@ describe("TUI Bun runtime compatibility", () => {
   test("fails closed for malformed runtime versions", () => {
     expect(() => classifyBunRuntime("1.4")).toThrow(/valid Bun version/i);
     expect(() => classifyBunRuntime("native")).toThrow(/valid Bun version/i);
+  });
+
+  test("startup guard rejects unsupported Bun with an actionable upgrade message", () => {
+    expect(() => assertSupportedBunRuntime("1.3.14", "old-revision")).toThrow(
+      /Bun 1\.4\.0 or newer.*1\.3\.14.*upgrade/i,
+    );
+    expect(() => assertSupportedBunRuntime("1.4.0", "validated")).not.toThrow();
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -12,6 +12,7 @@ import {
   projectDurableSessionMessages,
 } from "../src/lib/durable-session-message";
 import { createLocalSessionAuthority } from "../src/lib/local-session-authority";
+import { removeTemporaryRoot } from "./test-temp-cleanup";
 
 describe("durable Session message persistence", () => {
   test("persists runtime undefined, preserves Provider metadata, and round-trips locally", async () => {
@@ -105,8 +106,7 @@ describe("durable Session message persistence", () => {
     } finally {
       await store.close();
       globalThis.fetch = originalFetch;
-      await Bun.sleep(500);
-      await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+      await removeTemporaryRoot(root);
     }
   });
 
@@ -177,8 +177,7 @@ describe("durable Session message persistence", () => {
       expect((projected[0]?.parts[0] as any).text).toBe("legacy final");
     } finally {
       await store.close();
-      await Bun.sleep(500);
-      await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+      await removeTemporaryRoot(root);
     }
   });
 });
