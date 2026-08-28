@@ -6,7 +6,6 @@ import { useEffect, useRef } from "react";
 import type { AgentActivityView } from "../lib/agent-activity-projection";
 import type { Message } from "../lib/chat-types";
 import type { ToolUseView } from "../lib/tool-use-projection";
-import { ActivityView } from "../components/activity-view";
 import { ToolUse } from "../components/messages/tool-use";
 import { DialogProvider, useDialog } from "../providers/dialog";
 import { KeyboardLayerProvider } from "../providers/keyboard-layer";
@@ -49,8 +48,9 @@ const store = createSessionUiStore(createInitialSessionUiState({
   status: {
     mode: "BUILD",
     modelLabel: "synthetic/native-soak",
-    contextLabel: "Ctx synthetic",
-    costLabel: "API n/a",
+    contextLabel: "synthetic",
+    contextUtilizationRatio: 0.5,
+    costLabel: "$0.00",
     cacheLabel: "Cache n/a",
   },
 }));
@@ -214,7 +214,6 @@ function startWorkload() {
 
 function SoakWorkspace() {
   const conversation = useSessionUiSelector((state) => state.conversation);
-  const activity = useSessionUiSelector((state) => state.activity);
   const status = useSessionUiSelector((state) => state.status);
   const composerRuntime = useSessionUiSelector((state) => state.composerRuntime);
   const conversationScrollRef = useRef<ScrollBoxRenderable | null>(null);
@@ -247,7 +246,6 @@ function SoakWorkspace() {
             ))}
           </box>
         )}
-        activity={activity ? <ActivityView activity={activity} /> : undefined}
         composer={<text>composer · {composerRuntime.runActive ? "running" : "idle"}</text>}
         status={<text>{status.modelLabel} · {status.contextLabel} · {status.costLabel}</text>}
         hints={<text>synthetic workload · no model/provider/tool execution</text>}
@@ -295,6 +293,7 @@ function createConversation(
   return {
     messages: [message],
     toolUses,
+    currentRun: null,
     errorMessage: null,
     runErrorMessage: null,
   };

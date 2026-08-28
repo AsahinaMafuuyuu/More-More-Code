@@ -2,6 +2,7 @@ import { TextAttributes, type ScrollBoxRenderable } from "@opentui/core";
 import type { RefObject } from "react";
 import { getFilteredCommands } from "../../../components/command-menu/filter-commands";
 import { useTheme } from "../../../providers/theme";
+import { createTerminalScrollbarOptions } from "../../scrollbar-style";
 import { commandToComposerIntent, type ComposerIntent } from "./composer-intent";
 
 export function ComposerCommandMenu({ query, selectedIndex, scrollRef, onSelect, onIntent }: {
@@ -17,7 +18,12 @@ export function ComposerCommandMenu({ query, selectedIndex, scrollRef, onSelect,
     return <box padding={1}><text attributes={TextAttributes.DIM}>No matching commands</text></box>;
   }
   return (
-    <scrollbox ref={scrollRef} height={Math.min(commands.length, 8)}>
+    <scrollbox
+      ref={scrollRef}
+      height={Math.min(commands.length, 8)}
+      scrollX={false}
+      verticalScrollbarOptions={createTerminalScrollbarOptions(colors)}
+    >
       {commands.map((command, index) => {
         const selected = index === selectedIndex;
         return (

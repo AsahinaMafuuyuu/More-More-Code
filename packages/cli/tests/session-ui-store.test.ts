@@ -49,7 +49,7 @@ describe("Session UI Store", () => {
 
     store.setSlice("status", {
       ...store.getSnapshot().status,
-      contextLabel: "Ctx 1k/128k",
+      contextLabel: "1k/128k",
     });
     expect(notifications).toBe(0);
 

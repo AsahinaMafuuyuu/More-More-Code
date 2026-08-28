@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { SessionUsageSummary } from "@more-more-code/harness";
 import {
+  projectConversationView,
   projectComposerRuntimeView,
   projectRecoveryUiView,
   projectSessionStatusView,
@@ -17,6 +18,37 @@ function emptyUsage(): SessionUsageSummary {
 }
 
 describe("Session UI projections", () => {
+  test("projects exact terminal Run elapsed time for the once-per-round footer", () => {
+    const conversation = projectConversationView({
+      messages: [],
+      toolUses: {},
+      run: {
+        id: "run-1",
+        sessionId: "session-1",
+        status: "completed",
+        startedAt: 1_000,
+        endedAt: 6_250,
+        turns: [{
+          id: "turn-1",
+          runId: "run-1",
+          index: 0,
+          cause: "initial",
+          inputMessageId: "user-1",
+          status: "completed",
+          startedAt: 1_000,
+          endedAt: 6_250,
+          steps: [],
+        }],
+      },
+    });
+
+    expect(conversation.currentRun).toEqual({
+      inputMessageId: "user-1",
+      status: "completed",
+      durationMs: 5_250,
+    });
+  });
+
   test("projects narrow composer runtime facts instead of raw AgentRun", () => {
     expect(projectComposerRuntimeView({
       busy: true,
@@ -54,8 +86,9 @@ describe("Session UI projections", () => {
     })).toEqual({
       mode: "PLAN",
       modelLabel: "openai/gpt-test",
-      contextLabel: "Ctx —",
-      costLabel: "API —",
+      contextLabel: "—",
+      contextUtilizationRatio: null,
+      costLabel: "$—",
       cacheLabel: "Cache —",
     });
   });

@@ -1,6 +1,7 @@
 import { TextAttributes, type ScrollBoxRenderable } from "@opentui/core";
 import type { RefObject } from "react";
 import { useTheme } from "../../../providers/theme";
+import { createTerminalScrollbarOptions } from "../../scrollbar-style";
 import type { MentionCandidate } from "./mention-model";
 
 export function MentionMenu({ candidates, selectedIndex, scrollRef, onSelect, onExecute }: {
@@ -15,7 +16,12 @@ export function MentionMenu({ candidates, selectedIndex, scrollRef, onSelect, on
     return <box paddingX={1}><text attributes={TextAttributes.DIM}>No matching files or directories</text></box>;
   }
   return (
-    <scrollbox ref={scrollRef} height={Math.min(candidates.length, 8)}>
+    <scrollbox
+      ref={scrollRef}
+      height={Math.min(candidates.length, 8)}
+      scrollX={false}
+      verticalScrollbarOptions={createTerminalScrollbarOptions(colors)}
+    >
       {candidates.map((candidate, index) => {
         const selected = index === selectedIndex;
         return (

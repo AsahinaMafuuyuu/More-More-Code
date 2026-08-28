@@ -2439,7 +2439,6 @@ The target information architecture is:
 
 ```text
 Conversation
-  + Agent Activity
   + Input / compact StatusBar
   + one Session Inspector
       -> Tree
@@ -2448,6 +2447,23 @@ Conversation
       -> Runtime
       -> Security
 ```
+
+**Post-foundation refinement — 2026-08-28:** the main Session workspace no
+longer mounts the dedicated Agent Activity region. Runtime Activity projection
+remains available internally for ToolUse/current-run presentation and later
+Runtime Inspector diagnostics, but Conversation is followed directly by
+Composer/Status. Completed UI-2/UI-4/UI-A6 checklists below describe the
+original delivered foundation and are retained as historical delivery records.
+
+The same refinement also establishes these compact presentation rules:
+
+- one `Build` / `Plan` summary per completed conversation round, after the
+  round settles, with total elapsed time rather than one footer per Model Step;
+- Context status is `<used>/<window>` plus a terminal utilization gauge;
+- compact Cost status is `$xx.xx` only when the aggregate is trustworthy and
+  complete;
+- production ScrollBoxes share one theme-aware, arrowless vertical scrollbar
+  treatment so the track spans the usable viewport height.
 
 Every implementation slice below must first create its own detailed
 `DESIGN / TEST / DELIVERY` documents and must use CLI-owned UI projections

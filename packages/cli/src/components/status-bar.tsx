@@ -7,6 +7,7 @@ import {
     formatStatusBarObservability,
     type SessionObservability,
 } from "../lib/session-observability";
+import { ContextUtilizationBar } from "../ui/session/surfaces/context-utilization-bar";
 
 export default function StatusBar({ observability }: { observability?: SessionObservability }) {
     const {mode, model} = usePromptConfig();
@@ -23,6 +24,7 @@ export default function StatusBar({ observability }: { observability?: SessionOb
             <text>{model.providerId}/{model.modelId}</text>
             <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>·</text>
             <text>{metrics.context}</text>
+            <ContextUtilizationBar ratio={metrics.contextUtilizationRatio} />
             <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>·</text>
             <text>{metrics.cost}</text>
             <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>·</text>

@@ -16,7 +16,6 @@ import {
 import { SessionUiStoreProvider } from "../ui/session/store/react-session-ui";
 import { SessionRuntimeBridge } from "../ui/session/runtime/session-runtime-bridge";
 import { ConversationSurface } from "../ui/session/surfaces/conversation-surface";
-import { ActivitySurface } from "../ui/session/surfaces/activity-surface";
 import { ComposerSurface } from "../ui/session/surfaces/composer-surface";
 import { InteractionHintsSurface } from "../ui/session/surfaces/interaction-hints-surface";
 import { StatusSurface } from "../ui/session/surfaces/status-surface";
@@ -91,7 +90,6 @@ function SessionChat({
       <SessionRuntimeInteraction controller={controller} />
       <SessionWorkspace
         conversation={<ConversationSurface />}
-        activity={<ActivitySurface />}
         composer={<ComposerSurface controller={controller} />}
         status={<StatusSurface />}
         hints={<InteractionHintsSurface />}

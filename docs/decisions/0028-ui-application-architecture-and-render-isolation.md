@@ -16,6 +16,37 @@ Composer, typed command/interaction routing, SessionWorkspace composition and
 legacy-path removal. The Unified Session Inspector is now unblocked; Inspector
 content itself remains a later slice.
 
+### 2026-08-28 presentation amendment
+
+The application architecture remains unchanged, but the main workspace no
+longer mounts `ActivityDock`. Product feedback established that the dedicated
+current-execution block competes with the Conversation without adding enough
+value in the primary path. `AgentActivityView` remains a CLI-owned projection
+because ToolUse/current-run presentation and future Runtime Inspector content
+still consume runtime lifecycle facts.
+
+Current main-surface composition is therefore:
+
+```text
+SessionWorkspace
+  +- ConversationPane
+  +- Composer
+  +- StatusLine
+  +- InteractionHints
+  +- InspectorSurface
+```
+
+The same amendment moves the `Build` / `Plan` transcript footer from the
+Model-Step component boundary to a conversation-round projection. A running
+round has no footer; a terminal round has exactly one summary and one elapsed
+duration. This is presentation-only and does not change AgentLoop, Session
+Entry or Runtime Event semantics.
+
+Scrollbar and compact StatusLine changes are also presentation-only: all
+production ScrollBoxes use the same theme-aware arrowless vertical treatment;
+Context shows used/window plus a utilization gauge; Cost renders two decimal
+USD only when the underlying aggregate is complete and valid.
+
 ## Context
 
 The local-first runtime architecture has matured substantially beyond the

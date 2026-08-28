@@ -1,9 +1,7 @@
 // 展示智能体的相关消息 
-import prettyMs from "pretty-ms";
 import { TextAttributes } from "@opentui/core";
 import { useTheme } from "../../providers/theme";
 import type { Message } from "../../lib/chat-types";
-import { Mode, type ModeType } from "@more-more-code/shared";
 import { EmptyBorder } from "../border";
 import type { ToolUseView } from "../../lib/tool-use-projection";
 import { ToolUse } from "./tool-use";
@@ -13,11 +11,6 @@ type ToolPart = Extract<ClientMessagePart, { type: `tool-${string}` | "dynamic-t
 
 type Props = {
     parts: ClientMessagePart[];
-    model: string;
-    mode: ModeType;
-    durationMs?: number;
-    streaming?: boolean;
-    interrupted?: boolean;
     toolUses: Readonly<Record<string, ToolUseView>>;
 }
 
@@ -65,10 +58,6 @@ function groupConsecutiveParts(parts: ClientMessagePart[]): PartGroup[] {
 // 
 export function BotMessage({
     parts,
-    model,
-    mode,
-    durationMs,
-    streaming = false,
     toolUses,
 }: Props) {
     const { colors } = useTheme();
@@ -138,37 +127,6 @@ export function BotMessage({
                     </box>
                 ))
             }
-            <box paddingX={3} paddingY={1} gap={1} width="100%">
-                <box flexDirection="row" gap={2}>
-
-                    <text fg={mode === Mode.PLAN ? colors.planMode : colors.primary}>◎</text>
-                    <box flexDirection="row" gap={1}>
-                        <text>
-                            {mode === Mode.PLAN ? "Plan" : "Build"}
-                        </text>
-
-                        {/* 标识箭头> */}
-                        <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>
-                            &gt;
-                        </text>
-
-                        <text attributes={TextAttributes.DIM}>{model}</text>
-
-                        {(durationMs != null) && (
-                            <>
-                                {/* 标识箭头> */}
-                                <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>
-                                    &gt;
-                                </text>
-
-                                <text attributes={TextAttributes.DIM}>
-                                    { prettyMs(durationMs) }
-                                </text>
-                            </>
-                        )}
-                    </box>
-                </box>
-            </box>
         </box >
     );
 };

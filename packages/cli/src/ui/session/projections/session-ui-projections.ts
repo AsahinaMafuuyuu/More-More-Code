@@ -1,4 +1,5 @@
 import type {
+  AgentRun,
   AgentRunStatus,
   ApprovalRequest,
   RuntimeSessionRecoveryReport,
@@ -24,12 +25,24 @@ export type ChatPresentationStatus = "submitted" | "streaming" | "ready" | "erro
 export function projectConversationView(input: {
   messages: readonly Message[];
   toolUses: Readonly<Record<string, ToolUseView>>;
+  run?: AgentRun | null;
   error?: Error | null;
   runError?: string | null;
 }): ConversationView {
+  const initialTurn = input.run?.turns.find((turn) => turn.cause === "initial")
+    ?? input.run?.turns[0];
   return {
     messages: input.messages,
     toolUses: input.toolUses,
+    currentRun: input.run
+      ? {
+          ...(initialTurn?.inputMessageId ? { inputMessageId: initialTurn.inputMessageId } : {}),
+          status: input.run.status,
+          ...(input.run.endedAt !== undefined
+            ? { durationMs: Math.max(0, input.run.endedAt - input.run.startedAt) }
+            : {}),
+        }
+      : null,
     errorMessage: input.error?.message ?? null,
     runErrorMessage: input.error ? null : input.runError ?? null,
   };
@@ -62,6 +75,7 @@ export function projectSessionStatusView(input: {
     mode: input.mode,
     modelLabel: `${input.model.providerId}/${input.model.modelId}`,
     contextLabel: metrics.context,
+    contextUtilizationRatio: metrics.contextUtilizationRatio,
     costLabel: metrics.cost,
     cacheLabel: metrics.cache,
   };

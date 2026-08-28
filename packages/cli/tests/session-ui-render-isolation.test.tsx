@@ -82,7 +82,8 @@ describe("Session UI render isolation", () => {
       await act(async () => {
         store.setSlice("status", {
           ...store.getSnapshot().status,
-          contextLabel: "Ctx 64k/128k",
+          contextLabel: "64k/128k",
+          contextUtilizationRatio: 0.5,
         });
         await setup.flush({ maxPasses: 10 });
       });

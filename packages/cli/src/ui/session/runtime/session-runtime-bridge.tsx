@@ -97,6 +97,7 @@ export function SessionRuntimeBridge({
   const conversation = useMemo(() => projectConversationView({
     messages: chat.messages,
     toolUses,
+    run: controllerState.run,
     error: controllerState.runtimeError ?? chat.error,
     runError: controllerState.run?.status === "failed"
       ? controllerState.run.error ?? null

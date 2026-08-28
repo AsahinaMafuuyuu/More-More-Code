@@ -46,8 +46,9 @@ describe("StatusBar observability formatting", () => {
       usage: usage(),
       usagePersistenceIncomplete: false,
     })).toEqual({
-      context: "Ctx ~42.8k/128k",
-      cost: "API ~$0.0187",
+      context: "42.8k/128k",
+      contextUtilizationRatio: 42_800 / 128_000,
+      cost: "$0.02",
       cache: "Cache 72%",
     });
   });
@@ -58,7 +59,7 @@ describe("StatusBar observability formatting", () => {
       usage: usage({ cache: { hitRate: 0, coverage: "complete" } }),
       usagePersistenceIncomplete: false,
     })).toMatchObject({
-      context: "Ctx 42.8k/128k",
+      context: "42.8k/128k",
       cache: "Cache 0%",
     });
 
@@ -69,16 +70,16 @@ describe("StatusBar observability formatting", () => {
         cost: { coverage: "none" },
       }),
       usagePersistenceIncomplete: false,
-    })).toMatchObject({ cost: "API —", cache: "Cache —" });
+    })).toMatchObject({ cost: "$—", cache: "Cache —" });
   });
 
-  test("never renders incomplete persisted history as a complete aggregate", () => {
+  test("never renders incomplete persisted history as an exact compact cost", () => {
     expect(formatStatusBarObservability({
       context,
       usage: usage(),
       usagePersistenceIncomplete: true,
     })).toMatchObject({
-      cost: "API ≥~$0.0187",
+      cost: "$—",
       cache: "Cache —",
     });
 
@@ -86,6 +87,6 @@ describe("StatusBar observability formatting", () => {
       context,
       usage: usage({ integrity: "invalid" }),
       usagePersistenceIncomplete: false,
-    })).toMatchObject({ cost: "API —", cache: "Cache —" });
+    })).toMatchObject({ cost: "$—", cache: "Cache —" });
   });
 });

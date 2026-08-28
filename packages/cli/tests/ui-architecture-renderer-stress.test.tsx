@@ -4,38 +4,7 @@ import { testRender } from "@opentui/react/test-utils";
 import { ThemeProvider } from "../src/providers/theme";
 import { TerminalDimensionsProvider } from "../src/providers/terminal-dimensions";
 import { SessionWorkspace } from "../src/ui/session/workspace/session-workspace";
-import { ActivityView } from "../src/components/activity-view";
 import { ToolUse } from "../src/components/messages/tool-use";
-import type { AgentActivityView } from "../src/lib/agent-activity-projection";
-
-const activity: AgentActivityView = {
-  runId: "stress-run",
-  status: "running",
-  startedAt: Date.now() - 500,
-  elapsedMs: 500,
-  activeStepId: "stress-step",
-  turns: [{
-    id: "stress-turn",
-    index: 0,
-    cause: "initial",
-    status: "running",
-    startedAt: Date.now() - 400,
-    elapsedMs: 400,
-    active: true,
-    steps: [{
-      id: "stress-step",
-      index: 0,
-      kind: "tool",
-      label: "Bash",
-      status: "running",
-      startedAt: Date.now() - 300,
-      elapsedMs: 300,
-      active: true,
-      toolCallId: "stress-call",
-      toolName: "bash",
-    }],
-  }],
-};
 
 describe("UI Architecture renderer stress", () => {
   test("does not add one resize listener per historical ToolUse", async () => {
@@ -62,7 +31,6 @@ describe("UI Architecture renderer stress", () => {
                   ))}
                 </box>
               )}
-              activity={<ActivityView activity={activity} />}
               composer={<text>Composer</text>}
               status={<text>Status</text>}
               hints={<text>Hints</text>}
@@ -80,7 +48,7 @@ describe("UI Architecture renderer stress", () => {
     }
   });
 
-  test("repeatedly mounts/destroys Activity, ToolUse, Conversation and responsive workspace", async () => {
+  test("repeatedly mounts/destroys ToolUse, Conversation and responsive workspace", async () => {
     const sizes = [[60, 20], [72, 24], [100, 30], [120, 30], [160, 40]] as const;
     for (let iteration = 0; iteration < 10; iteration += 1) {
       const [width, height] = sizes[iteration % sizes.length]!;
@@ -103,7 +71,6 @@ describe("UI Architecture renderer stress", () => {
                     }} />
                   </box>
                 )}
-                activity={<ActivityView activity={activity} />}
                 composer={<text>Composer</text>}
                 status={<text>Status</text>}
                 hints={<text>Hints</text>}

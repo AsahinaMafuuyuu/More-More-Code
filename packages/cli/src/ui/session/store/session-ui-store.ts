@@ -2,11 +2,13 @@ import type { ApprovalRequest } from "@more-more-code/harness";
 import type { ModeType } from "@more-more-code/shared";
 import type { AgentActivityView } from "../../../lib/agent-activity-projection";
 import type { Message } from "../../../lib/chat-types";
+import type { ConversationRunView } from "../../../lib/conversation-rounds";
 import type { ToolUseView } from "../../../lib/tool-use-projection";
 
 export type ConversationView = Readonly<{
   messages: readonly Message[];
   toolUses: Readonly<Record<string, ToolUseView>>;
+  currentRun: ConversationRunView | null;
   errorMessage: string | null;
   runErrorMessage: string | null;
 }>;
@@ -15,6 +17,7 @@ export type SessionStatusView = Readonly<{
   mode: ModeType;
   modelLabel: string;
   contextLabel: string;
+  contextUtilizationRatio: number | null;
   costLabel: string;
   cacheLabel: string;
 }>;
@@ -81,6 +84,7 @@ export function createInitialSessionUiState(
     conversation: {
       messages: [],
       toolUses: {},
+      currentRun: null,
       errorMessage: null,
       runErrorMessage: null,
     },
@@ -88,8 +92,9 @@ export function createInitialSessionUiState(
     status: {
       mode: "BUILD",
       modelLabel: "unknown",
-      contextLabel: "Ctx —",
-      costLabel: "API —",
+      contextLabel: "—",
+      contextUtilizationRatio: null,
+      costLabel: "$—",
       cacheLabel: "Cache —",
     },
     composerRuntime: {
@@ -174,6 +179,9 @@ function freezeSnapshot(
           ...state.conversation,
           messages: Object.freeze([...state.conversation.messages]),
           toolUses: Object.freeze({ ...state.conversation.toolUses }),
+          currentRun: state.conversation.currentRun
+            ? Object.freeze({ ...state.conversation.currentRun })
+            : null,
         }),
     activity: previous && state.activity === previous.activity
       ? previous.activity

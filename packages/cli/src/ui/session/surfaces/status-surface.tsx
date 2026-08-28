@@ -2,6 +2,7 @@ import { TextAttributes } from "@opentui/core";
 import { useTheme } from "../../../providers/theme";
 import { useSessionUiSelector } from "../store/react-session-ui";
 import { selectStatus } from "../store/session-ui-selectors";
+import { ContextUtilizationBar } from "./context-utilization-bar";
 
 export function StatusSurface() {
   const status = useSessionUiSelector(selectStatus);
@@ -15,6 +16,7 @@ export function StatusSurface() {
       <text>{status.modelLabel}</text>
       <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>·</text>
       <text>{status.contextLabel}</text>
+      <ContextUtilizationBar ratio={status.contextUtilizationRatio} />
       <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>·</text>
       <text>{status.costLabel}</text>
       <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>·</text>

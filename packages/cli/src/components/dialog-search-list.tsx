@@ -8,6 +8,7 @@ import {
 import { useKeyboard } from "@opentui/react";
 import { useKeyboardLayer } from "../providers/keyboard-layer";
 import { useTheme } from "../providers/theme";
+import { createTerminalScrollbarOptions } from "../ui/scrollbar-style";
 
 // 定义最大可见项数
 const MAX_VISIBLE_ITEMS = 6;
@@ -114,6 +115,8 @@ export function DialogSearchList<T>({
         <scrollbox
           ref={scrollRef}
           height={visibleHeight}
+          scrollX={false}
+          verticalScrollbarOptions={createTerminalScrollbarOptions(colors)}
         >
           {filtered.map((item, index) => {
             const isSelected = index === selectedIndex; // 判断当前项是否被选中

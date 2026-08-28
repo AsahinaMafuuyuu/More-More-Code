@@ -7,33 +7,34 @@ import {
   resolveSessionWorkspaceLayout,
 } from "../src/ui/session/workspace/session-workspace";
 import { TerminalDimensionsProvider } from "../src/providers/terminal-dimensions";
+import { ThemeProvider } from "../src/providers/theme";
 
 describe("SessionWorkspace layout", () => {
   test("uses explicit width/height classes without an 80% Composer constraint", () => {
     expect(resolveSessionWorkspaceLayout(60, 20)).toMatchObject({
       widthClass: "narrow",
       paddingX: 1,
-      activityMaxRows: 4,
     });
     expect(resolveSessionWorkspaceLayout(72, 24).widthClass).toBe("medium");
     expect(resolveSessionWorkspaceLayout(100, 30).widthClass).toBe("medium");
     expect(resolveSessionWorkspaceLayout(120, 30).widthClass).toBe("wide");
-    expect(resolveSessionWorkspaceLayout(160, 40).activityMaxRows).toBeGreaterThan(4);
+    expect(resolveSessionWorkspaceLayout(160, 40).conversationMinRows).toBe(10);
   });
 
-  test("renders Conversation -> Activity -> Composer -> Status -> Hints in every width class", async () => {
+  test("renders Conversation -> Composer -> Status -> Hints in every width class", async () => {
     for (const [width, height] of [[60, 20], [72, 24], [100, 30], [120, 30], [160, 40]] as const) {
       let setup!: Awaited<ReturnType<typeof testRender>>;
       await act(async () => {
         setup = await testRender(
           <TerminalDimensionsProvider>
-            <SessionWorkspace
-              conversation={<text>Conversation sentinel</text>}
-              activity={<text>Activity sentinel</text>}
-              composer={<text>Composer sentinel</text>}
-              status={<text>Status sentinel</text>}
-              hints={<text>Hints sentinel</text>}
-            />
+            <ThemeProvider>
+              <SessionWorkspace
+                conversation={<text>Conversation sentinel</text>}
+                composer={<text>Composer sentinel</text>}
+                status={<text>Status sentinel</text>}
+                hints={<text>Hints sentinel</text>}
+              />
+            </ThemeProvider>
           </TerminalDimensionsProvider>,
           { width, height },
         );
@@ -43,7 +44,6 @@ describe("SessionWorkspace layout", () => {
         const frame = setup.captureCharFrame();
         const order = [
           frame.indexOf("Conversation sentinel"),
-          frame.indexOf("Activity sentinel"),
           frame.indexOf("Composer sentinel"),
           frame.indexOf("Status sentinel"),
           frame.indexOf("Hints sentinel"),
@@ -56,26 +56,27 @@ describe("SessionWorkspace layout", () => {
     }
   });
 
-  test("unrelated Activity updates preserve a manually scrolled Conversation position", async () => {
+  test("unrelated Status updates preserve a manually scrolled Conversation position", async () => {
     const scrollRef = createRef<ScrollBoxRenderable>();
-    let bumpActivity!: () => void;
+    let bumpStatus!: () => void;
 
     function Probe() {
       const [tick, setTick] = useState(0);
-      bumpActivity = () => setTick((value) => value + 1);
+      bumpStatus = () => setTick((value) => value + 1);
       return (
         <TerminalDimensionsProvider>
-          <SessionWorkspace
-            conversationScrollRef={scrollRef}
-            conversation={(
-              <box flexDirection="column">
-                {Array.from({ length: 30 }, (_, index) => <text key={index}>Message {index}</text>)}
-              </box>
-            )}
-            activity={<text>Activity {tick}</text>}
-            composer={<text>Composer</text>}
-            status={<text>Status</text>}
-          />
+          <ThemeProvider>
+            <SessionWorkspace
+              conversationScrollRef={scrollRef}
+              conversation={(
+                <box flexDirection="column">
+                  {Array.from({ length: 30 }, (_, index) => <text key={index}>Message {index}</text>)}
+                </box>
+              )}
+              composer={<text>Composer</text>}
+              status={<text>Status {tick}</text>}
+            />
+          </ThemeProvider>
         </TerminalDimensionsProvider>
       );
     }
@@ -89,9 +90,11 @@ describe("SessionWorkspace layout", () => {
       scrollRef.current?.scrollTo(4);
       const before = scrollRef.current?.scrollTop;
       expect(before).toBe(4);
+      expect(scrollRef.current?.verticalScrollBar.showArrows).toBe(false);
+      expect(scrollRef.current?.verticalScrollBar.height).toBe(scrollRef.current?.viewport.height);
 
       await act(async () => {
-        bumpActivity();
+        bumpStatus();
         await setup.flush({ maxPasses: 10 });
       });
       expect(scrollRef.current?.scrollTop).toBe(before);

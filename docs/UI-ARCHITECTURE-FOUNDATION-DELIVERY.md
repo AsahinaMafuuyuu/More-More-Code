@@ -13,6 +13,14 @@
 **ADR:**
 `docs/decisions/0028-ui-application-architecture-and-render-isolation.md`
 
+> **Post-delivery refinement — 2026-08-28:** the delivered architecture is
+> unchanged, but the primary Session workspace no longer renders ActivityDock.
+> The Activity projection remains internal for ToolUse/runtime semantics and
+> future Inspector use. Current composition is ConversationPane -> Composer ->
+> StatusLine -> InteractionHints, with the Inspector slot preserved. The same
+> refinement makes completed-round Build/Plan summaries once-per-round,
+> standardizes production scrollbars, and compacts Context/Cost status.
+
 ## 1. Delivery Intent
 
 This document is the required closeout record for UI Slice 1.5.
@@ -174,12 +182,15 @@ Harness / Local Session / Runtime authority
                 -> selector React adapters
                     -> SessionWorkspace
                         -> ConversationPane
-                        -> ActivityDock
                         -> Composer
                         -> StatusLine
                         -> InteractionHints
                         -> InspectorSurface slot
 ```
+
+`ActivityDock` was part of the 2026-08-27 foundation delivery and was removed
+from the primary workspace by the 2026-08-28 presentation refinement. This
+does not remove `AgentActivityView` or its projection boundary.
 
 Primary modules:
 

@@ -39,6 +39,7 @@ function conversation(label: string): SessionUiState["conversation"] {
   return {
     messages: [{ id: label, role: "assistant", parts: [{ type: "text", text: label }] } as never],
     toolUses: {},
+    currentRun: null,
     errorMessage: null,
     runErrorMessage: null,
   };

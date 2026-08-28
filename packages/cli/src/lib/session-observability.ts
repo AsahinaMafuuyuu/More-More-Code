@@ -9,6 +9,7 @@ export type SessionObservability = {
 
 export type StatusBarObservability = {
     context: string;
+    contextUtilizationRatio: number | null;
     cost: string;
     cache: string;
 };
@@ -26,24 +27,37 @@ export function formatStatusBarObservability(
     observability: SessionObservability | null | undefined,
 ): StatusBarObservability {
     if (!observability) {
-        return { context: "Ctx —", cost: "API —", cache: "Cache —" };
+        return {
+            context: "—",
+            contextUtilizationRatio: null,
+            cost: "$—",
+            cache: "Cache —",
+        };
     }
 
     const context = observability.context
-        ? `Ctx ${observability.context.tokenCountQuality === "estimated" ? "~" : ""}${formatTokens(observability.context.estimatedInputTokens)}/${formatTokens(observability.context.contextWindowTokens)}`
-        : "Ctx —";
+        ? `${formatTokens(observability.context.estimatedInputTokens)}/${formatTokens(observability.context.contextWindowTokens)}`
+        : "—";
+    const contextUtilizationRatio = observability.context
+        ? clampRatio(
+            Number.isFinite(observability.context.utilizationRatio)
+                ? observability.context.utilizationRatio
+                : observability.context.contextWindowTokens > 0
+                    ? observability.context.estimatedInputTokens / observability.context.contextWindowTokens
+                    : 0,
+        )
+        : null;
 
     const trusted = observability.usage.integrity === "valid";
     const knownCost = observability.usage.cost.totalUsd;
     const costPartial = observability.usagePersistenceIncomplete
         || observability.usage.cost.coverage === "partial";
-    const cost = !trusted || knownCost === undefined
-        ? "API —"
-        : costPartial
-            ? `API ≥~$${formatUsd(knownCost)}`
-            : observability.usage.cost.coverage === "complete"
-                ? `API ~$${formatUsd(knownCost)}`
-                : "API —";
+    const cost = trusted
+        && knownCost !== undefined
+        && !costPartial
+        && observability.usage.cost.coverage === "complete"
+        ? `$${formatUsd(knownCost)}`
+        : "$—";
 
     const cache = trusted
         && !observability.usagePersistenceIncomplete
@@ -52,7 +66,7 @@ export function formatStatusBarObservability(
         ? `Cache ${Math.round(observability.usage.cache.hitRate * 100)}%`
         : "Cache —";
 
-    return { context, cost, cache };
+    return { context, contextUtilizationRatio, cost, cache };
 }
 
 function formatTokens(value: number) {
@@ -62,9 +76,11 @@ function formatTokens(value: number) {
 }
 
 function formatUsd(value: number) {
-    if (value < 10) return value.toFixed(4);
-    if (value < 1_000) return value.toFixed(2);
-    return value.toFixed(0);
+    return value.toFixed(2);
+}
+
+function clampRatio(value: number) {
+    return Math.max(0, Math.min(1, value));
 }
 
 function stripTrailingZero(value: string) {
