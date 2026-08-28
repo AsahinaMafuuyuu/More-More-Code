@@ -311,6 +311,51 @@ Final state, commit budget, stress-volume and interaction-pressure assertions
 were true for every applicable workload. No Bun panic, Windows access
 violation or `opentui.dll` crash occurred.
 
+### 4.9.1 Post-delivery resize-listener regression fix — 2026-08-28
+
+Real interactive use after S7 exposed a separate renderer-lifecycle warning:
+
+```text
+MaxListenersExceededWarning: Possible EventEmitter memory leak detected.
+11 resize listeners added to [CliRenderer]. MaxListeners is 10.
+```
+
+This was not the earlier native `opentui.dll` crash and was not caused by a
+missing OpenTUI unmount cleanup. OpenTUI 0.5.9 `useTerminalDimensions()` owns
+one `CliRenderer` `resize` listener per mounted hook instance and removes it on
+unmount. Persistent historical `ToolUse` rows remained mounted, so direct hook
+use in each row made listener count grow linearly with ToolUse history.
+
+TDD reproduction rendered 16 persistent historical ToolUse rows together with
+the normal Activity/Workspace consumers. Before the fix the renderer had 18
+`resize` listeners and emitted the same warning. The fix introduced one
+application-level `TerminalDimensionsProvider`; Activity, ToolUse, Dialog,
+Toast and SessionWorkspace now consume dimensions from that shared React
+context instead of independently subscribing to `CliRenderer`.
+
+Post-fix evidence:
+
+```text
+historical ToolUse listener regression   PASS; renderer resize listeners <= 2
+focused UI regression                    9 pass / 0 fail
+full CLI regression                      280 pass / 0 fail / 65 files
+CLI TypeScript typecheck                 PASS
+CLI production build                     PASS; 680 modules; index.js ~8.1 MB
+git diff --check                         PASS
+native pressure suite                    PASS; 20s idle + 45s stream + 45s churn
+native churn                             13,466 source updates
+native churn                             3,988 scroll ops / 1,097 dialog ops
+native churn                             1,733 immediate commits / 87.12% coalescing
+native churn RSS start/final/peak        83.4MB / 132.6MB / 142.3MB
+MaxListenersExceededWarning              not observed after the fix
+native panic / access violation          not observed
+```
+
+The implementation deliberately does not call `setMaxListeners()`; raising the
+EventEmitter threshold would only hide an unbounded subscription topology.
+The fix changes UI presentation subscription ownership only and does not alter
+Harness, Session, Provider, Tool, Context, Usage or Cost semantics.
+
 ### 4.10 Known limitations
 
 - Bun/OpenTUI remain native dependencies, so upstream native defects remain
@@ -339,6 +384,7 @@ S4 Render-Storm Removal + Commit Scheduler    7d441ee
 S5 Watch Isolation + Stability Profiles       0424909
 S6 Native pressure harness / validation       ba9fa81
 S7 Delivery closeout                          8226c05
+Post-S7 resize subscription stabilization     3247afd
 ```
 
 ## 6. Delivery Rejection Conditions
