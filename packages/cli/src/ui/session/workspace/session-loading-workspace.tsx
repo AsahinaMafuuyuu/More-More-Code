@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Spinner } from "../../../components/spinner";
+import { BusyIndicator } from "../../../components/busy-indicator";
 import StatusBar from "../../../components/status-bar";
 import { usePromptConfig } from "../../../providers/prompt-config";
 import { Composer } from "../composer/composer";
@@ -14,7 +14,7 @@ export function SessionLoadingWorkspace({ conversation }: { conversation?: React
       status={<StatusBar />}
       hints={(
         <box flexDirection="row" gap={1} paddingLeft={1}>
-          <Spinner mode={mode} />
+          <BusyIndicator mode={mode} />
           <text>loading session</text>
         </box>
       )}

@@ -1,5 +1,5 @@
 import { TextAttributes } from "@opentui/core";
-import { Spinner } from "../../../components/spinner";
+import { BusyIndicator } from "../../../components/busy-indicator";
 import { useSessionUiSelector } from "../store/react-session-ui";
 import { selectComposerRuntime, selectStatus } from "../store/session-ui-selectors";
 
@@ -20,7 +20,7 @@ export function InteractionHintsSurface() {
       <box flexDirection="row" alignItems="center" gap={2}>
         {loading ? (
           <>
-            <Spinner mode={status.mode} />
+            <BusyIndicator mode={status.mode} />
             {runtime.canInterrupt && (
               <text>enter steer · alt+enter follow-up · esc interrupt</text>
             )}

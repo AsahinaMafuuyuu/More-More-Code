@@ -7,6 +7,8 @@ import { projectToolUses } from "../../../lib/tool-use-projection";
 import { usePromptConfig } from "../../../providers/prompt-config";
 import type { SessionController } from "../../../app/session/session-controller";
 import type { SessionUiStore } from "../store/session-ui-store";
+import { resolveTuiRenderProfile } from "../../../tui/render-profile";
+import { createSessionUiCommitScheduler } from "./session-ui-commit-scheduler";
 import {
   projectApprovalUiView,
   projectComposerRuntimeView,
@@ -24,6 +26,10 @@ export function SessionRuntimeBridge({
   store: SessionUiStore;
 }) {
   const { mode, model } = usePromptConfig();
+  const commitScheduler = useMemo(() => createSessionUiCommitScheduler({
+    store,
+    commitHz: resolveTuiRenderProfile("normal").projectionCommitHz,
+  }), [store]);
   const controllerState = useSyncExternalStore(
     controller.subscribe,
     controller.getSnapshot,
@@ -61,10 +67,11 @@ export function SessionRuntimeBridge({
       // Attach failures are represented by the controller error projection.
     });
     return () => {
+      commitScheduler.dispose();
       void controller.dispose();
       store.destroy();
     };
-  }, [controller, store]);
+  }, [commitScheduler, controller, store]);
 
   const observability = useMemo(() => createSessionObservability({
     context: controllerState.contextUsage,
@@ -118,15 +125,20 @@ export function SessionRuntimeBridge({
   );
 
   useEffect(() => {
-    store.update({
+    commitScheduler.enqueuePresentation({
       conversation,
       activity,
       status,
+    });
+  }, [activity, commitScheduler, conversation, status]);
+
+  useEffect(() => {
+    commitScheduler.commitImmediate({
       composerRuntime,
       approval,
       recovery,
     });
-  }, [activity, approval, composerRuntime, conversation, recovery, status, store]);
+  }, [approval, commitScheduler, composerRuntime, recovery]);
 
   return null;
 }
