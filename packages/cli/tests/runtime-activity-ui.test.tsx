@@ -101,6 +101,41 @@ describe("Runtime Activity UI", () => {
     }
   });
 
+  test("safe TUI profile disables the presentation-only elapsed timer", async () => {
+    const previous = process.env.MORE_MORE_CODE_TUI_PROFILE;
+    process.env.MORE_MORE_CODE_TUI_PROFILE = "safe";
+    const startedAt = Date.now() - 1_000;
+    const tickingActivity = activity();
+    tickingActivity.startedAt = startedAt;
+    tickingActivity.elapsedMs = 1_000;
+
+    let setup!: Awaited<ReturnType<typeof testRender>>;
+    try {
+      await act(async () => {
+        setup = await testRender(
+          <ThemeProvider><ActivityView activity={tickingActivity} /></ThemeProvider>,
+          { width: 100, height: 30 },
+        );
+      });
+      await flush(setup);
+      const before = setup.captureCharFrame();
+      const beforeSeconds = Number(before.match(/Agent Activity · running · ([0-9.]+)s/)?.[1]);
+
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 1_100));
+        await setup.flush({ maxPasses: 10 });
+      });
+
+      const after = setup.captureCharFrame();
+      const afterSeconds = Number(after.match(/Agent Activity · running · ([0-9.]+)s/)?.[1]);
+      expect(afterSeconds).toBe(beforeSeconds);
+    } finally {
+      setup?.renderer.destroy();
+      if (previous === undefined) delete process.env.MORE_MORE_CODE_TUI_PROFILE;
+      else process.env.MORE_MORE_CODE_TUI_PROFILE = previous;
+    }
+  });
+
   test("renders Activity with width-aware density", async () => {
     let medium!: Awaited<ReturnType<typeof testRender>>;
     await act(async () => {

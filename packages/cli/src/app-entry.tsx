@@ -8,7 +8,7 @@ import { Session } from "./screens/session";
 import { bootstrapAgentEnvironment } from "./lib/agent-environment";
 import { bootstrapRuntimeEnvironment } from "./lib/runtime-environment";
 import { bootstrapLocalSessionEnvironment } from "./lib/session-environment";
-import { resolveTuiRenderProfile } from "./tui/render-profile";
+import { resolveTuiRenderProfileFromEnvironment } from "./tui/render-profile";
 
 // Agent bootstrap resolves ~/.more-more-code and workspace .more-more-code before any session can run.
 await bootstrapAgentEnvironment();
@@ -42,7 +42,7 @@ function App() {
   return <RouterProvider router={router} />;
 }
 
-const renderProfile = resolveTuiRenderProfile("normal");
+const renderProfile = resolveTuiRenderProfileFromEnvironment();
 const renderer = await createCliRenderer({
   targetFps: renderProfile.targetFps,
   maxFps: renderProfile.maxFps,

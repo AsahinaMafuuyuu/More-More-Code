@@ -9,6 +9,8 @@ export type TuiRenderProfile = Readonly<{
   animateBusyIndicator: false;
 }>;
 
+export const TUI_RENDER_PROFILE_ENV = "MORE_MORE_CODE_TUI_PROFILE" as const;
+
 const NORMAL_PROFILE: TuiRenderProfile = Object.freeze({
   name: "normal",
   targetFps: 30,
@@ -31,4 +33,10 @@ export function resolveTuiRenderProfile(name: string = "normal"): TuiRenderProfi
   if (name === "normal") return NORMAL_PROFILE;
   if (name === "safe") return SAFE_PROFILE;
   throw new Error(`Unknown TUI render profile ${JSON.stringify(name)}. Expected "normal" or "safe".`);
+}
+
+export function resolveTuiRenderProfileFromEnvironment(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): TuiRenderProfile {
+  return resolveTuiRenderProfile(environment[TUI_RENDER_PROFILE_ENV] ?? "normal");
 }

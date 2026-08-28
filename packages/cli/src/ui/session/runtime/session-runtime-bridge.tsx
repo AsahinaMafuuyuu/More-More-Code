@@ -7,7 +7,7 @@ import { projectToolUses } from "../../../lib/tool-use-projection";
 import { usePromptConfig } from "../../../providers/prompt-config";
 import type { SessionController } from "../../../app/session/session-controller";
 import type { SessionUiStore } from "../store/session-ui-store";
-import { resolveTuiRenderProfile } from "../../../tui/render-profile";
+import { resolveTuiRenderProfileFromEnvironment } from "../../../tui/render-profile";
 import { createSessionUiCommitScheduler } from "./session-ui-commit-scheduler";
 import {
   projectApprovalUiView,
@@ -28,7 +28,7 @@ export function SessionRuntimeBridge({
   const { mode, model } = usePromptConfig();
   const commitScheduler = useMemo(() => createSessionUiCommitScheduler({
     store,
-    commitHz: resolveTuiRenderProfile("normal").projectionCommitHz,
+    commitHz: resolveTuiRenderProfileFromEnvironment().projectionCommitHz,
   }), [store]);
   const controllerState = useSyncExternalStore(
     controller.subscribe,

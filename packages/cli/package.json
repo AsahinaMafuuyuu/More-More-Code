@@ -7,7 +7,8 @@
     "more-more-code": "./bin/more-more-code"
   },
   "scripts": {
-    "dev": "bun run --watch src/index.tsx",
+    "dev": "bun run src/index.tsx",
+    "dev:watch": "bun run --watch src/index.tsx",
     "build": "bun build src/index.tsx --outdir dist --target bun --external @opentui/core --external @opentui/react"
   },
   "devDependencies": {

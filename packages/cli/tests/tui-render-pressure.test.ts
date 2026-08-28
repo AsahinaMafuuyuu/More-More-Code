@@ -20,7 +20,7 @@ describe("TUI render pressure policy", () => {
 
   test("production renderer uses the normal 30 FPS target and hard cap without start()", () => {
     const source = read("../src/app-entry.tsx");
-    expect(source).toContain('resolveTuiRenderProfile("normal")');
+    expect(source).toContain("resolveTuiRenderProfileFromEnvironment()");
     expect(source).toContain("targetFps: renderProfile.targetFps");
     expect(source).toContain("maxFps: renderProfile.maxFps");
     expect(source).not.toMatch(/renderer\.start\s*\(/);

@@ -8,6 +8,7 @@ import {
 } from "../lib/agent-activity-projection";
 import { createActivityRows, formatActivityHeader } from "../lib/activity-view-model";
 import { useTheme } from "../providers/theme";
+import { resolveTuiRenderProfileFromEnvironment } from "../tui/render-profile";
 import { EmptyBorder } from "./border";
 
 type Props = {
@@ -17,6 +18,7 @@ type Props = {
 export function ActivityView({ activity }: Props) {
   const { colors } = useTheme();
   const dimensions = useTerminalDimensions();
+  const renderProfile = resolveTuiRenderProfileFromEnvironment();
   const [showHistory, setShowHistory] = useState(true);
   const [turnExpansion, setTurnExpansion] = useState<Record<string, boolean>>({});
   const [activityNow, setActivityNow] = useState(() => Date.now());
@@ -29,10 +31,14 @@ export function ActivityView({ activity }: Props) {
   useEffect(() => {
     setActivityNow(Date.now());
     if (activity?.status !== "running") return;
+    if (renderProfile.activityElapsedMs === null) return;
 
-    const timer = setInterval(() => setActivityNow(Date.now()), 1_000);
+    const timer = setInterval(
+      () => setActivityNow(Date.now()),
+      renderProfile.activityElapsedMs,
+    );
     return () => clearInterval(timer);
-  }, [activity?.runId, activity?.status]);
+  }, [activity?.runId, activity?.status, renderProfile.activityElapsedMs]);
 
   const displayActivity = useMemo(
     () => activity ? refreshAgentActivityElapsed(activity, activityNow) : null,
