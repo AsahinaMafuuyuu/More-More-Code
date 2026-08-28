@@ -1,6 +1,6 @@
 # UI OpenTUI Framework Stability Delivery Contract
 
-**Delivery state:** Planned — implementation not started.
+**Delivery state:** Delivered — normal Windows native pressure and all S7 regression gates are Green.
 
 **Date:** 2026-08-27
 
@@ -177,55 +177,54 @@ application presentation traffic.
 
 ### 4.2 Dependency changes
 
-Record:
+Delivered baseline:
 
-- Bun baseline and revision;
-- selected `@opentui/core` version;
-- selected `@opentui/react` version;
-- whether 0.5.8 fallback was tested;
-- removal of `opentui-spinner`;
-- lockfile changes.
+```text
+Bun minimum / validated baseline  1.4.0
+Bun revision                      34cbb9a40b4bd1bd767d134a7065e66c2432a676
+@opentui/core                     0.5.9 exact pin
+@opentui/react                    0.5.9 exact pin
+0.5.8 fallback                    not exercised; no reproducible 0.5.9 regression
+opentui-spinner                   removed from normal runtime dependency graph
+bun.lock                          updated with the dependency migration
+```
 
 ### 4.3 Render-pressure changes
 
-Record exact before/after values:
-
 ```text
-busy autonomous ticks/sec
-renderer maxFps
-renderer targetFps
-presentation scheduler Hz
-Activity timer Hz
-number of production live/continuous render sources
+busy autonomous ticks/sec       ~12.5 -> 0
+renderer maxFps                 no explicit hard cap -> 30
+renderer targetFps              60 -> 30
+presentation scheduler          raw/unbounded -> <=20Hz normal
+Activity elapsed timer          localized/bounded -> 1Hz normal
+application-owned busy loop     spinner loop -> none
+safe diagnostic profile         15 FPS / 10Hz / no presentation elapsed timer
 ```
 
 ### 4.4 Scheduler evidence
 
-Record focused test counts/results proving:
-
-- burst coalescing;
-- immediate-state behavior;
-- terminal flush;
-- Session isolation;
-- dispose/no-post-destroy writes.
+`session-ui-commit-scheduler.test.ts` is Green and proves all five required
+behaviors: burst coalescing, merged latest presentation state, flush-before-
+immediate ordering, terminal stream flush, and per-Session dispose/isolation.
+The full CLI suite includes these checks and completed with 279/279 tests Green.
 
 ### 4.5 Authority audit
 
-Explicitly confirm whether the stage changed:
+The stage diff from the delivered UI architecture foundation contains no
+`packages/harness`, Server/database schema, Provider, Usage/Cost, Context/
+Compaction, Permission or Approval authority implementation changes. Audit:
 
 ```text
-Harness Run/Turn/Step semantics       expected NO
-AgentLoop scheduling                  expected NO
-Session Entry contracts               expected NO
-Runtime Event contracts               expected NO
-Session/Runtime SQLite schemas        expected NO
-Provider execution/stream semantics   expected NO
-Tool/Permission/Approval semantics    expected NO
-Context/Compaction                    expected NO
-Usage/Cost authority                  expected NO
+Harness Run/Turn/Step semantics       NO
+AgentLoop scheduling                  NO
+Session Entry contracts               NO
+Runtime Event contracts               NO
+Session/Runtime SQLite schemas        NO
+Provider execution/stream semantics   NO
+Tool/Permission/Approval semantics    NO
+Context/Compaction                    NO
+Usage/Cost authority                  NO
 ```
-
-Any `YES` requires separate architecture approval before DELIVERY can close.
 
 ### 4.6 Synthetic native stress evidence
 
@@ -285,42 +284,61 @@ release gate.
 
 ### 4.9 Test/build evidence
 
-Record exact final counts for:
+S7 closeout executed 2026-08-28:
 
-- stability-focused tests;
-- full CLI tests;
-- Harness tests;
-- CLI typecheck;
-- Harness typecheck;
-- CLI production build;
-- `git diff --check`;
-- OpenTUI test-renderer stress;
-- native stress durations and measured pressure volumes.
+```text
+full CLI tests              279 pass / 0 fail / 65 files / 924 expects
+full Harness tests          107 pass / 0 fail / 15 files / 364 expects
+CLI TypeScript typecheck    PASS
+Harness TypeScript check    PASS
+CLI production build        PASS; 679 modules; index.js ~8.1 MB
+git diff --check            PASS
+OpenTUI test-render stress  PASS within the full CLI suite
+native pressure suite       PASS; 20s idle + 45s stream + 45s churn
+```
+
+The independent S7 native rerun completed with exit code 0 in `110766ms`:
+
+```text
+idle    PASS; 20s; RSS 71.7MB -> 79.6MB
+stream  PASS; 45s; 27,666 updates; 614.8 updates/sec; 96.91% coalescing
+churn   PASS; 45s; 13,549 updates; 301.09 updates/sec; 87.20% coalescing
+churn   1,733 immediate commits; 3,964 scroll ops; 1,095 dialog ops
+churn   RSS start/final/peak 70.7MB / 129.6MB / 145.2MB
+```
+
+Final state, commit budget, stress-volume and interaction-pressure assertions
+were true for every applicable workload. No Bun panic, Windows access
+violation or `opentui.dll` crash occurred.
 
 ### 4.10 Known limitations
 
-At minimum discuss:
-
-- Bun/OpenTUI remain native dependencies and upstream defects are possible;
-- OpenTUI 0.5.x is an actively evolving pre-1.0 line;
-- passing a bounded stress matrix is not a mathematical guarantee of infinite-session
-  stability;
-- safe profile is mitigation, not normal-profile proof;
-- any remaining non-failing React/OpenTUI test warnings;
-- terminal-host-specific behavior if observed.
+- Bun/OpenTUI remain native dependencies, so upstream native defects remain
+  possible; OpenTUI 0.5.x is still pre-1.0.
+- A bounded pressure matrix is strong regression evidence, not a mathematical
+  guarantee for an infinitely long process.
+- Safe profile remains mitigation/diagnostic only; delivery is based on the
+  normal profile.
+- Several React/OpenTUI tests emit non-failing `act(...)` warnings. They do not
+  represent native crashes and remain test-harness cleanup debt.
+- Native validation was performed through the Windows PTY/terminal host used by
+  DevCodex plus the real non-watch CLI smoke. Terminal-host-specific upstream
+  behavior can still exist.
+- Real Provider/Tool calls were intentionally not manufactured solely for a
+  renderer stability test, avoiding external side effects.
 
 ## 5. Required Checkpoints
 
 Delivery must identify commits for:
 
 ```text
-S1 Baseline + Diagnostics Seam
-S2 Bun Runtime Baseline
-S3 OpenTUI Migration
-S4 Render-Storm Removal + Commit Scheduler
-S5 Watch Isolation + Stability Profiles
-S6 Native Soak Harness / validation fixes
-S7 Delivery closeout
+S1 Baseline + Diagnostics Seam                 db0f5e9
+S2 Bun Runtime Baseline                       9edaf3e
+S3 OpenTUI Migration                          d9cfd3a
+S4 Render-Storm Removal + Commit Scheduler    7d441ee
+S5 Watch Isolation + Stability Profiles       0424909
+S6 Native pressure harness / validation       ba9fa81
+S7 Delivery closeout                          recorded by the closeout commit
 ```
 
 ## 6. Delivery Rejection Conditions

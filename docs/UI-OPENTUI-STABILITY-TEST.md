@@ -1,6 +1,6 @@
 # UI OpenTUI Framework Stability Test Contract
 
-**Status:** Approved test contract — implementation not started.
+**Status:** Satisfied — full regression, test-renderer stress and Windows native pressure gates are Green.
 
 **Date:** 2026-08-27
 

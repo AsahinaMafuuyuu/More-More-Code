@@ -1,9 +1,9 @@
 # UI Runtime Workbench Roadmap
 
 **Status:** Active — UI Slice 1 / P0 Runtime Activity Foundation and UI Slice
-1.5 / UI Architecture Foundation delivered on 2026-08-27. UI Slice 1.6 /
-OpenTUI Framework Stability is now the mandatory next implementation slice;
-Inspector and later slices are blocked until Slice 1.6 is delivered.
+1.5 / UI Architecture Foundation were delivered on 2026-08-27. UI Slice 1.6 /
+OpenTUI Framework Stability was delivered on 2026-08-28 with the normal
+Windows native pressure gate Green. P1 Inspector work is now unblocked.
 
 **Target:** Local CLI / OpenTUI presentation layer after the Stage 6.5 local
 Session, Runtime, Provider, Context, Usage and Cost foundations.
@@ -257,10 +257,11 @@ Avoid adding Context/Usage/Security detail directly into the main transcript.
 
 ## 5. Priority P1 — Unified Session Inspector
 
-P1 is intentionally blocked until **UI Slice 1.5 — UI Architecture
-Foundation** is delivered. Inspector must be built on selector-based UI
-subscriptions and explicit controller/projection boundaries rather than being
-added directly to the current root hook/component ownership model.
+P1 was blocked until **UI Slice 1.5 — UI Architecture Foundation** and
+**UI Slice 1.6 — OpenTUI Framework Stability** were delivered. Both gates are
+now satisfied. Inspector must be built on selector-based UI subscriptions and
+explicit controller/projection boundaries rather than being added directly to
+the current root hook/component ownership model.
 
 P1 exposes already-existing deep runtime capabilities without overcrowding the
 main Session screen.

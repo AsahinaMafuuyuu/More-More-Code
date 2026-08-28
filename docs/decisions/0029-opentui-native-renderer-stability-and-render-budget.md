@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — implementation planned.
+Accepted — implemented and validated.
 
 ## Date
 

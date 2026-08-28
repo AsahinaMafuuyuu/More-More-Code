@@ -1,6 +1,6 @@
 # UI OpenTUI Framework Stability Design
 
-**Status:** Approved for next-stage implementation — planning only.
+**Status:** Delivered — implemented and validated on the Windows native renderer path.
 
 **Date:** 2026-08-27
 
