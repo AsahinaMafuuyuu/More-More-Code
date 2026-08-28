@@ -1,7 +1,8 @@
 # UI Runtime Workbench Roadmap
 
-**Status:** Active — UI Slice 1 / P0 Runtime Activity Foundation delivered on
-2026-08-27. UI Slice 1.5 / UI Architecture Foundation is now the required next
+**Status:** Active — UI Slice 1 / P0 Runtime Activity Foundation and UI Slice
+1.5 / UI Architecture Foundation delivered on 2026-08-27. UI Slice 2 is now
+the next implementation slice.
 stage; Inspector and later slices are blocked until Slice 1.5 is delivered.
 
 **Target:** Local CLI / OpenTUI presentation layer after the Stage 6.5 local
@@ -453,7 +454,7 @@ Scope:
 
 This slice is the prerequisite for all other UI work.
 
-### UI Slice 1.5 — UI Architecture Foundation (required next stage)
+### UI Slice 1.5 — UI Architecture Foundation (delivered 2026-08-27)
 
 Scope:
 
@@ -478,7 +479,7 @@ docs/UI-ARCHITECTURE-FOUNDATION-TEST.md
 docs/UI-ARCHITECTURE-FOUNDATION-DELIVERY.md
 ```
 
-This slice is primarily architecture refactoring, not visible feature growth.
+This slice was delivered as architecture refactoring, not visible feature growth.
 It must preserve current Harness/Session/Runtime semantics and must not create
 a second UI-owned semantic authority.
 
@@ -493,7 +494,7 @@ Scope:
 - entry commands/keyboard navigation.
 
 These areas are grouped because their data seams already exist and are mostly
-read-only projections. **Dependency: UI Slice 1.5 must be fully delivered.**
+read-only projections. **Dependency satisfied: UI Slice 1.5 is delivered.**
 
 ### UI Slice 3 — Runtime Recovery + Security Audit (P1-B)
 

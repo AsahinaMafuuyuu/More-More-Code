@@ -2514,7 +2514,7 @@ expandable semantic ToolUse component driven by existing Tool projection/state.
 
 ## Priority P0.5 — UI Architecture Foundation
 
-**Status:** Planned — mandatory next implementation slice before P1 Inspector.
+**Status:** Delivered — 2026-08-27. UI-A1 through UI-A7 completed sequentially; P1 Inspector is now unblocked.
 
 **Architecture decision:**
 `docs/decisions/0028-ui-application-architecture-and-render-isolation.md`.
@@ -2531,15 +2531,15 @@ workspace and selector-based React adapters so UI surfaces subscribe to the
 smallest state they consume.
 
 **Acceptance criteria:**
-- [ ] Store is process-local/disposable and is not Session/Runtime authority.
-- [ ] Store supports immutable snapshots, subscribe/unsubscribe and destroy.
-- [ ] Conversation/Activity/Status/Composer/Approval/Recovery/Inspector-shell
+- [x] Store is process-local/disposable and is not Session/Runtime authority.
+- [x] Store supports immutable snapshots, subscribe/unsubscribe and destroy.
+- [x] Conversation/Activity/Status/Composer/Approval/Recovery/Inspector-shell
   selectors are defined.
-- [ ] Changing one slice does not notify unrelated selected slices.
-- [ ] Two Session UI stores can coexist without state leakage.
-- [ ] React receives a stable store instance rather than one changing giant
+- [x] Changing one slice does not notify unrelated selected slices.
+- [x] Two Session UI stores can coexist without state leakage.
+- [x] React receives a stable store instance rather than one changing giant
   context state value.
-- [ ] No third-party state framework is added without separate approval.
+- [x] No third-party state framework is added without separate approval.
 
 **Verification:** Red selector/lifecycle tests before implementation.
 
@@ -2550,15 +2550,15 @@ non-visual SessionController while preserving existing authority and
 durable-first ordering.
 
 **Acceptance criteria:**
-- [ ] submit / steer / follow-up / interrupt route through controller methods.
-- [ ] compact, mode/model transitions, Session navigation and approval
+- [x] submit / steer / follow-up / interrupt route through controller methods.
+- [x] compact, mode/model transitions, Session navigation and approval
   resolution route through explicit controller methods.
-- [ ] controller is not a React hook and does not render UI.
-- [ ] controller does not own a duplicate Session Tree or AgentRun state
+- [x] controller is not a React hook and does not render UI.
+- [x] controller does not own a duplicate Session Tree or AgentRun state
   machine.
-- [ ] Provider/Tool side effects still occur exactly once.
-- [ ] current durable-first ordering remains unchanged.
-- [ ] attach/dispose reuses current runtime quiescence/cleanup semantics.
+- [x] Provider/Tool side effects still occur exactly once.
+- [x] current durable-first ordering remains unchanged.
+- [x] attach/dispose reuses current runtime quiescence/cleanup semantics.
 
 **Dependencies:** UI-A1.
 
@@ -2569,16 +2569,16 @@ UI projections and migrate React consumers from Session-root prop fanout to
 selector subscriptions.
 
 **Acceptance criteria:**
-- [ ] Activity updates only the Activity subscription path except for runtime
+- [x] Activity updates only the Activity subscription path except for runtime
   facts genuinely shared with Composer status.
-- [ ] local Activity elapsed timer remains Activity-local.
-- [ ] Context/Usage/Cost/Cache telemetry updates Status without rebuilding the
+- [x] local Activity elapsed timer remains Activity-local.
+- [x] Context/Usage/Cost/Cache telemetry updates Status without rebuilding the
   Conversation tree.
-- [ ] Composer receives a narrow runtime presentation model, not raw AgentRun.
-- [ ] Conversation/ToolUse projection remains semantically compatible with
+- [x] Composer receives a narrow runtime presentation model, not raw AgentRun.
+- [x] Conversation/ToolUse projection remains semantically compatible with
   ADR-0026 and P0 ToolUse behavior.
-- [ ] Approval/Recovery presentation receives narrow UI views.
-- [ ] executable render/subscription counters prove unrelated surfaces remain
+- [x] Approval/Recovery presentation receives narrow UI views.
+- [x] executable render/subscription counters prove unrelated surfaces remain
   unchanged.
 
 **Dependencies:** UI-A2.
@@ -2589,16 +2589,16 @@ selector subscriptions.
 InputBar and establish Composer/Editor/Mention/Command/Actions boundaries.
 
 **Acceptance criteria:**
-- [ ] Editor owns text/cursor/submit/newline only.
-- [ ] Mention parsing/search is extracted into pure/testable modules.
-- [ ] Mention menu owns local selection/rendering only.
-- [ ] Command menu resolves typed CommandIntent values instead of directly
+- [x] Editor owns text/cursor/submit/newline only.
+- [x] Mention parsing/search is extracted into pure/testable modules.
+- [x] Mention menu owns local selection/rendering only.
+- [x] Command menu resolves typed CommandIntent values instead of directly
   executing application dependencies.
-- [ ] Composer no longer directly owns renderer shutdown, Session navigation,
+- [x] Composer no longer directly owns renderer shutdown, Session navigation,
   compact authority or model/mode authority mutation.
-- [ ] StatusLine is a SessionWorkspace surface rather than an editor-owned
+- [x] StatusLine is a SessionWorkspace surface rather than an editor-owned
   authority/status component.
-- [ ] Enter, Shift+Enter, Alt/Option+Enter, slash commands and @file behavior
+- [x] Enter, Shift+Enter, Alt/Option+Enter, slash commands and @file behavior
   remain compatible.
 
 **Dependencies:** UI-A3.
@@ -2609,13 +2609,13 @@ InputBar and establish Composer/Editor/Mention/Command/Actions boundaries.
 Interaction Router over the existing keyboard-layer primitive.
 
 **Acceptance criteria:**
-- [ ] Slash/menu commands map to typed intents and one execution path.
-- [ ] exit uses the existing safe quiescence/shutdown path.
-- [ ] Escape priority is Dialog > transient overlay > Inspector > Session Run.
-- [ ] Enter/arrow/Tab/follow-up shortcuts respect the active interaction
+- [x] Slash/menu commands map to typed intents and one execution path.
+- [x] exit uses the existing safe quiescence/shutdown path.
+- [x] Escape priority is Dialog > transient overlay > Inspector > Session Run.
+- [x] Enter/arrow/Tab/follow-up shortcuts respect the active interaction
   layer and do not leak to lower-priority handlers.
-- [ ] exactly one semantic action occurs for one key event.
-- [ ] command/interaction components do not acquire RuntimeSession/AgentLoop
+- [x] exactly one semantic action occurs for one key event.
+- [x] command/interaction components do not acquire RuntimeSession/AgentLoop
   authority references merely to route input.
 
 **Dependencies:** UI-A4.
@@ -2627,16 +2627,16 @@ StatusLine / InteractionHints surfaces and establish the Inspector surface slot
 without implementing P1 Inspector content.
 
 **Acceptance criteria:**
-- [ ] Conversation is the only primary flex-growing transcript surface.
-- [ ] Activity is bounded current-execution UI, not a second history log.
-- [ ] Composer uses available width instead of retaining the old arbitrary 80%
+- [x] Conversation is the only primary flex-growing transcript surface.
+- [x] Activity is bounded current-execution UI, not a second history log.
+- [x] Composer uses available width instead of retaining the old arbitrary 80%
   structural width.
-- [ ] StatusLine and hints have explicit ownership.
-- [ ] narrow/medium/wide and height behavior are tested.
-- [ ] sticky scroll/manual-scroll behavior survives unrelated Activity/Status
+- [x] StatusLine and hints have explicit ownership.
+- [x] narrow/medium/wide and height behavior are tested.
+- [x] sticky scroll/manual-scroll behavior survives unrelated Activity/Status
   updates.
-- [ ] `Session.tsx` converges toward route/workspace composition only.
-- [ ] Inspector shell slot/state can be added later without expanding a god
+- [x] `Session.tsx` converges toward route/workspace composition only.
+- [x] Inspector shell slot/state can be added later without expanding a god
   hook/component.
 
 **Dependencies:** UI-A5.
@@ -2647,17 +2647,17 @@ without implementing P1 Inspector content.
 store, Composer and interaction architecture; run the final architecture audit.
 
 **Acceptance criteria:**
-- [ ] `useChat` no longer owns the original monolithic application/UI
+- [x] `useChat` no longer owns the original monolithic application/UI
   responsibility set; any remaining adapter is narrow and documented.
-- [ ] InputBar no longer acts as application command/lifecycle owner.
-- [ ] `Session.tsx` no longer interprets ToolUse/Activity/application command
+- [x] InputBar no longer acts as application command/lifecycle owner.
+- [x] `Session.tsx` no longer interprets ToolUse/Activity/application command
   semantics directly.
-- [ ] duplicate old/new side-effect paths are removed.
-- [ ] duplicate semantic keyboard handlers are removed.
-- [ ] no global implicit `currentSession` UI store is introduced.
-- [ ] no Session-root presentation timer exists.
-- [ ] full architecture TEST contract passes.
-- [ ] DELIVERY records final owners, render-isolation evidence, manual width
+- [x] duplicate old/new side-effect paths are removed.
+- [x] duplicate semantic keyboard handlers are removed.
+- [x] no global implicit `currentSession` UI store is introduced.
+- [x] no Session-root presentation timer exists.
+- [x] full architecture TEST contract passes.
+- [x] DELIVERY records final owners, render-isolation evidence, manual width
   checks, limitations and bottom-layer contract audit.
 
 **Dependencies:** UI-A6.

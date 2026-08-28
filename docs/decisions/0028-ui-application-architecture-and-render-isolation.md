@@ -10,9 +10,11 @@ Accepted
 
 ## Implementation Status
 
-Planned. This ADR defines the mandatory UI Architecture Foundation that must
-be delivered before the Unified Session Inspector or later UI slices proceed.
-The planning commit does not change production UI behavior.
+Implemented on 2026-08-27. UI-A1 through UI-A7 delivered the per-Session UI
+Store, non-React SessionController, surface-specific projections, decomposed
+Composer, typed command/interaction routing, SessionWorkspace composition and
+legacy-path removal. The Unified Session Inspector is now unblocked; Inspector
+content itself remains a later slice.
 
 ## Context
 

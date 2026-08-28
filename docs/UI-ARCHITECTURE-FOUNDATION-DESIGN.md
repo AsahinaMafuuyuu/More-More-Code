@@ -1,6 +1,6 @@
 # UI Architecture Foundation Design
 
-**Status:** Approved for next-stage implementation — planning only.
+**Status:** Implemented — UI Architecture Foundation delivered 2026-08-27.
 
 **Date:** 2026-08-27
 

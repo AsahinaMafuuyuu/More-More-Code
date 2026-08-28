@@ -1,6 +1,6 @@
 # UI Architecture Foundation Delivery Contract
 
-**Delivery state:** Planned — architecture approved, implementation not started.
+**Delivery state:** Delivered — 2026-08-27. UI-A1 through UI-A7 implemented sequentially and architecture gates passed. A separate Windows Bun/OpenTUI native crash remains reproducible in the live `dev:cli` watch runtime and is recorded below as a runtime limitation; the architecture stress test never claimed to eliminate native runtime defects.
 
 **Date:** 2026-08-27
 
@@ -21,9 +21,10 @@ It is intentionally created before implementation so the next execution stage
 has an explicit definition of what must be delivered and what evidence must be
 recorded before the architecture refactor can be called complete.
 
-The current document describes **planned deliverables only**. It must not be
-changed to `Delivered` until implementation, verification and architecture
-review are complete.
+This document now records the implementation and verification evidence for the
+completed UI Architecture Foundation. The delivery does **not** claim that all
+Windows Bun/OpenTUI native renderer defects are fixed; TEST section 15 defines
+the renderer stress loop as best-effort evidence only.
 
 ## 2. Business / Engineering Need
 
@@ -159,143 +160,177 @@ reason and no duplicate authority behavior.
 Record all focused/full tests, typechecks, build, render-isolation counters,
 OpenTUI width/height checks and native renderer stress evidence.
 
-## 4. Required Delivery Report Structure
-
-When implementation finishes, replace/extend this section with actual results
-under the following headings.
+## 4. Actual Delivery Report
 
 ### 4.1 Actual architecture shipped
 
-Record:
+The final Session UI path is:
 
-- final controller module(s);
-- final store module(s);
-- final projection module(s);
-- final React adapter(s);
-- final surface/component hierarchy;
-- any naming differences from DESIGN and why.
+```text
+Harness / Local Session / Runtime authority
+    -> SessionController
+        -> SessionRuntimeBridge + UI projections
+            -> per-Session SessionUiStore
+                -> selector React adapters
+                    -> SessionWorkspace
+                        -> ConversationPane
+                        -> ActivityDock
+                        -> Composer
+                        -> StatusLine
+                        -> InteractionHints
+                        -> InspectorSurface slot
+```
+
+Primary modules:
+
+- controller: `packages/cli/src/app/session/session-controller.ts`;
+- command router: `packages/cli/src/app/session/session-command-router.ts`;
+- store/selectors/React adapter: `packages/cli/src/ui/session/store/*`;
+- projection producers: `packages/cli/src/ui/session/projections/session-ui-projections.ts`;
+- runtime bridge: `packages/cli/src/ui/session/runtime/session-runtime-bridge.tsx`;
+- Composer capabilities: `packages/cli/src/ui/session/composer/*`;
+- semantic interaction routing: `packages/cli/src/ui/session/interaction/*`;
+- workspace surfaces: `packages/cli/src/ui/session/workspace/*` and
+  `packages/cli/src/ui/session/surfaces/*`.
+
+The Inspector surface is intentionally only a shell/slot in this slice. No
+Inspector content was implemented early.
 
 ### 4.2 Legacy architecture removed
 
-Record:
+The original normal-path UI orchestration was removed rather than retained in
+parallel:
 
-- responsibilities removed from `useChat`;
-- responsibilities removed from `InputBar`;
-- responsibilities removed from `Session.tsx`;
-- old modules deleted;
-- compatibility adapters intentionally retained.
-
-Do not report line-count reduction as the primary success metric. Report
-ownership changes.
+- deleted `packages/cli/src/hooks/use-chat.ts`;
+- deleted `packages/cli/src/components/input-bar.tsx`;
+- deleted `packages/cli/src/components/session-shell.tsx`;
+- deleted the old executable command-menu component/hook path;
+- `COMMANDS` is metadata-only; application effects execute through the typed
+  Session Command Router;
+- `Session.tsx` owns route/session composition and initial-load behavior, not
+  ToolUse/Activity/command/keyboard semantics;
+- Session runtime Escape handling is isolated under the interaction layer;
+- no compatibility adapter remains that can execute a duplicate Session
+  submit/command/shutdown side effect.
 
 ### 4.3 Authority-boundary confirmation
 
-Explicitly state whether the delivery changed any of:
+No bottom-layer semantic contract changed in this delivery:
 
-- Harness Run/Turn/Step semantics;
-- AgentLoop scheduling;
-- Runtime Event contracts;
-- Session Entry kinds;
-- Session/Runtime Store schemas;
-- Provider behavior;
-- Context policy;
-- Permission/Approval semantics;
-- Usage/Cost authority.
+- Harness Run/Turn/Step semantics: **no change**;
+- AgentLoop scheduling: **no change**;
+- Runtime Event contracts: **no change**;
+- Session Entry kinds: **no change**;
+- Session/Runtime Store schemas: **no change**;
+- Provider behavior: **no change**;
+- Context policy: **no change**;
+- Permission/Approval semantics: **no change**;
+- Usage/Cost authority: **no change**.
 
-Expected result for this stage: **no**.
-
-If any answer is yes, this DELIVERY cannot be closed under ADR-0028 without a
-separate approved architecture decision.
+The new store is process-local presentation state and is not a semantic or
+durable authority.
 
 ### 4.4 Side-effect ordering evidence
 
-Record tests proving:
+Existing and new regressions prove the authority-first/once-only ordering:
 
-- durable submit ordering;
-- Tool terminal ordering;
-- model/mode authority ordering;
-- approval ordering;
-- shutdown/quiescence ordering;
-- no duplicate execution from compatibility paths.
+- `local-session-durable-turn.test.ts`: user Session commit precedes AgentLoop;
+- `local-session-tool-durability.test.ts`: Tool terminal commit precedes
+  continuation and failed/deferred commits fail closed;
+- `input-bar-model-change.test.ts` (renamed test description to Composer model
+  selection): prompt model changes only after authority model change resolves;
+- `tool-runtime-approval.test.ts`: approval lifecycle is durable/fail-closed
+  before executor invocation;
+- `local-session-shutdown.test.ts` and `session-command-router.test.ts`: exit
+  preserves quiescence and does not destroy the renderer before shutdown;
+- `ui-architecture-closeout.test.ts`: superseded executable command/UI paths
+  are absent, preventing duplicate normal-path execution.
 
 ### 4.5 Render-isolation evidence
 
-Record concrete counters such as:
+`session-ui-render-isolation.test.tsx` and `session-ui-store.test.ts` provide
+executable isolation evidence:
 
 ```text
-Activity elapsed tick:
-  Activity subscriber/render: +1
-  Conversation: +0
-  Status: +0
-  Composer: +0
+Activity slice update:
+  Activity +1
+  Conversation +0
+  Status +0
+  Composer +0
 
-Context/Usage status update:
-  Status: +1
-  Conversation: +0
+Status slice update:
+  Status +1
+  Conversation +0
+  Activity +0
+  Composer +0
 ```
 
-Exact numbers may differ if one operation legitimately affects more than one
-projection. Any cross-surface notification must be justified by shared source
-semantics, not convenience.
+The one-second elapsed refresh remains inside `ActivityView`; no Session-root
+presentation timer was reintroduced.
 
 ### 4.6 Responsive/manual evidence
 
-Record manual checks for at least:
+`session-workspace-layout.test.tsx` exercises the required width classes and
+representative heights, including 60x20, 72x24, 100x30, 120x30 and 160x40.
+Across those sizes the surface order remains Conversation -> Activity ->
+Composer -> Status -> Hints and Composer no longer carries the old 80% width.
 
-- 60x20;
-- 72x24;
-- 100x30;
-- 120x30;
-- 160x40.
+The same suite manually sets the Conversation ScrollBox to `scrollTop=4`,
+updates the Activity sibling, then verifies `scrollTop` remains 4. This proves
+an unrelated Activity update does not reset an existing manual transcript
+position in the test renderer.
 
-For each, record:
-
-- Conversation usability;
-- Activity behavior;
-- Composer width/focus;
-- StatusLine truncation;
-- overlay bounds;
-- Inspector closed/open placeholder behavior if implemented;
-- no unexpected scroll jumps.
+The Inspector placeholder remains closed/empty by design; Inspector content is
+deferred to UI Slice 2.
 
 ### 4.7 Test/build evidence
 
-Record exact final counts for:
+Final implementation verification before this delivery closeout:
 
-- architecture-focused tests;
-- full CLI tests;
-- Harness tests;
-- any Session Store/Runtime Store suites touched;
-- CLI typecheck;
-- Harness typecheck;
-- CLI production build;
-- `git diff --check`;
-- renderer stress loop.
+```text
+CLI tests                 250 pass / 0 fail / 824 expect() calls
+Harness tests             107 pass / 0 fail / 364 expect() calls
+CLI TypeScript            PASS
+Harness TypeScript        PASS
+CLI production build      PASS
+git diff --check          PASS
+renderer stress loop      PASS (10 mount/flush/destroy iterations)
+```
+
+The renderer stress loop covers Conversation, ToolUse, running Activity and
+the 60x20 / 72x24 / 100x30 / 120x30 / 160x40 size set. It uses OpenTUI's test
+renderer; TEST section 15 explicitly states that passing this loop does not
+prove all Bun/OpenTUI native defects are eliminated.
 
 ### 4.8 Known limitations
 
-Record any intentional deferrals, including:
+Known limitations at closeout:
 
-- Inspector content not yet implemented;
-- remaining legacy adapter;
-- OpenTUI native limitations;
-- keyboard edge cases deferred;
-- measured render paths not yet isolated.
-
-No limitation should be hidden merely to mark the stage complete.
+- Unified Inspector content is not implemented; only its surface/state seam is
+  present.
+- No legacy `useChat` / InputBar / SessionShell normal-path adapter remains.
+- React/OpenTUI tests still emit non-failing `act(...)` warnings in existing
+  renderer tests; these warnings are not counted as coverage.
+- **Windows live runtime limitation:** a real `npm run dev:cli` session on Bun
+  1.3.14 can still crash in the native OpenTUI path with a Bun main-thread
+  `Segmentation fault` whose crash report contains repeated `opentui.dll`
+  frames. The automated test-renderer stress loop does not reproduce this
+  production/watch-runtime failure. This is therefore a separate unresolved
+  native-runtime defect/reproduction gap, not evidence that the selector/store
+  architecture reverted to the old broad Session-root timer design.
 
 ## 5. Required Migration Checkpoints
 
 Delivery evidence should identify the implementation commit/checkpoint for:
 
 ```text
-A1 UI Store
-A2 Session Controller
-A3 Projection/Subscription Migration
-A4 Composer Decomposition
-A5 Command/Interaction Router
-A6 SessionWorkspace
-A7 Legacy Removal/Closeout
+A1 b85e655  feat(ui-arch): add session ui store contracts
+A2 87c6f79  refactor(ui-arch): extract session controller
+A3 50c20de  refactor(ui-arch): isolate session projections
+A4 0d1826a  refactor(ui-arch): decompose composer capabilities
+A5 6d5b323  refactor(ui-arch): centralize commands and interactions
+A6 e3a2828  refactor(ui-arch): compose session workspace surfaces
+A7 4bde056  refactor(ui-arch): remove legacy session ui paths
 ```
 
 This ensures a later regression can be bisected to a meaningful architecture
@@ -360,7 +395,7 @@ Do not mark this stage Delivered if any of the following remains true:
 - bottom-layer contracts were changed without separate approval;
 - tests/build are not fully Green.
 
-## 9. Planned Current-State Outcome
+## 9. Delivered Current-State Outcome
 
 After successful delivery, the repository should be ready for UI Slice 2 with
 this stable direction:
