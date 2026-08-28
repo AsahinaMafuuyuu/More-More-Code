@@ -4,6 +4,7 @@ import { testRender } from "@opentui/react/test-utils";
 import { ActivityView } from "../src/components/activity-view";
 import { ToolUse } from "../src/components/messages/tool-use";
 import { ThemeProvider } from "../src/providers/theme";
+import { TerminalDimensionsProvider } from "../src/providers/terminal-dimensions";
 import type { AgentActivityView } from "../src/lib/agent-activity-projection";
 import type { ToolUseView } from "../src/lib/tool-use-projection";
 
@@ -58,6 +59,14 @@ async function flush(setup: Awaited<ReturnType<typeof testRender>>) {
   });
 }
 
+function UiProviders({ children }: { children: React.ReactNode }) {
+  return (
+    <TerminalDimensionsProvider>
+      <ThemeProvider>{children}</ThemeProvider>
+    </TerminalDimensionsProvider>
+  );
+}
+
 describe("Runtime Activity UI", () => {
   test("advances elapsed time inside ActivityView without rerendering its parent", async () => {
     const startedAt = Date.now() - 1_000;
@@ -72,7 +81,7 @@ describe("Runtime Activity UI", () => {
     let parentRenders = 0;
     function Probe() {
       parentRenders += 1;
-      return <ThemeProvider><ActivityView activity={tickingActivity} /></ThemeProvider>;
+      return <UiProviders><ActivityView activity={tickingActivity} /></UiProviders>;
     }
 
     let setup!: Awaited<ReturnType<typeof testRender>>;
@@ -113,7 +122,7 @@ describe("Runtime Activity UI", () => {
     try {
       await act(async () => {
         setup = await testRender(
-          <ThemeProvider><ActivityView activity={tickingActivity} /></ThemeProvider>,
+          <UiProviders><ActivityView activity={tickingActivity} /></UiProviders>,
           { width: 100, height: 30 },
         );
       });
@@ -140,7 +149,7 @@ describe("Runtime Activity UI", () => {
     let medium!: Awaited<ReturnType<typeof testRender>>;
     await act(async () => {
       medium = await testRender(
-        <ThemeProvider><ActivityView activity={activity()} /></ThemeProvider>,
+        <UiProviders><ActivityView activity={activity()} /></UiProviders>,
         { width: 100, height: 30 },
       );
     });
@@ -157,7 +166,7 @@ describe("Runtime Activity UI", () => {
     let narrow!: Awaited<ReturnType<typeof testRender>>;
     await act(async () => {
       narrow = await testRender(
-        <ThemeProvider><ActivityView activity={activity()} /></ThemeProvider>,
+        <UiProviders><ActivityView activity={activity()} /></UiProviders>,
         { width: 60, height: 24 },
       );
     });
@@ -185,7 +194,7 @@ describe("Runtime Activity UI", () => {
     let setup!: Awaited<ReturnType<typeof testRender>>;
     await act(async () => {
       setup = await testRender(
-        <ThemeProvider><ToolUse view={view} /></ThemeProvider>,
+        <UiProviders><ToolUse view={view} /></UiProviders>,
         { width: 90, height: 20 },
       );
     });

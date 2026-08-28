@@ -20,11 +20,11 @@ import {
 } from 'react';
 
 import type { ReactNode } from 'react'; // ReactNode类型表示React组件的子节点类型
-import { useTerminalDimensions } from '@opentui/react'; // useTerminalDimensions是一个自定义hook，用于获取终端的宽高
 import type { ToastOptions, ToastVariant } from './types'; // 导入ToastOptions类型
 import { DEFAULT_DURATION } from './types'; // 导入默认持续时间
 import { SplitBorderChars } from '../../components/border';
 import { useTheme } from '../theme';
+import { useUiTerminalDimensions } from '../terminal-dimensions';
 
 export type ToastContextValue = {
     show: (options: ToastOptions) => void;
@@ -86,7 +86,7 @@ type ToastProps = {
 };
 
 function Toast({ currentToast }: ToastProps) {
-    const { width } = useTerminalDimensions(); // 获取终端的宽度
+    const { width } = useUiTerminalDimensions(); // 获取终端的宽度
     const { colors } = useTheme(); // 获取主题颜色
 
     if (!currentToast) {

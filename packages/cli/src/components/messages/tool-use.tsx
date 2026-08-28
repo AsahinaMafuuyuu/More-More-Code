@@ -1,9 +1,9 @@
 import { TextAttributes } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/react";
 import { useMemo, useState } from "react";
 import type { ToolUseStatus, ToolUseView } from "../../lib/tool-use-projection";
 import { createToolUseDisplay } from "../../lib/tool-use-view-model";
 import { useTheme } from "../../providers/theme";
+import { useUiTerminalDimensions } from "../../providers/terminal-dimensions";
 import { EmptyBorder } from "../border";
 
 type Props = {
@@ -12,7 +12,7 @@ type Props = {
 
 export function ToolUse({ view }: Props) {
   const { colors } = useTheme();
-  const dimensions = useTerminalDimensions();
+  const dimensions = useUiTerminalDimensions();
   const [expanded, setExpanded] = useState(false);
   const display = useMemo(
     () => createToolUseDisplay(view, Math.max(20, dimensions.width - 10)),

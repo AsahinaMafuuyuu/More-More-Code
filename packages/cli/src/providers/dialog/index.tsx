@@ -7,11 +7,12 @@
 import { createContext, useContext, useState, useCallback } from "react";
 import type { ReactNode } from "react";
 import { TextAttributes, RGBA } from "@opentui/core";
-import { useKeyboard, useTerminalDimensions } from "@opentui/react";
+import { useKeyboard } from "@opentui/react";
 import type { DialogConfig } from "./types";
 import { useKeyboardLayer } from "../keyboard-layer";
 import { useTheme } from "../theme";
 import { resolveInteractionAction } from "../../ui/session/interaction/interaction-router";
+import { useUiTerminalDimensions } from "../terminal-dimensions";
 
 export type DialogContextValue = {
     open: (config: DialogConfig) => void;
@@ -70,7 +71,7 @@ type DialogProps = {
 function Dialog({ currentDialog, close }: DialogProps) {
     const { colors } = useTheme();
     const { isTopLayer } = useKeyboardLayer();
-    const dimensions = useTerminalDimensions();
+    const dimensions = useUiTerminalDimensions();
 
     useKeyboard((key) => {
         if (!currentDialog || key.name !== "escape") return;

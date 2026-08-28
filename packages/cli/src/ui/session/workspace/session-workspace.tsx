@@ -1,9 +1,9 @@
 import type { ReactNode } from "react";
-import { useTerminalDimensions } from "@opentui/react";
 import type { ScrollBoxRenderable } from "@opentui/core";
 import type { RefObject } from "react";
 import { ConversationPane } from "./conversation-pane";
 import { ActivityDock } from "./activity-dock";
+import { useUiTerminalDimensions } from "../../../providers/terminal-dimensions";
 
 export type SessionWorkspaceLayout = {
   widthClass: "narrow" | "medium" | "wide";
@@ -39,7 +39,7 @@ export function SessionWorkspace({
   inspector?: ReactNode;
   conversationScrollRef?: RefObject<ScrollBoxRenderable | null>;
 }) {
-  const dimensions = useTerminalDimensions();
+  const dimensions = useUiTerminalDimensions();
   const layout = resolveSessionWorkspaceLayout(dimensions.width, dimensions.height);
   return (
     <box

@@ -6,6 +6,7 @@ import {
   SessionWorkspace,
   resolveSessionWorkspaceLayout,
 } from "../src/ui/session/workspace/session-workspace";
+import { TerminalDimensionsProvider } from "../src/providers/terminal-dimensions";
 
 describe("SessionWorkspace layout", () => {
   test("uses explicit width/height classes without an 80% Composer constraint", () => {
@@ -25,13 +26,15 @@ describe("SessionWorkspace layout", () => {
       let setup!: Awaited<ReturnType<typeof testRender>>;
       await act(async () => {
         setup = await testRender(
-          <SessionWorkspace
-            conversation={<text>Conversation sentinel</text>}
-            activity={<text>Activity sentinel</text>}
-            composer={<text>Composer sentinel</text>}
-            status={<text>Status sentinel</text>}
-            hints={<text>Hints sentinel</text>}
-          />,
+          <TerminalDimensionsProvider>
+            <SessionWorkspace
+              conversation={<text>Conversation sentinel</text>}
+              activity={<text>Activity sentinel</text>}
+              composer={<text>Composer sentinel</text>}
+              status={<text>Status sentinel</text>}
+              hints={<text>Hints sentinel</text>}
+            />
+          </TerminalDimensionsProvider>,
           { width, height },
         );
       });
@@ -61,17 +64,19 @@ describe("SessionWorkspace layout", () => {
       const [tick, setTick] = useState(0);
       bumpActivity = () => setTick((value) => value + 1);
       return (
-        <SessionWorkspace
-          conversationScrollRef={scrollRef}
-          conversation={(
-            <box flexDirection="column">
-              {Array.from({ length: 30 }, (_, index) => <text key={index}>Message {index}</text>)}
-            </box>
-          )}
-          activity={<text>Activity {tick}</text>}
-          composer={<text>Composer</text>}
-          status={<text>Status</text>}
-        />
+        <TerminalDimensionsProvider>
+          <SessionWorkspace
+            conversationScrollRef={scrollRef}
+            conversation={(
+              <box flexDirection="column">
+                {Array.from({ length: 30 }, (_, index) => <text key={index}>Message {index}</text>)}
+              </box>
+            )}
+            activity={<text>Activity {tick}</text>}
+            composer={<text>Composer</text>}
+            status={<text>Status</text>}
+          />
+        </TerminalDimensionsProvider>
       );
     }
 

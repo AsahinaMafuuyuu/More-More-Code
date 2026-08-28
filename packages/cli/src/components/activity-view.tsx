@@ -1,5 +1,4 @@
 import { TextAttributes } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/react";
 import { useEffect, useMemo, useState } from "react";
 import type { AgentRunStatus } from "@more-more-code/harness";
 import {
@@ -8,6 +7,7 @@ import {
 } from "../lib/agent-activity-projection";
 import { createActivityRows, formatActivityHeader } from "../lib/activity-view-model";
 import { useTheme } from "../providers/theme";
+import { useUiTerminalDimensions } from "../providers/terminal-dimensions";
 import { resolveTuiRenderProfileFromEnvironment } from "../tui/render-profile";
 import { EmptyBorder } from "./border";
 
@@ -17,7 +17,7 @@ type Props = {
 
 export function ActivityView({ activity }: Props) {
   const { colors } = useTheme();
-  const dimensions = useTerminalDimensions();
+  const dimensions = useUiTerminalDimensions();
   const renderProfile = resolveTuiRenderProfileFromEnvironment();
   const [showHistory, setShowHistory] = useState(true);
   const [turnExpansion, setTurnExpansion] = useState<Record<string, boolean>>({});

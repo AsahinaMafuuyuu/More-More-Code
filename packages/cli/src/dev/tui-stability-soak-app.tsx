@@ -11,6 +11,7 @@ import { ToolUse } from "../components/messages/tool-use";
 import { DialogProvider, useDialog } from "../providers/dialog";
 import { KeyboardLayerProvider } from "../providers/keyboard-layer";
 import { ThemeProvider } from "../providers/theme";
+import { TerminalDimensionsProvider } from "../providers/terminal-dimensions";
 import { resolveTuiRenderProfile } from "../tui/render-profile";
 import { assertSupportedBunRuntime } from "../tui/runtime-compatibility";
 import { parseTuiSoakOptions, resolveTuiSoakPressure } from "./tui-soak-options";
@@ -66,15 +67,17 @@ const renderer = await createCliRenderer({
 });
 const root = createRoot(renderer);
 root.render(
-  <ThemeProvider>
-    <KeyboardLayerProvider>
-      <DialogProvider>
-        <SessionUiStoreProvider store={store}>
-          <SoakWorkspace />
-        </SessionUiStoreProvider>
-      </DialogProvider>
-    </KeyboardLayerProvider>
-  </ThemeProvider>,
+  <TerminalDimensionsProvider>
+    <ThemeProvider>
+      <KeyboardLayerProvider>
+        <DialogProvider>
+          <SessionUiStoreProvider store={store}>
+            <SoakWorkspace />
+          </SessionUiStoreProvider>
+        </DialogProvider>
+      </KeyboardLayerProvider>
+    </ThemeProvider>
+  </TerminalDimensionsProvider>,
 );
 
 const workloadTimers: Array<ReturnType<typeof setInterval>> = [];

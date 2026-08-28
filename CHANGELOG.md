@@ -126,6 +126,11 @@ All notable changes to MORE MORE CODE are recorded here.
 
 ### Fixed
 
+- OpenTUI terminal dimensions now use one application-level resize subscription
+  shared through `TerminalDimensionsProvider`; persistent historical ToolUse
+  rows no longer add one `CliRenderer` `resize` listener each, preventing
+  interaction-heavy Sessions from crossing EventEmitter's listener limit and
+  emitting `MaxListenersExceededWarning`.
 - Runtime Activity elapsed refresh is now isolated inside `ActivityView` instead of a one-second `useChat` Session-root timer, preventing every timer tick from reconciling the full Conversation/scrollbox/ToolUse/Input tree and reducing the Windows Bun/OpenTUI native-renderer crash trigger while preserving live Run/Turn/Step timing.
 - Local Session creation now preserves the Web Crypto receiver when using the production default UUID generator, preventing Bun `ERR_INVALID_THIS` / `Expected this to be instanceof Crypto` failures before Provider execution; regression coverage now exercises the real default-ID path.
 - AI SDK runtime messages with explicit optional fields such as `providerMetadata: undefined` are now normalized at one CLI durable-message boundary before Session Tree construction. Object `undefined` is omitted, array holes/`undefined` retain position as `null`, valid Provider metadata survives restart, unsupported JavaScript values remain fail-closed, and normal sync/compaction/Tool-terminal persistence no longer maintain divergent cleanup policies.
