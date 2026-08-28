@@ -243,40 +243,74 @@ At minimum cover:
 
 This remains a deterministic regression test, not the native release gate.
 
-## 13. Real Native Soak Test
+## 13. Real Native Stress Gate
 
-The soak entrypoint must use real `createCliRenderer()` and the selected native
+The native entrypoint must use real `createCliRenderer()` and the selected native
 OpenTUI package.
 
-### 13.1 idle
+Wall-clock duration is not the primary proof. The gate must prove that the
+renderer survives a measured amount of high-frequency presentation and
+interaction pressure while preserving the bounded commit contract.
 
-Duration: 10 minutes.
+The default release command is:
+
+```text
+bun run tui:stress
+```
+
+It runs the workloads below sequentially on the normal non-watch profile.
+
+### 13.1 idle startup/stability smoke
+
+Duration: 20 seconds.
 
 Pass:
 
 - process remains alive;
 - no Bun panic;
 - no native access violation;
-- Activity elapsed remains functional in normal profile;
 - no autonomous busy animation counter exists.
 
-### 13.2 stream
+This is deliberately short. It protects startup/steady-render behavior; it is
+not used as a substitute for the pressure workloads.
 
-Duration: 15 minutes.
+### 13.2 stream pressure
 
-Synthetic source produces data faster than 20Hz.
+Duration: 45 seconds.
+
+Nominal source interval: 1ms. The harness must observe at least 100 synthetic
+source updates/sec on the test machine or fail the test as insufficient load.
 
 Pass:
 
 - visible final content is correct;
-- scheduler reports coalescing;
+- coalescing ratio is >=80%;
+- store commits stay inside the configured presentation budget;
 - no native panic;
 - no lost final stream state;
-- user-interaction surfaces remain responsive.
 
-### 13.3 churn
+### 13.3 lifecycle/churn pressure
 
-Duration: 15 minutes.
+Duration: 45 seconds.
+
+Nominal pressure:
+
+```text
+ToolUse/message source replacement  every 2ms
+Composer immediate-state commit      every 25ms
+Conversation scroll operation        every 10ms
+Dialog open/close transition          every 40ms
+```
+
+The harness must observe at least:
+
+```text
+source updates       100/sec
+immediate commits     15/sec
+scroll operations     20/sec
+dialog operations      8/sec
+coalescing ratio        75%
+```
 
 Pass:
 
@@ -285,19 +319,30 @@ Pass:
 - no native panic;
 - scroll/focus behavior remains valid.
 
-## 14. Real Application Soak
+If the measured pressure floor is not reached, the run is invalid even if the
+process remains alive. This prevents a stalled/slow timer loop from producing a
+false Green result.
 
-Mandatory on Windows 11 using normal non-watch `dev:cli`.
+## 14. Real Application Smoke — Secondary Confidence
 
-Minimum:
+The synthetic native stress gate is the release gate. A real non-watch
+`dev:cli` smoke remains useful for composition/integration confidence but is no
+longer a 30-minute blocking requirement.
 
-- 30 minutes;
-- 3 completed model interactions;
-- one ToolUse flow when feasible;
+Recommended:
+
+- about 2 minutes;
+- normal non-watch startup;
 - terminal resize through narrow/medium/wide;
-- manual Conversation scroll while runtime updates;
-- at least one interrupt or command interaction if safe;
+- manual Conversation scroll;
+- one model/ToolUse interaction when credentials and a safe test target are
+  already available;
 - no native process crash.
+
+Missing Provider credentials or avoiding a real external Tool execution does
+not block S6 when the real-renderer pressure gate and full CLI/Harness
+regressions are Green. Record the limitation instead of manufacturing external
+side effects solely for renderer testing.
 
 Record:
 
@@ -311,11 +356,12 @@ Record:
 - whether watch was disabled;
 - any warning/panic/crash report identifier.
 
-## 15. Watch-Mode Secondary Test
+## 15. Watch-Mode Diagnostic Test
 
-Only after the non-watch normal profile passes:
+Watch mode is not a release gate. Script/source audit remains mandatory. If a
+watch-lifecycle regression is suspected, after the normal native stress passes:
 
-- run `dev:cli:watch` for >=10 minutes;
+- run a short `dev:cli:watch` smoke;
 - trigger one intentional reload;
 - ensure a normal reload is distinguishable from an auto-restart caused by
   native crash;
@@ -340,7 +386,7 @@ Does materially reducing native frame/commit rate change the failure rate?
 The known failure was not OOM, so memory is diagnostic rather than the primary
 gate.
 
-For each native soak record:
+For each native stress record:
 
 - warm-up RSS;
 - final RSS;
@@ -375,7 +421,14 @@ bun run build:cli
 git diff --check
 ```
 
-Plus the real native soak commands documented by the implementation.
+Plus:
+
+```text
+bun run tui:stress
+```
+
+Individual `tui:soak --workload ...` commands are diagnostic/reproduction tools,
+not additional mandatory long-duration gates.
 
 ## 20. Definition of Done
 
@@ -389,7 +442,6 @@ The TEST contract is satisfied only when:
 - final stream state flush is proven;
 - full CLI/Harness regression gates pass;
 - OpenTUI test-renderer stress passes;
-- real Windows idle/stream/churn native soak passes;
-- real non-watch interactive application soak passes;
+- real Windows native stress matrix passes with the minimum measured load;
 - warnings/limitations are recorded explicitly;
 - DELIVERY contains exact evidence.

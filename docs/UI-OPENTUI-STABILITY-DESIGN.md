@@ -178,7 +178,7 @@ Expected policy:
 ```
 
 The final DELIVERY must state the exact Bun version/revision used for the
-passing native soak.
+passing native stress matrix.
 
 Repository metadata should record `bun@1.4.0` as the expected development
 baseline, while runtime logic remains based on the explicit minimum/diagnostic
@@ -381,7 +381,7 @@ native methods to count frames.
 
 Sampling must itself be low-frequency and disabled by default.
 
-## 15. Native Soak Harness
+## 15. Native Stress Harness
 
 Add a production-renderer stability entrypoint, for example:
 
@@ -401,20 +401,25 @@ Profiles:
 - no animated spinner;
 - Activity normal 1 Hz elapsed refresh.
 
-### stream
+### stream pressure
 
-- deterministic text chunks produced faster than the 20 Hz presentation cap;
+- deterministic text chunks produced at a nominal 1ms interval;
+- measured source pressure must remain >=100 updates/sec;
 - scheduler must coalesce commits;
 - ToolUse state transitions;
 - Activity progress updates.
 
-### churn
+### lifecycle/churn pressure
 
 - repeated mount/unmount or replacement of ToolUse/message groups;
-- scroll activity;
-- dialog/overlay open-close cycles where stable to automate.
+- nominal source replacement interval 2ms;
+- immediate Composer state churn at 25ms;
+- scroll operations at 10ms;
+- dialog/overlay open-close cycles at 40ms.
 
-The soak harness must not call a Provider or Tool executor.
+The harness must assert pressure floors and coalescing ratios so a timer loop
+that stalls under load cannot accidentally pass only because the process stayed
+alive. The harness must not call a Provider or Tool executor.
 
 ## 16. Windows Acceptance Matrix
 
@@ -435,10 +440,10 @@ M3  M2 + static busy indicator + render profile + UI commit scheduler
     intended normal delivery profile.
 
 M4  M3 without --watch
-    mandatory release gate.
+    mandatory measured native-stress release gate.
 
 M5  M3 with --watch
-    development-mode secondary gate.
+    development-mode secondary diagnostic; not a release gate.
 
 M6  safe profile
     only if normal still crashes; diagnostic mitigation, not normal success.
@@ -476,7 +481,7 @@ triggered the workload.
 If M4 still crashes after the selected Bun/OpenTUI versions and render-pressure
 fixes:
 
-1. reproduce with the synthetic native soak if possible;
+1. reproduce with the synthetic native stress harness if possible;
 2. try the safe profile;
 3. compare OpenTUI 0.5.9 vs 0.5.8 if not already isolated;
 4. capture a redacted Bun crash report and minimal workload characteristics;
@@ -493,6 +498,7 @@ The target is not “OpenTUI can never crash.” The stage succeeds when:
 - streaming UI work is bounded;
 - normal startup is watcher-independent;
 - native stability has a reproducible real-renderer test surface;
-- the documented Windows normal-profile soak completes without native panic;
+- the documented Windows normal-profile native stress matrix completes without
+  native panic while reaching its measured pressure floors;
 - future regressions can be attributed to runtime version/render profile rather
   than an opaque monolithic UI tree.

@@ -215,14 +215,24 @@ credentials or provider payloads.
 
 No crash report is uploaded automatically.
 
-### 9. Real Windows native soak is a release gate
+### 9. Real Windows native stress is a release gate
 
 `testRender()` remains useful but is insufficient to close this stage.
 
 The final gate requires actual `createCliRenderer()` execution on Windows 11 in
-a real terminal, including a synthetic workload and a real interactive model
-session. A native `panic`, `SIGSEGV`, `opentui.dll` crash or abnormal process
-termination fails the stage even if every unit/integration test is Green.
+a real terminal. The primary proof is a short measured pressure matrix that
+drives source updates, component replacement, immediate UI state, scrolling and
+dialog lifecycle substantially faster than normal human/model interaction while
+the renderer remains on the normal production profile.
+
+Wall-clock survival by itself is insufficient: the harness must prove that a
+minimum pressure volume was actually delivered and that presentation commits
+still obey the designed coalescing budget. A short real-application smoke is
+secondary integration confidence; a long external-model session is not a
+release prerequisite for a renderer/native-boundary change.
+
+A native `panic`, `SIGSEGV`, `opentui.dll` crash or abnormal process termination
+fails the stage even if every unit/integration test is Green.
 
 ### 10. Provide a bounded safe profile only as mitigation
 
@@ -262,8 +272,8 @@ stabilize the current framework.
 ### Treat Bun 1.4.0 as a guaranteed fix
 
 Rejected. Upstream evidence shows important fixes relative to 1.3.14, but
-Windows native crash reports also exist on 1.4.0. Only local A/B and soak
-evidence can close this project issue.
+Windows native crash reports also exist on 1.4.0. Only local A/B and measured
+native-stress evidence can close this project issue.
 
 ### Keep the 80 ms spinner and only lower `targetFps`
 

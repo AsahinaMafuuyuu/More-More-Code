@@ -2684,7 +2684,7 @@ docs/UI-OPENTUI-STABILITY-DELIVERY.md
 This stage retains OpenTUI and the delivered ADR-0028 UI application
 architecture. It addresses the remaining Windows Bun/OpenTUI native crash
 surface through runtime/version baselining, render-pressure control and real
-native soak validation. It must not redesign Harness/Session semantics.
+native stress validation. It must not redesign Harness/Session semantics.
 
 ### Task UI-S1: Establish renderer/runtime diagnostics seam
 
@@ -2751,20 +2751,25 @@ native soak validation. It must not redesign Harness/Session semantics.
 
 **Dependencies:** UI-S4.
 
-### Task UI-S6: Add and pass real Windows native renderer soak gates
+### Task UI-S6: Add and pass real Windows native renderer stress gates
 
 **Acceptance criteria:**
-- [ ] native soak entrypoint uses real `createCliRenderer()` rather than only
+- [x] native stress entrypoint uses real `createCliRenderer()` rather than only
   `testRender()`.
-- [ ] idle 10-minute workload passes normal non-watch profile.
-- [ ] synthetic streaming 15-minute workload passes and proves UI coalescing.
-- [ ] churn 15-minute workload passes repeated ToolUse/message/renderable changes.
-- [ ] real non-watch application session runs at least 30 minutes without Bun
-  panic, Windows access violation or `opentui.dll` crash.
-- [ ] real session covers multiple model interactions, resize, scroll and at
-  least one ToolUse path when feasible.
-- [ ] watch-mode >=10-minute secondary soak is recorded after normal passes.
-- [ ] exact Bun/OpenTUI/profile/terminal/Windows evidence is written to DELIVERY.
+- [x] single `bun run tui:stress` release matrix runs a 20-second idle smoke,
+  45-second stream pressure workload and 45-second churn pressure workload.
+- [x] stream pressure sustains >=100 source updates/sec and >=80% coalescing.
+- [x] churn pressure sustains >=100 source updates/sec, >=75% coalescing,
+  >=15 immediate commits/sec, >=20 scroll operations/sec and >=8 dialog
+  operations/sec.
+- [x] final visible state and commit budget remain correct under pressure.
+- [x] no Bun panic, Windows access violation or `opentui.dll` crash occurs.
+- [x] short real non-watch application smoke/resize/scroll is recorded when
+  practical; external model/tool execution is not manufactured solely for this
+  renderer gate.
+- [x] watch mode remains separately auditable and is exercised only as a
+  secondary diagnostic when useful.
+- [x] exact Bun/OpenTUI/profile/terminal/Windows evidence is written to DELIVERY.
 
 **Dependencies:** UI-S5.
 

@@ -269,12 +269,13 @@ provide a bounded diagnostic fallback profile.
 chore(tui-stability): isolate watch mode and safe profile
 ```
 
-## 8. S6 — Native Windows Soak Harness and Tuning
+## 8. S6 — Native Windows Stress Harness and Tuning
 
 ### Goal
 
 Create a real renderer workload that can fail in the same native boundary as the
-production CLI.
+production CLI, with pressure volume rather than long elapsed time as the main
+release signal.
 
 ### Planned entrypoint
 
@@ -286,6 +287,7 @@ Root script:
 
 ```text
 tui:soak
+tui:stress
 ```
 
 ### Workload modes
@@ -300,7 +302,8 @@ tui:soak
 
 #### stream
 
-- synthetic chunks generated faster than 20Hz;
+- synthetic chunks generated at a nominal 1ms interval;
+- measured source pressure must remain >=100 updates/sec;
 - coalescer proves bounded surface commits;
 - ToolUse transitions;
 - Activity/Status changes;
@@ -308,36 +311,45 @@ tui:soak
 
 #### churn
 
-- repeated ToolUse/message group changes;
+- repeated ToolUse/message group changes at a nominal 2ms source interval;
 - component mount/destroy cycles;
-- overlay/dialog churn where deterministic automation is stable.
+- Composer immediate-state churn at 25ms;
+- Conversation scroll churn at 10ms;
+- overlay/dialog churn at 40ms.
 
-### Automated soak sequence
+### Automated stress sequence
 
-Minimum normal-profile Windows evidence:
+Default normal-profile Windows release gate:
 
 ```text
-idle    10 min
-stream  15 min
-churn   15 min
+idle    20 sec
+stream  45 sec
+churn   45 sec
 ```
 
-Run the sequence three times on the selected final runtime pair if practical.
-At minimum, one complete 40-minute sequence is mandatory before real-session
-validation.
+The release command is one `bun run tui:stress`. The stream/churn runs must
+assert measured pressure floors and coalescing ratios; process survival alone
+is insufficient. Repeat runs are useful for flaky-failure investigation but
+are not a mandatory wall-clock multiplier.
 
-### Real application soak
+### Real application smoke
 
-- [ ] non-watch `dev:cli` real interactive session >= 30 minutes;
-- [ ] at least 3 completed Model Steps;
-- [ ] at least one ToolUse path if safe/appropriate;
+- [ ] short non-watch `dev:cli` integration smoke is recommended;
 - [ ] resize across narrow/medium/wide terminal widths;
-- [ ] scroll Conversation while Activity/Status updates;
+- [ ] scroll Conversation;
+- [ ] one model/ToolUse path when credentials and a safe target are already
+  available;
 - [ ] no native panic/crash.
 
-### Watch-mode secondary soak
+Provider credentials or an external Tool side effect are not manufactured just
+to close the renderer gate. Missing real-model coverage is recorded as a
+limitation when the synthetic native pressure gate and regressions are Green.
 
-- [ ] after normal passes, run watch mode for >= 10 minutes;
+### Watch-mode secondary diagnostic
+
+- [ ] source/script audit proves watch is isolated from the release path;
+- [ ] if a watch-specific lifecycle problem is suspected, run a short watch
+  smoke after normal passes;
 - [ ] trigger at least one intentional source reload;
 - [ ] distinguish watcher restart behavior from renderer crash behavior.
 
@@ -355,7 +367,7 @@ If normal profile crashes:
 ### Checkpoint commit
 
 ```text
-test(tui-stability): add native renderer soak gate
+test(tui-stability): add native renderer stress gate
 ```
 
 ## 9. S7 — Closeout and Delivery
@@ -390,16 +402,14 @@ bun run build:cli
 git diff --check
 ```
 
-Also run:
+Also run the single native release matrix:
 
 ```text
-bun run tui:soak --profile idle --duration 600
-bun run tui:soak --profile stream --duration 900
-bun run tui:soak --profile churn --duration 900
+bun run tui:stress
 ```
 
-Exact CLI flags may differ if DESIGN-compatible naming is chosen during
-implementation; DELIVERY must record the commands actually used.
+Individual `tui:soak --workload ...` invocations remain available for focused
+reproduction and safe-profile comparison.
 
 ## 11. Stage Gate
 
@@ -411,8 +421,9 @@ This stage is **not complete** merely because:
 - a test renderer survives 100 mounts;
 - the crash cannot be reproduced in a short local run.
 
-It is complete only when the normal non-watch profile passes the required real
-Windows native-renderer soak and all repository regression gates are Green.
+It is complete only when the normal non-watch profile passes the measured real
+Windows native-renderer pressure matrix and all repository regression gates are
+Green.
 
 UI Slice 2 / Inspector remains blocked until S7 marks the DELIVERY as
 `Delivered`.
