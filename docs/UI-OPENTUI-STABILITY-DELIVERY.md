@@ -338,7 +338,7 @@ S3 OpenTUI Migration                          d9cfd3a
 S4 Render-Storm Removal + Commit Scheduler    7d441ee
 S5 Watch Isolation + Stability Profiles       0424909
 S6 Native pressure harness / validation       ba9fa81
-S7 Delivery closeout                          recorded by the closeout commit
+S7 Delivery closeout                          8226c05
 ```
 
 ## 6. Delivery Rejection Conditions
