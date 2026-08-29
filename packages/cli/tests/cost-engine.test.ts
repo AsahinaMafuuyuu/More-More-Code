@@ -86,7 +86,6 @@ describe("Pricing resolver", () => {
       rates: {
         inputNoCacheUsdPerMillionTokens: 0.44,
         cacheReadUsdPerMillionTokens: 0.014,
-        cacheWriteUsdPerMillionTokens: 0.44,
         outputUsdPerMillionTokens: 1.32,
       },
     });
@@ -105,13 +104,12 @@ describe("Pricing resolver", () => {
       rates: {
         inputNoCacheUsdPerMillionTokens: 0.22,
         cacheReadUsdPerMillionTokens: 0.007,
-        cacheWriteUsdPerMillionTokens: 0.22,
         outputUsdPerMillionTokens: 0.66,
       },
     });
   });
 
-  test("uses the second weekday DeepSeek peak window boundary exactly", () => {
+  test("uses the second daily DeepSeek peak window boundary exactly", () => {
     const before = resolvePricingRevision({
       providerId: "deepseek",
       providerKind: "deepseek",
@@ -127,6 +125,42 @@ describe("Pricing resolver", () => {
 
     expect(before?.revisionId).toEndWith(":off-peak");
     expect(atBoundary?.revisionId).toEndWith(":peak");
+  });
+
+  test("applies DeepSeek peak pricing on weekends too", () => {
+    const pricing = resolvePricingRevision({
+      providerId: "deepseek",
+      providerKind: "deepseek",
+      modelId: "deepseek-v4-flash",
+      at: Date.parse("2026-08-29T06:46:47.744Z"),
+    });
+
+    expect(pricing?.revisionId).toBe(
+      "deepseek/deepseek-v4-flash@2026-08-official:peak",
+    );
+    expect(pricing?.rates).toMatchObject({
+      inputNoCacheUsdPerMillionTokens: 0.44,
+      cacheReadUsdPerMillionTokens: 0.014,
+      outputUsdPerMillionTokens: 1.32,
+    });
+  });
+
+  test("uses the current DeepSeek tariff from its official August 16 effective time", () => {
+    const before = resolvePricingRevision({
+      providerId: "deepseek",
+      providerKind: "deepseek",
+      modelId: "deepseek-v4-flash",
+      at: Date.parse("2026-08-16T15:59:59.999Z"),
+    });
+    const after = resolvePricingRevision({
+      providerId: "deepseek",
+      providerKind: "deepseek",
+      modelId: "deepseek-v4-flash",
+      at: Date.parse("2026-08-16T16:00:00.000Z"),
+    });
+
+    expect(before).toBeNull();
+    expect(after).not.toBeNull();
   });
 });
 
@@ -192,6 +226,28 @@ describe("Cost Engine", () => {
       cacheWriteUsd: 0,
       outputUsd: 0.00066,
       totalUsd: 0.001652,
+      quality: "calculated",
+    });
+  });
+
+  test("prices the observed Saturday DeepSeek request with peak rates", () => {
+    const pricing = resolvePricingRevision({
+      providerId: "deepseek",
+      providerKind: "deepseek",
+      modelId: "deepseek-v4-flash",
+      at: Date.parse("2026-08-29T06:46:47.744Z"),
+    });
+    expect(pricing).not.toBeNull();
+
+    expect(calculateModelStepCost({
+      inputTokens: { total: 18_326, noCache: 2_454, cacheRead: 15_872 },
+      outputTokens: { total: 923, text: 769, reasoning: 154 },
+    }, pricing!)).toEqual({
+      inputUsd: 0.00107976,
+      cacheReadUsd: 0.000222208,
+      cacheWriteUsd: 0,
+      outputUsd: 0.00121836,
+      totalUsd: 0.002520328,
       quality: "calculated",
     });
   });

@@ -1,10 +1,21 @@
 export {
   AgentLoop,
   AgentLoopBusyError,
+  AgentLoopMaxExecutionStepsError,
+  AgentLoopMaxModelLoopsError,
+  AgentLoopMaxToolCallsError,
+  AgentLoopMaxModelStepsError,
   AgentLoopMaxStepsError,
+  AgentLoopMaxToolStepsError,
   AgentLoopMaxTurnsError,
 } from "./agent-loop";
 export type { AgentLoopOptions } from "./agent-loop";
+export {
+  DEFAULT_TOOL_BATCH_EXECUTION,
+  MAX_TOOL_BATCH_CONCURRENCY,
+  ToolBatchScheduler,
+} from "./tool-batch-scheduler";
+export type { ToolBatchWave } from "./tool-batch-scheduler";
 
 export {
   ContextManager,
@@ -12,6 +23,14 @@ export {
   inferContextCategory,
   inferContextStability,
 } from "./context";
+export {
+  assertRehydratedCheckpointEquivalent,
+  createCompactionCheckpointV2,
+  createEmptyCompactionCheckpointState,
+  renderCompactionCheckpointState,
+  validateCompactionCheckpointV2,
+} from "./compaction-checkpoint";
+export type { CompactionCheckpointValidationResult } from "./compaction-checkpoint";
 export {
   ExecutionProjectionError,
   projectAgentRun,
@@ -109,6 +128,11 @@ export type {
 } from "./tool-result-projection";
 export type {
   ContextBudget,
+  CompactionCheckpointFact,
+  CompactionCheckpointState,
+  CompactionCheckpointV2,
+  CompactionPlan,
+  ContextAnchorPriority,
   ContextCompactionMetadata,
   ContextCompactionPolicy,
   ContextCompactionTrigger,
@@ -123,6 +147,7 @@ export type {
   ContextRecordCategory,
   ContextRecordKind,
   ContextStabilityClass,
+  RequiredContextAnchor,
 } from "./context";
 export type {
   SessionBranchSummaryEntry,
@@ -157,6 +182,8 @@ export type {
   AgentInteractionMetadata,
   AgentLoopAdapter,
   AgentLoopRunOptions,
+  AgentPendingInteractionOutcome,
+  AgentPendingInteractionOutcomeReason,
   AgentModelStep,
   AgentModelStepContext,
   AgentModelStepResult,
@@ -167,11 +194,15 @@ export type {
   AgentStepProgress,
   AgentStepStatus,
   AgentToolCall,
+  AgentToolBatchExecution,
+  AgentToolExecutionEffect,
+  AgentToolExecutionSafety,
   AgentToolStep,
   AgentToolStepContext,
   AgentTurn,
   AgentTurnCause,
   AgentTurnStatus,
+  ToolExecutionMode,
 } from "./types";
 export {
   isRuntimeEventType,

@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted
+Accepted. The age/aggregate-pressure projection policy in this ADR is
+superseded by ADR-0030; Session authority, strategy-aware projection and manual
+Compaction boundaries remain accepted.
 
 ## Date
 

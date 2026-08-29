@@ -6,6 +6,7 @@ import {
     toolInputSchemas,
 } from "@more-more-code/shared";
 import type {
+    AgentToolExecutionSafety,
     PermissionRequest,
     PermissionResource,
 } from "@more-more-code/harness";
@@ -31,11 +32,23 @@ const NATIVE_TOOL_CAPABILITIES: Record<string, ToolCapability[]> = {
     bash: ["process.execute"],
 };
 
+const NATIVE_TOOL_EXECUTION_SAFETY: Record<string, AgentToolExecutionSafety> = {
+    readFile: { parallelSafe: true, effect: "read" },
+    listDirectory: { parallelSafe: true, effect: "read" },
+    glob: { parallelSafe: true, effect: "read" },
+    grep: { parallelSafe: true, effect: "read" },
+    loadSkill: { parallelSafe: true, effect: "read" },
+    writeFile: { parallelSafe: false, effect: "write" },
+    editFile: { parallelSafe: false, effect: "write" },
+    bash: { parallelSafe: false, effect: "process" },
+};
+
 export type RegisteredToolDefinition = {
     name: string;
     source: ToolSourceKind;
     description: string;
     capabilities: ToolCapability[];
+    executionSafety: AgentToolExecutionSafety;
     availableModes: ModeType[];
 };
 
@@ -90,6 +103,10 @@ export class ToolRegistry {
                 description: typeof contract.description === "string" ? contract.description : "",
                 inputSchema: z.toJSONSchema(contract.inputSchema as z.ZodType),
                 capabilities: [...(NATIVE_TOOL_CAPABILITIES[name] ?? [])],
+                executionSafety: {
+                    ...(NATIVE_TOOL_EXECUTION_SAFETY[name]
+                        ?? { parallelSafe: false, effect: "unknown" as const }),
+                },
                 availableModes: [
                     ...(planNames.has(name) ? [Mode.PLAN] : []),
                     ...(buildNames.has(name) ? [Mode.BUILD] : []),
@@ -115,6 +132,10 @@ export class ToolRegistry {
             source,
             description: typeof contract.description === "string" ? contract.description : "",
             capabilities: [...(NATIVE_TOOL_CAPABILITIES[name] ?? [])],
+            executionSafety: {
+                ...(NATIVE_TOOL_EXECUTION_SAFETY[name]
+                    ?? { parallelSafe: false, effect: "unknown" as const }),
+            },
             availableModes: [
                 ...(planNames.has(name) ? [Mode.PLAN] : []),
                 ...(buildNames.has(name) ? [Mode.BUILD] : []),

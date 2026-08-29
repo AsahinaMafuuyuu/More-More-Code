@@ -2,9 +2,7 @@
 
 ## Multi-Agent Collaboration
 
-- Multi-agent collaboration is authorized for this repository when work can be divided into concrete, bounded subtasks that can make useful progress independently. It is permitted, not mandatory; keep small or tightly sequential tasks with the primary agent when delegation would add more coordination than value.
-- The primary agent remains accountable for architecture, scope, integration, verification, and the final result. Delegation does not transfer user approval or broaden the actions permitted by the original request.
-- Give every sub-agent explicit ownership of files, modules, or a read-only question. Tell code-writing agents that they share the worktree, must preserve other contributors' changes, and must not revert or overwrite work outside their ownership.
-- Avoid concurrent edits to the same files. Use read-only explorers for independent codebase questions and workers for disjoint implementation areas; integrate and resolve cross-module decisions in the primary agent.
-- Treat sub-agent output as input to the primary review. Before delivery, inspect the integrated diff and run verification proportional to the combined change rather than relying only on each sub-agent's report.
-- Report material use of sub-agents to the user, including the responsibilities delegated and any integration constraints or unresolved findings.
+- 本项目默认启用多智能体：调研、实现、调试、测试、审查等具体流程原则上委派；仅极小或无法合理拆分的任务可由主智能体直接完成，并说明例外。
+- 每次委派前须参考本机已注册的子智能体角色与模型绑定，显式选择适合的 Terra/Luna 执行角色；执行型子代理禁止通过默认或全历史继承沿用 Sol，除非任务明确需要 Sol。不得写死具体模型 ID、版本、推理档位或完整角色清单。
+- 主智能体仅负责需求边界、方案设计、架构与任务拆分、结果查收、集成决策和最终交付，不参与可委派的具体调研、编码、调试、测试或审查流程。
+- 委派必须明确目标、范围、文件或模块所有权、约束和验收标准；实施与审查尽量由独立智能体完成。共享工作树时须保留他人修改，不得覆盖、回退或越权改动职责外内容。

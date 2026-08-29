@@ -7,6 +7,7 @@ import type { ToolUseView } from "../../../lib/tool-use-projection";
 
 export type ConversationView = Readonly<{
   messages: readonly Message[];
+  hiddenMessageCount: number;
   toolUses: Readonly<Record<string, ToolUseView>>;
   currentRun: ConversationRunView | null;
   errorMessage: string | null;
@@ -26,8 +27,60 @@ export type ComposerRuntimeView = Readonly<{
   disabled: boolean;
   runActive: boolean;
   canInterrupt: boolean;
-  submitMode: "submit" | "steer";
   followUpAvailable: boolean;
+}>;
+
+export type PendingInteractionQueueItemView = Readonly<{
+  id: string;
+  kind: "steering" | "follow-up";
+  text: string;
+  createdAt: number;
+}>;
+
+export type PendingInteractionOutcomeView = Readonly<{
+  id: string;
+  kind: "steering" | "follow-up";
+  text: string;
+  reason: "run-interrupted" | "run-failed";
+}>;
+
+export type InteractionQueueView = Readonly<{
+  pending: readonly PendingInteractionQueueItemView[];
+  outcomes: readonly PendingInteractionOutcomeView[];
+}>;
+
+export type ActiveRuntimePhase = "idle" | "thinking" | "tools" | "responding" | "settling" | "compaction";
+
+export type ActiveRuntimeCompactionPhase =
+  | "compaction-starting"
+  | "compaction-reducing"
+  | "compaction-validating"
+  | "compaction-fallback"
+  | "compaction-applying"
+  | "compaction-rebased"
+  | "compaction-aborted"
+  | "compaction-failed";
+
+export type ActiveRuntimeCompactionView = Readonly<{
+  planId: string;
+  phase: ActiveRuntimeCompactionPhase;
+  inputTokensBefore?: number;
+  inputTokensAfter?: number;
+}>;
+
+export type ActiveRuntimeToolBatchView = Readonly<{
+  total: number;
+  active: number;
+  completed: number;
+  failed: number;
+}>;
+
+export type ActiveRuntimeView = Readonly<{
+  phase: ActiveRuntimePhase;
+  runId: string | null;
+  startedAt: number | null;
+  tools: ActiveRuntimeToolBatchView | null;
+  compaction: ActiveRuntimeCompactionView | null;
 }>;
 
 export type ApprovalUiView = Readonly<ApprovalRequest>;
@@ -54,6 +107,8 @@ export type SessionUiState = Readonly<{
   activity: AgentActivityView | null;
   status: SessionStatusView;
   composerRuntime: ComposerRuntimeView;
+  interactionQueue: InteractionQueueView;
+  activeRuntime: ActiveRuntimeView;
   approval: ApprovalUiView | null;
   recovery: RecoveryUiView | null;
   inspector: InspectorShellState;
@@ -83,6 +138,7 @@ export function createInitialSessionUiState(
   return freezeSnapshot({
     conversation: {
       messages: [],
+      hiddenMessageCount: 0,
       toolUses: {},
       currentRun: null,
       errorMessage: null,
@@ -101,8 +157,18 @@ export function createInitialSessionUiState(
       disabled: false,
       runActive: false,
       canInterrupt: false,
-      submitMode: "submit",
       followUpAvailable: false,
+    },
+    interactionQueue: {
+      pending: [],
+      outcomes: [],
+    },
+    activeRuntime: {
+      phase: "idle",
+      runId: null,
+      startedAt: null,
+      tools: null,
+      compaction: null,
     },
     approval: null,
     recovery: null,
@@ -194,6 +260,23 @@ function freezeSnapshot(
     composerRuntime: previous && state.composerRuntime === previous.composerRuntime
       ? previous.composerRuntime
       : Object.freeze({ ...state.composerRuntime }),
+    interactionQueue: previous && state.interactionQueue === previous.interactionQueue
+      ? previous.interactionQueue
+      : Object.freeze({
+          pending: Object.freeze(state.interactionQueue.pending.map((item) => Object.freeze({ ...item }))),
+          outcomes: Object.freeze(state.interactionQueue.outcomes.map((item) => Object.freeze({ ...item }))),
+        }),
+    activeRuntime: previous && state.activeRuntime === previous.activeRuntime
+      ? previous.activeRuntime
+      : Object.freeze({
+          ...state.activeRuntime,
+          tools: state.activeRuntime.tools
+            ? Object.freeze({ ...state.activeRuntime.tools })
+            : null,
+          compaction: state.activeRuntime.compaction
+            ? Object.freeze({ ...state.activeRuntime.compaction })
+            : null,
+        }),
     approval: previous && state.approval === previous.approval
       ? previous.approval
       : state.approval

@@ -1,4 +1,4 @@
-import { isToolUIPart } from "ai";
+import { isToolUIPart } from "./chat-types";
 import type {
     SessionEntry,
     SessionToolResultEntry,

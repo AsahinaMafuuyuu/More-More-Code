@@ -10,7 +10,7 @@ export type PresentationPatch = Partial<Pick<
 
 export type ImmediatePatch = Partial<Pick<
   SessionUiState,
-  "composerRuntime" | "approval" | "recovery"
+  "composerRuntime" | "interactionQueue" | "activeRuntime" | "approval" | "recovery"
 >>;
 
 export type SessionUiCommitScheduler = Readonly<{

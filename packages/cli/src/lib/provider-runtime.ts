@@ -1,8 +1,10 @@
-import type { OpenAILanguageModelResponsesOptions } from "@ai-sdk/openai";
-import type { ProviderOptions } from "@ai-sdk/provider-utils";
-import type { LanguageModelUsage } from "ai";
 import type { ModeType } from "@more-more-code/shared";
-import type { PromptPrefixIdentity } from "./cache-identity";
+import type {
+    CacheMissClassification,
+    ContextEpochId,
+    PromptPrefixIdentity,
+    RenderedPrefixDigest,
+} from "./cache-identity";
 import type { CredentialStore } from "./credential-store";
 import type { ResolvedModel } from "./models";
 import {
@@ -11,25 +13,20 @@ import {
     type CodexOAuthBroker,
 } from "./provider-auth";
 import type { ProviderConfig } from "./provider-registry";
+import type { ProviderUsage } from "./provider-usage";
+import { BUILT_IN_PROVIDER_BASE_URLS } from "./provider-endpoints";
 
 export type ProviderRequestCompilation = {
-    providerOptions?: ProviderOptions;
-    protocol: "openai-responses" | "provider-default";
+    protocol: ProviderRequestProtocol;
+    cacheKey?: string;
 };
 
 /** The exact model-execution protocol selected by the local provider adapter. */
 export type ProviderRequestProtocol =
     | "openai-responses"
     | "anthropic-messages"
-    | "openai-chat-completions";
-
-/** Explicit API roots keep the local provider registry authoritative over ambient SDK defaults. */
-export const BUILT_IN_PROVIDER_BASE_URLS = {
-    openai: "https://api.openai.com/v1",
-    anthropic: "https://api.anthropic.com/v1",
-    deepseek: "https://api.deepseek.com",
-    google: "https://generativelanguage.googleapis.com/v1beta/openai",
-} as const;
+    | "openai-chat-completions"
+    | "google-generative-ai";
 
 /**
  * Credential-free request information suitable for UI display and diagnostics.
@@ -162,8 +159,8 @@ export function resolveProviderRequestPreview(
                     providerId: provider.id,
                     modelId,
                     method: "POST",
-                    protocol: "openai-chat-completions",
-                    url: `${BUILT_IN_PROVIDER_BASE_URLS.google}/chat/completions`,
+                    protocol: "google-generative-ai",
+                    url: `${BUILT_IN_PROVIDER_BASE_URLS.google}/models/${encodeURIComponent(modelId)}:streamGenerateContent?alt=sse`,
                 };
             case "custom":
                 return {
@@ -204,6 +201,11 @@ function createProbeBody(preview: ProviderRequestPreview) {
                 messages: [{ role: "user", content: "Reply only with OK." }],
                 max_tokens: 1,
             });
+        case "google-generative-ai":
+            return JSON.stringify({
+                contents: [{ role: "user", parts: [{ text: "Reply only with OK." }] }],
+                generationConfig: { maxOutputTokens: 1 },
+            });
     }
 }
 
@@ -224,6 +226,17 @@ function createProbeHeaders(input: {
             );
         }
         headers.set("x-api-key", input.auth.value);
+        return headers;
+    }
+
+    if (input.provider.kind === "google") {
+        if (input.auth.type !== "api-key") {
+            throw new ProviderConnectionError(
+                "configuration",
+                `Provider '${input.provider.id}' must use API-key authentication for the Google Generative AI protocol.`,
+            );
+        }
+        headers.set("x-goog-api-key", input.auth.value);
         return headers;
     }
 
@@ -309,6 +322,8 @@ function connectionFailureMessage(input: {
         ? "Verify the API root and OpenAI Responses API support."
         : input.preview.protocol === "anthropic-messages"
             ? "Verify the API root and Anthropic Messages API support."
+            : input.preview.protocol === "google-generative-ai"
+                ? "Verify the Google Generative AI model ID and endpoint availability."
             : "Verify the API root and OpenAI-compatible Chat Completions support.";
     switch (input.kind) {
         case "credential":
@@ -413,7 +428,14 @@ export type ProviderCacheTelemetry = {
     cachedPromptTokens?: number;
     cacheWriteTokens?: number;
     promptPrefixFingerprint: string;
+    cacheFamilyId: string;
     toolSetFingerprint: string;
+    contextEpochId: ContextEpochId;
+    renderedPrefixDigest?: string;
+    renderedPrefixBytes?: number;
+    renderedPrefixBreakpointKind?: RenderedPrefixDigest["breakpointKind"];
+    renderedPrefixBreakpointId?: string;
+    missClassification?: CacheMissClassification;
 };
 
 export type ProviderAdapter = {
@@ -425,19 +447,10 @@ export type ProviderAdapter = {
 };
 
 export class OpenAIResponsesAdapter implements ProviderAdapter {
-    compile({ resolvedModel, prefixIdentity }: Parameters<ProviderAdapter["compile"]>[0]) {
-        const openaiOptions = {
-            ...resolvedModel.providerOptions?.openai,
-            promptCacheKey: `more-more-code:${prefixIdentity.fingerprint}`,
-        } satisfies OpenAILanguageModelResponsesOptions;
-        const providerOptions: ProviderOptions = {
-            ...(resolvedModel.providerOptions ?? {}),
-            openai: openaiOptions,
-        };
-
+    compile({ prefixIdentity }: Parameters<ProviderAdapter["compile"]>[0]) {
         return {
             protocol: "openai-responses" as const,
-            providerOptions,
+            cacheKey: `more-more-code:${prefixIdentity.fingerprint}`,
         };
     }
 }
@@ -445,8 +458,7 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
 class DefaultProviderAdapter implements ProviderAdapter {
     compile({ resolvedModel }: Parameters<ProviderAdapter["compile"]>[0]) {
         return {
-            protocol: "provider-default" as const,
-            providerOptions: resolvedModel.providerOptions,
+            protocol: resolvedModel.protocol,
         };
     }
 }
@@ -467,22 +479,39 @@ export function compileProviderRequest(input: {
 
 export function createProviderCacheTelemetry(input: {
     resolvedModel: ResolvedModel;
-    usage?: LanguageModelUsage;
+    usage?: ProviderUsage;
     prefixIdentity: PromptPrefixIdentity;
+    contextEpochId?: ContextEpochId;
+    renderedPrefix?: RenderedPrefixDigest;
+    missClassification?: CacheMissClassification;
 }): ProviderCacheTelemetry {
+    const cacheFamilyId = input.prefixIdentity.cacheFamilyId ?? input.prefixIdentity.fingerprint;
+    const contextEpochId = input.contextEpochId
+        ?? `genesis:${cacheFamilyId.slice(0, 24)}` as ContextEpochId;
     return {
         provider: input.resolvedModel.providerId,
         providerKind: input.resolvedModel.provider,
         model: input.resolvedModel.modelId,
         ...(input.usage?.inputTokens != null ? { inputTokens: input.usage.inputTokens } : {}),
         ...(input.usage?.outputTokens != null ? { outputTokens: input.usage.outputTokens } : {}),
-        ...(input.usage?.inputTokenDetails.cacheReadTokens != null
-            ? { cachedPromptTokens: input.usage.inputTokenDetails.cacheReadTokens }
+        ...(input.usage?.cacheReadTokens != null
+            ? { cachedPromptTokens: input.usage.cacheReadTokens }
             : {}),
-        ...(input.usage?.inputTokenDetails.cacheWriteTokens != null
-            ? { cacheWriteTokens: input.usage.inputTokenDetails.cacheWriteTokens }
+        ...(input.usage?.cacheWriteTokens != null
+            ? { cacheWriteTokens: input.usage.cacheWriteTokens }
             : {}),
         promptPrefixFingerprint: input.prefixIdentity.fingerprint,
+        cacheFamilyId,
         toolSetFingerprint: input.prefixIdentity.toolSetFingerprint,
+        contextEpochId,
+        ...(input.renderedPrefix ? {
+            renderedPrefixDigest: input.renderedPrefix.digest,
+            renderedPrefixBytes: input.renderedPrefix.bytes,
+            renderedPrefixBreakpointKind: input.renderedPrefix.breakpointKind,
+            ...(input.renderedPrefix.breakpointId
+                ? { renderedPrefixBreakpointId: input.renderedPrefix.breakpointId }
+                : {}),
+        } : {}),
+        ...(input.missClassification ? { missClassification: input.missClassification } : {}),
     };
 }

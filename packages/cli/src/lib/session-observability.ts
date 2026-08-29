@@ -5,6 +5,7 @@ export type SessionObservability = {
     readonly context: CurrentContextUsage | null;
     readonly usage: SessionUsageSummary;
     readonly usagePersistenceIncomplete: boolean;
+    readonly latestProviderCacheHitRate?: number | null;
 };
 
 export type StatusBarObservability = {
@@ -19,6 +20,7 @@ export function createSessionObservability(input: SessionObservability): Session
         context: input.context ? structuredClone(input.context) : null,
         usage: structuredClone(input.usage),
         usagePersistenceIncomplete: input.usagePersistenceIncomplete,
+        latestProviderCacheHitRate: input.latestProviderCacheHitRate ?? null,
     };
 }
 
@@ -59,11 +61,13 @@ export function formatStatusBarObservability(
         ? `$${formatUsd(knownCost)}`
         : "$—";
 
+    const displayedCacheHitRate = observability.latestProviderCacheHitRate
+        ?? observability.usage.cache.hitRate;
     const cache = trusted
         && !observability.usagePersistenceIncomplete
         && observability.usage.cache.coverage === "complete"
-        && observability.usage.cache.hitRate !== undefined
-        ? `Cache ${Math.round(observability.usage.cache.hitRate * 100)}%`
+        && displayedCacheHitRate !== undefined
+        ? `Cache ${Math.round(displayedCacheHitRate * 100)}%`
         : "Cache —";
 
     return { context, contextUtilizationRatio, cost, cache };

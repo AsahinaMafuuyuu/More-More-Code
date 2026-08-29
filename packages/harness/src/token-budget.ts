@@ -11,11 +11,18 @@ export type ModelContextProfile = {
   contextWindowTokens: number;
   reservedOutputTokens: number;
   safetyMarginTokens: number;
+  /** @deprecated Kept for config compatibility; compaction now uses token-based recent-tail policy. */
   retainedTailTurns: number;
   maxSummaryTokens: number;
   compactionSoftLimitRatio?: number;
   compactionHardLimitRatio?: number;
   postCompactionTargetRatio?: number;
+  /** Minimum recent raw context retained across compaction when feasible. */
+  retainRecentMinTokens?: number;
+  /** Share of the effective input budget retained as recent raw context. */
+  retainRecentRatio?: number;
+  /** Allow the guarded split-group escape hatch for pathological oversized cycles. */
+  allowSplitCompactionGroup?: boolean;
   /** Maximum share of effective input budget reserved for model-visible Tool Results. */
   toolResultWorkingSetRatio?: number;
   /** Individual warm/cold Tool Results above this share become pruning candidates. */

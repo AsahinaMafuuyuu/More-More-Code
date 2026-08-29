@@ -50,25 +50,20 @@ describe("ToolResultWorkingSetManager", () => {
     expect(projection.projectedTokens).toBe(22);
   });
 
-  test("preserves the fresh continuation result and prunes older results first", () => {
+  test("projects an oversized result identically before and after its freshness changes", () => {
     const manager = new ToolResultWorkingSetManager<string>();
-    const original = [
-      candidate("cold", 110, "cold"),
-      candidate("warm", 90, "warm"),
-      candidate("fresh", 80, "fresh", true),
-    ];
-    const snapshot = structuredClone(original);
-    const projection = manager.project(original, 800, projector);
+    const fresh = manager.project([candidate("stable", 80, "fresh", true)], 1_000, projector);
+    const cold = manager.project([candidate("stable", 80, "cold")], 1_000, projector);
 
-    expect(projection.budgetTokens).toBe(200);
-    expect(projection.results[2]?.mode).toBe("full");
-    expect(projection.results[0]?.mode).not.toBe("full");
-    expect(projection.results[0]?.sourceEntryId).toBe("entry-cold");
-    expect(projection.projectedTokens).toBeLessThan(projection.originalTokens);
-    expect(original).toEqual(snapshot);
+    expect(fresh.fullResultThresholdTokens).toBe(60);
+    expect(fresh.results[0]?.mode).toBe("truncated");
+    expect(fresh.results[0]?.reason).toBe("oversized-result");
+    expect(cold.results[0]?.mode).toBe(fresh.results[0]?.mode);
+    expect(cold.results[0]?.projectedPayload).toBe(fresh.results[0]?.projectedPayload);
+    expect(cold.results[0]?.projectedTokens).toBe(fresh.results[0]?.projectedTokens);
   });
 
-  test("surfaces overBudget when non-prunable fresh results alone exceed the tool budget", () => {
+  test("bounds an oversized fresh result immediately and reports aggregate pressure after projection", () => {
     const manager = new ToolResultWorkingSetManager<string>();
     const projection = manager.project(
       [candidate("old", 50, "cold"), candidate("fresh", 230, "fresh", true)],
@@ -77,9 +72,10 @@ describe("ToolResultWorkingSetManager", () => {
     );
 
     expect(projection.budgetTokens).toBe(200);
-    expect(projection.overBudget).toBe(true);
-    expect(projection.results[1]?.mode).toBe("full");
-    expect(projection.results[1]?.projectedTokens).toBe(230);
+    expect(projection.results[1]?.mode).toBe("truncated");
+    expect(projection.results[1]?.reason).toBe("oversized-result");
+    expect(projection.results[1]?.projectedTokens).toBeLessThanOrEqual(60);
+    expect(projection.overBudget).toBe(false);
   });
 
   test("proactively prunes an individually oversized warm result even without aggregate pressure", () => {
@@ -105,7 +101,7 @@ describe("ToolResultWorkingSetManager", () => {
     );
 
     expect(projection.budgetTokens).toBe(25);
-    expect(projection.projectedTokens).toBe(30);
+    expect(projection.projectedTokens).toBeGreaterThan(projection.budgetTokens);
     expect(projection.overBudget).toBe(true);
   });
 });

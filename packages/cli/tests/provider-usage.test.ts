@@ -1,25 +1,46 @@
 import { describe, expect, test } from "bun:test";
-import type { LanguageModelUsage } from "ai";
 import {
+  aggregateProviderUsage,
   createRuntimeUsagePayload,
   normalizeProviderUsage,
 } from "../src/lib/provider-usage";
 
 describe("Provider Usage normalization", () => {
-  test("preserves reported buckets, explicit zero, and missing fields", () => {
-    const source: LanguageModelUsage = {
-      inputTokens: 120,
-      inputTokenDetails: {
-        noCacheTokens: 40,
-        cacheReadTokens: 80,
-        cacheWriteTokens: 0,
+  test("aggregates auxiliary and primary Provider requests without inventing missing buckets", () => {
+    expect(aggregateProviderUsage([
+      {
+        inputTokens: 100,
+        inputNoCacheTokens: 100,
+        cacheReadTokens: 0,
+        outputTokens: 10,
       },
+      {
+        inputTokens: 200,
+        inputNoCacheTokens: 50,
+        cacheReadTokens: 150,
+        outputTokens: 20,
+      },
+    ])).toEqual({
+      inputTokens: 300,
+      inputNoCacheTokens: 150,
+      cacheReadTokens: 150,
       outputTokens: 30,
-      outputTokenDetails: {
-        textTokens: 20,
-        reasoningTokens: 10,
-      },
-      totalTokens: 150,
+    });
+
+    expect(aggregateProviderUsage([
+      { inputTokens: 100, outputTokens: 10 },
+      { inputTokens: 200, cacheReadTokens: 150, outputTokens: 20 },
+    ])).toEqual({ inputTokens: 300, outputTokens: 30 });
+  });
+  test("preserves reported buckets, explicit zero, and missing fields", () => {
+    const source = {
+      inputTokens: 120,
+      inputNoCacheTokens: 40,
+      cacheReadTokens: 80,
+      cacheWriteTokens: 0,
+      outputTokens: 30,
+      outputTextTokens: 20,
+      outputReasoningTokens: 10,
     };
     const clone = structuredClone(source);
 
@@ -40,11 +61,8 @@ describe("Provider Usage normalization", () => {
 
     expect(normalizeProviderUsage({
       inputTokens: 25,
-      inputTokenDetails: {},
       outputTokens: undefined,
-      outputTokenDetails: {},
-      totalTokens: 25,
-    } as LanguageModelUsage)).toEqual({
+    })).toEqual({
       inputTokens: { total: 25 },
     });
   });
@@ -52,11 +70,8 @@ describe("Provider Usage normalization", () => {
   test("rejects invalid numeric usage rather than coercing it", () => {
     expect(() => normalizeProviderUsage({
       inputTokens: -1,
-      inputTokenDetails: {},
       outputTokens: 0,
-      outputTokenDetails: {},
-      totalTokens: -1,
-    } as LanguageModelUsage)).toThrow();
+    })).toThrow();
   });
 
   test("builds the strict durable Usage payload from active Model Step correlation", () => {

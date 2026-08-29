@@ -12,6 +12,7 @@ export const COMMANDS: Command[] = [
   { name: "parent", description: "Jump to the parent of the active session node", value: "/parent" },
   { name: "root", description: "Jump to the root of the current session tree", value: "/root" },
   { name: "compact", description: "Compact older context on the active session branch", value: "/compact" },
+  { name: "config", description: "Inspect and configure global/project agent settings", value: "/config" },
   { name: "settings", description: "Inspect and configure global/project agent settings", value: "/settings" },
   { name: "theme", description: "Change the theme of the interface", value: "/theme" },
   { name: "exit", description: "Exit the program", value: "/exit" },

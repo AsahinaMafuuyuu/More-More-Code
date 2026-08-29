@@ -1,4 +1,4 @@
-import type { ContextCompactionTrigger } from "./context";
+import type { CompactionCheckpointV2, ContextCompactionTrigger } from "./context";
 
 export const SESSION_TREE_VERSION = 3 as const;
 
@@ -104,6 +104,8 @@ export type SessionConfigChangeEntry = SessionEntryBase & {
 export type SessionCompactionEntry = SessionEntryBase & {
   type: "compaction";
   summary: unknown;
+  checkpointV2?: CompactionCheckpointV2;
+  compactionPlanId?: string;
   tokensBefore?: number;
   trigger?: ContextCompactionTrigger;
   inputTokensBefore?: number;
@@ -206,6 +208,8 @@ export type SessionEntryInput<TMessage = unknown> =
   | (SessionEntryMetadata & {
       type: "compaction";
       summary: unknown;
+      checkpointV2?: CompactionCheckpointV2;
+      compactionPlanId?: string;
       tokensBefore?: number;
       trigger?: ContextCompactionTrigger;
       inputTokensBefore?: number;

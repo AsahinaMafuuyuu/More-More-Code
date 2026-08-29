@@ -18,6 +18,7 @@ export function ConversationPane({ children, minRows, scrollRef }: {
       scrollX={false}
       stickyScroll
       stickyStart="bottom"
+      viewportCulling
       verticalScrollbarOptions={createTerminalScrollbarOptions(colors)}
     >
       <box width="100%" flexDirection="column">

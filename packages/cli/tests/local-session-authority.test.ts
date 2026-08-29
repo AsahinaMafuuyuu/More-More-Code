@@ -3,7 +3,15 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { SessionTreeState } from "@more-more-code/harness";
+import {
+  appendSessionEntry,
+  createCompactionCheckpointV2,
+  createEmptyCompactionCheckpointState,
+  projectLatestSessionCompaction,
+  validateCompactionCheckpointV2,
+  type CompactionPlan,
+  type SessionTreeState,
+} from "@more-more-code/harness";
 import { bootstrapLocalSessionStore } from "../../session-store/src";
 import {
   createLocalSessionAuthority,
@@ -133,6 +141,167 @@ async function createAuthority(
 }
 
 describe("local Session Authority", () => {
+  test("rehydrates Checkpoint V2 after a real SQLite restart and can continue the checkpoint chain", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "more-more-code-cli-compaction-restart-"));
+    temporaryRoots.push(root);
+    const databaseUrl = pathToFileURL(path.join(root, "sessions.db")).href;
+    let { authority, store } = await createAuthority(databaseUrl, {
+      createId: () => "compaction-root",
+    });
+
+    const constraintText = "Keep canonical Session history append-only across restart.";
+    const checkpointState = createEmptyCompactionCheckpointState();
+    checkpointState.constraints.push({
+      id: "constraint-append-only",
+      text: constraintText,
+      sourceRecordIds: ["source-entry"],
+    });
+    const planOne: CompactionPlan = {
+      version: 1,
+      planId: "plan-before-restart",
+      policyVersion: "context-compaction-v2",
+      trigger: "soft-limit",
+      baseCheckpointId: null,
+      sourceRecordIds: ["source-entry"],
+      sourceDigest: "source-digest-before-restart",
+      provenanceRecordIds: ["source-entry"],
+      retainedRecordIds: ["tail-entry"],
+      compactedThroughRecordId: "source-entry",
+      retainedFromRecordId: "tail-entry",
+      splitGroup: false,
+      inputTokensBefore: 100,
+      targetInputTokens: 70,
+      maxCheckpointTokens: 40,
+      requiredAnchors: [{
+        id: "anchor-append-only",
+        priority: "P0",
+        kind: "constraint",
+        text: constraintText,
+        sourceRecordIds: ["source-entry"],
+      }],
+    };
+    const checkpointOne = createCompactionCheckpointV2({
+      plan: planOne,
+      state: checkpointState,
+      quality: "verified",
+      coveredAnchorIds: ["anchor-append-only"],
+    });
+
+    try {
+      const created = await authority.create({ id: "compaction-session", title: "Compaction Restart" });
+      let state = appendMessage(
+        created.state,
+        "source-entry",
+        { id: "source-message", role: "user", parts: [{ type: "text", text: "old history" }] },
+        2,
+      );
+      state = appendMessage(
+        state,
+        "tail-entry",
+        { id: "tail-message", role: "assistant", parts: [{ type: "text", text: "recent raw tail" }] },
+        3,
+      );
+      state = appendSessionEntry(state, {
+        type: "compaction",
+        summary: {
+          id: "checkpoint-message-1",
+          role: "assistant",
+          parts: [{ type: "text", text: checkpointOne.renderedSummary }],
+        },
+        checkpointV2: checkpointOne,
+        compactionPlanId: planOne.planId,
+        trigger: planOne.trigger,
+        compactedRecordIds: ["source-entry"],
+        retainedTailRecordIds: ["tail-entry"],
+        compactedMessageIds: ["source-message"],
+        retainedTailMessageIds: ["tail-message"],
+      }, {
+        createId: () => "checkpoint-entry-1",
+        now: () => 4,
+      });
+      await authority.commit({ sessionId: "compaction-session", state });
+
+      // Closing the first SQLite store is the process crash/restart boundary.
+      await store.close();
+      ({ authority, store } = await createAuthority(databaseUrl, {
+        createId: () => "compaction-root",
+      }));
+      const restarted = await authority.open("compaction-session");
+      expect(restarted).not.toBeNull();
+      const persistedOne = projectLatestSessionCompaction(restarted!.state);
+      expect(persistedOne?.checkpointV2?.checkpointId).toBe(checkpointOne.checkpointId);
+      expect(persistedOne?.checkpointV2?.source.sourceDigest).toBe(planOne.sourceDigest);
+      expect(persistedOne?.compactedRecordIds).toEqual(["source-entry"]);
+      expect(persistedOne?.retainedTailRecordIds).toEqual(["tail-entry"]);
+      expect(validateCompactionCheckpointV2({ checkpoint: persistedOne!.checkpointV2!, plan: planOne }))
+        .toEqual({ valid: true });
+
+      const continued = appendMessage(
+        restarted!.state,
+        "post-restart-entry",
+        { id: "post-restart-message", role: "user", parts: [{ type: "text", text: "continue" }] },
+        5,
+      );
+      const planTwo: CompactionPlan = {
+        ...planOne,
+        planId: "plan-after-restart",
+        trigger: "hard-limit",
+        baseCheckpointId: checkpointOne.checkpointId,
+        sourceRecordIds: ["checkpoint-entry-1", "post-restart-entry"],
+        sourceDigest: "source-digest-after-restart",
+        provenanceRecordIds: ["checkpoint-entry-1", "post-restart-entry", "source-entry"],
+        compactedThroughRecordId: "post-restart-entry",
+        inputTokensBefore: 130,
+        requiredAnchors: [{
+          id: `checkpoint:${checkpointOne.checkpointId}:constraint-append-only`,
+          priority: "P0",
+          kind: "constraint",
+          text: constraintText,
+          sourceRecordIds: ["source-entry"],
+        }],
+      };
+      const checkpointTwo = createCompactionCheckpointV2({
+        plan: planTwo,
+        state: checkpointState,
+        quality: "verified",
+        coveredAnchorIds: planTwo.requiredAnchors.map((anchor) => anchor.id),
+      });
+      const chained = appendSessionEntry(continued, {
+        type: "compaction",
+        summary: {
+          id: "checkpoint-message-2",
+          role: "assistant",
+          parts: [{ type: "text", text: checkpointTwo.renderedSummary }],
+        },
+        checkpointV2: checkpointTwo,
+        compactionPlanId: planTwo.planId,
+        trigger: planTwo.trigger,
+        compactedRecordIds: ["source-entry", "post-restart-entry"],
+        retainedTailRecordIds: ["tail-entry"],
+        compactedMessageIds: ["source-message", "post-restart-message"],
+        retainedTailMessageIds: ["tail-message"],
+      }, {
+        createId: () => "checkpoint-entry-2",
+        now: () => 6,
+      });
+      await authority.commit({ sessionId: "compaction-session", state: chained });
+
+      await store.close();
+      ({ authority, store } = await createAuthority(databaseUrl, {
+        createId: () => "compaction-root",
+      }));
+      const resumed = await authority.open("compaction-session");
+      const persistedTwo = projectLatestSessionCompaction(resumed!.state);
+      expect(persistedTwo?.checkpointV2?.checkpointId).toBe(checkpointTwo.checkpointId);
+      expect(persistedTwo?.checkpointV2?.baseCheckpointId).toBe(checkpointOne.checkpointId);
+      expect(persistedTwo?.checkpointV2?.state.constraints[0]?.text).toBe(constraintText);
+      expect(resumed!.state.entries.filter((entry) => entry.type === "compaction"))
+        .toHaveLength(2);
+    } finally {
+      await store.close();
+    }
+  });
+
   test("creates a session through the production default id generator", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "more-more-code-cli-local-session-default-id-"));
     temporaryRoots.push(root);

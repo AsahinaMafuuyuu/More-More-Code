@@ -60,6 +60,17 @@ function RoundSummary({ summary }: { summary: ConversationRoundSummary }) {
   );
 }
 
+function HiddenHistoryMarker({ count }: { count: number }) {
+  const { colors } = useTheme();
+  return (
+    <box width="100%" paddingX={3} paddingY={1}>
+      <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>
+        {`⋯ ${count.toLocaleString()} earlier messages remain in Session history and are not mounted in the live transcript`}
+      </text>
+    </box>
+  );
+}
+
 export function ConversationSurface() {
   const conversation = useSessionUiSelector(selectConversation);
   const rounds = projectConversationRounds({
@@ -70,6 +81,9 @@ export function ConversationSurface() {
   const errorMessage = conversation.errorMessage ?? conversation.runErrorMessage;
   return (
     <>
+      {conversation.hiddenMessageCount > 0 && (
+        <HiddenHistoryMarker count={conversation.hiddenMessageCount} />
+      )}
       {rounds.map((round, roundIndex) => (
         <Fragment key={round.key}>
           {round.messages.map((message) => (

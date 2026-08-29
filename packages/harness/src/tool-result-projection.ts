@@ -16,8 +16,9 @@ export type ToolResultProjectionCandidate<TPayload = unknown> = {
   input?: unknown;
   payload: TPayload;
   estimatedTokens: number;
+  /** Observation age is diagnostic only; it must not change projection bytes. */
   freshness: ToolResultFreshness;
-  /** Fresh/current observations may be marked required for their continuation step. */
+  /** Retained compatibility metadata; Context admission/retention is decided elsewhere. */
   required?: boolean;
   /** Durable Session Entry identity when one is available. */
   sourceEntryId?: string;
@@ -41,11 +42,11 @@ export type ToolResultProjector<TPayload = unknown> = {
 };
 
 export type ToolResultWorkingSetPolicy = {
-  /** Maximum share of the effective model input budget reserved for Tool Results. */
+  /** Maximum share of the effective model input budget observed for Tool Results. */
   maxWorkingSetRatio?: number;
-  /** Individual warm/cold results above this share are eligible for proactive pruning. */
+  /** Individual results above this share receive a stable bounded projection. */
   fullResultRatio?: number;
-  /** Minimum share used when a result must collapse to a small reference projection. */
+  /** Reserved compatibility floor for callers that need a tiny reference projection. */
   referenceResultRatio?: number;
 };
 
@@ -57,7 +58,7 @@ export type ToolResultWorkingSetProjection<TPayload = unknown> = {
   originalTokens: number;
   projectedTokens: number;
   pruned: boolean;
-  /** True when the non-prunable fresh/required working set already exceeds its budget. */
+  /** True when the stable projected Tool working set exceeds its aggregate budget signal. */
   overBudget: boolean;
 };
 
@@ -91,18 +92,14 @@ function fullProjection<TPayload>(
   };
 }
 
-function priority(candidate: ToolResultProjectionCandidate) {
-  if (candidate.required || candidate.freshness === "fresh") return 3;
-  if (candidate.freshness === "warm") return 2;
-  return 1;
-}
-
 /**
  * Provider-independent Tool Result working-set budgeting.
  *
  * The manager never mutates canonical Session payloads. It only decides which
  * model-facing projections should remain full and which should be reduced by a
- * caller-supplied deterministic projector.
+ * caller-supplied deterministic projector. A result's projection depends only
+ * on that result and the current model profile, never on later neighboring
+ * results. This keeps already-sent historical prefixes cache-stable.
  */
 export class ToolResultWorkingSetManager<TPayload = unknown> {
   project(
@@ -133,52 +130,22 @@ export class ToolResultWorkingSetManager<TPayload = unknown> {
     const fullResultThresholdTokens = Math.max(1, Math.floor(inputBudgetTokens * fullResultRatio));
     const referenceTargetTokens = Math.max(1, Math.floor(inputBudgetTokens * referenceResultRatio));
     const originalTokens = candidates.reduce((total, candidate) => total + candidate.estimatedTokens, 0);
-    const nonPrunableTokens = candidates
-      .filter((candidate) => candidate.required || candidate.freshness === "fresh")
-      .reduce((total, candidate) => total + candidate.estimatedTokens, 0);
-    const requiredWorkingSetOverBudget = nonPrunableTokens > budgetTokens;
+    const results = candidates.map((candidate) => {
+      if (candidate.estimatedTokens <= fullResultThresholdTokens) {
+        return fullProjection(candidate);
+      }
 
-    const results = candidates.map(fullProjection);
-    const eligibleIndexes = candidates
-      .map((candidate, index) => ({ candidate, index }))
-      .filter(({ candidate }) => !candidate.required && candidate.freshness !== "fresh")
-      .sort((left, right) => {
-        const priorityDelta = priority(left.candidate) - priority(right.candidate);
-        if (priorityDelta !== 0) return priorityDelta;
-        return left.index - right.index;
+      const projected = projector.project({
+        candidate,
+        targetTokens: fullResultThresholdTokens,
+        reason: "oversized-result",
       });
-
-    const aggregatePressure = originalTokens > budgetTokens;
-    const availableForEligible = Math.max(0, budgetTokens - nonPrunableTokens);
-    const totalWeight = eligibleIndexes.reduce(
-      (total, { candidate }) => total + (candidate.freshness === "warm" ? 2 : 1),
-      0,
-    );
-    const weightUnit = totalWeight > 0 ? Math.floor(availableForEligible / totalWeight) : 0;
-
-    for (const { candidate, index } of eligibleIndexes) {
-      const oversized = candidate.estimatedTokens > fullResultThresholdTokens;
-      if (!aggregatePressure && !oversized) continue;
-
-      const weight = candidate.freshness === "warm" ? 2 : 1;
-      const weightedTarget = Math.max(referenceTargetTokens, weightUnit * weight);
-      const targetTokens = aggregatePressure
-        ? Math.min(fullResultThresholdTokens, weightedTarget)
-        : fullResultThresholdTokens;
-      if (candidate.estimatedTokens <= targetTokens) continue;
-
-      const reason: Exclude<ToolResultPruningReason, "within-budget"> = aggregatePressure
-        ? candidate.freshness === "cold" && targetTokens <= referenceTargetTokens
-          ? "reference-eligible"
-          : "working-set-pressure"
-        : "oversized-result";
-      const projected = projector.project({ candidate, targetTokens, reason });
       assertTokens(projected.projectedTokens, `projectedTokens(${candidate.id})`);
-      if (projected.projectedTokens > targetTokens) {
+      if (projected.projectedTokens > fullResultThresholdTokens) {
         throw new Error(`Tool Result projector exceeded targetTokens for ${candidate.id}`);
       }
-      results[index] = projected;
-    }
+      return projected;
+    });
 
     const projectedTokens = results.reduce((total, result) => total + result.projectedTokens, 0);
     return {
@@ -189,7 +156,7 @@ export class ToolResultWorkingSetManager<TPayload = unknown> {
       originalTokens,
       projectedTokens,
       pruned: results.some((result) => result.mode !== "full"),
-      overBudget: requiredWorkingSetOverBudget || projectedTokens > budgetTokens,
+      overBudget: projectedTokens > budgetTokens,
     };
   }
 }

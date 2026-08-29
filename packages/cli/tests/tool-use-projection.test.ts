@@ -7,7 +7,11 @@ import {
 } from "@more-more-code/harness";
 import type { Message } from "../src/lib/chat-types";
 import type { AgentActivityView } from "../src/lib/agent-activity-projection";
-import { projectToolUses } from "../src/lib/tool-use-projection";
+import {
+  createCanonicalToolUseIndex,
+  projectToolUses,
+  projectToolUsesFromIndex,
+} from "../src/lib/tool-use-projection";
 
 function options() {
   let id = 0;
@@ -107,6 +111,25 @@ function approval(): ApprovalRequest {
 }
 
 describe("ToolUse projection", () => {
+  test("reuses a canonical Session index across chat-only live revisions", () => {
+    const { state } = stateWithCall();
+    const canonical = createCanonicalToolUseIndex(state);
+
+    expect(projectToolUsesFromIndex({
+      messages: [toolMessage()],
+      canonical,
+      activity: runningActivity(),
+    })["call-1"]?.status).toBe("running");
+
+    expect(projectToolUsesFromIndex({
+      messages: [toolMessage("output-available")],
+      canonical,
+    })["call-1"]).toMatchObject({
+      status: "incomplete",
+      diagnostic: "missing_terminal",
+    });
+  });
+
   test("moves requested -> running -> approval_waiting using only current presentation seams", () => {
     const emptyState = createSessionTree<Message>([], options());
     expect(projectToolUses({

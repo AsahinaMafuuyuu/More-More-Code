@@ -2,9 +2,11 @@ import {
     loadAgentConfig,
     mergeAgentConfig,
     saveAgentConfigModel,
+    saveAgentConfigToolExecution,
     type ConfigScope,
     type AgentConfigBundle,
 } from "./agent-config";
+import type { AgentToolBatchExecution } from "@more-more-code/harness";
 import {
     DEFAULT_CHAT_MODEL_REF,
     type ModelRef,
@@ -312,6 +314,30 @@ export function persistAgentEnvironmentModel(
 
         const config = await saveAgentConfigModel({
             model,
+            scope,
+            workspaceRoot: bootstrapOptions.workspaceRoot,
+            globalHome: bootstrapOptions.globalHome,
+            ensureLayout: bootstrapOptions.ensureLayout,
+        });
+        currentEnvironment = {
+            ...environment,
+            config,
+            loadedAt: Date.now(),
+        };
+        publishAgentEnvironment(currentEnvironment);
+        return currentEnvironment;
+    });
+}
+
+/** Persist /config Tool Batch policy through the serialized environment mutation queue. */
+export function persistAgentEnvironmentToolExecution(
+    execution: Partial<AgentToolBatchExecution>,
+    scope: ConfigScope = "project",
+) {
+    return enqueueAgentEnvironmentMutation(async () => {
+        const environment = getAgentEnvironment();
+        const config = await saveAgentConfigToolExecution({
+            execution,
             scope,
             workspaceRoot: bootstrapOptions.workspaceRoot,
             globalHome: bootstrapOptions.globalHome,

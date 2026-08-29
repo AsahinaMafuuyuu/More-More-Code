@@ -211,6 +211,59 @@ describe("local model context reduction pipeline", () => {
     expect(result.projection.compaction?.trigger).toBe("soft-limit");
   });
 
+  test("checkpoints accumulated Tool Result pressure without rewriting old results in place", async () => {
+    const state = { calls: 0 };
+    const messages: Message[] = [];
+    for (let index = 0; index < 8; index += 1) {
+      messages.push(user(`u-${index}`, `inspect ${index}`));
+      messages.push(assistantTool({
+        id: `a-${index}`,
+        toolCallId: `call-${index}`,
+        command: `type file-${index}.txt`,
+        output: { stdout: `${String(index)}-${"x".repeat(1_500)}`, stderr: "", exitCode: 0 },
+      }));
+    }
+    const toolPressureProfile = profile({
+      retainedTailTurns: 2,
+      compactionSoftLimitRatio: 0.95,
+      compactionHardLimitRatio: 0.99,
+      postCompactionTargetRatio: 0.9,
+    });
+    const first = await projectMessages({
+      messages,
+      systemPrompt: "system",
+      profile: toolPressureProfile,
+      checkpoint: null,
+      compactor: countingCompactor(state),
+    });
+
+    expect(first.toolResultPruning.prunedResults).toBe(0);
+    expect(first.toolResultPruning.overBudget).toBe(true);
+    expect(first.projection.compaction?.trigger).toBe("tool-pressure");
+    expect(first.projection.compaction?.compactedRecordIds.length).toBeGreaterThan(0);
+    expect(state.calls).toBe(1);
+
+    const summaryRecord = first.projection.records.find((record) => record.kind === "summary");
+    expect(summaryRecord).toBeDefined();
+    const checkpoint = {
+      summary: summaryRecord!.payload as Message,
+      compactedRecordIds: first.projection.compaction!.compactedRecordIds,
+      retainedTailRecordIds: first.projection.compaction!.retainedRecordIds,
+    };
+    const second = await projectMessages({
+      messages,
+      systemPrompt: "system",
+      profile: toolPressureProfile,
+      checkpoint,
+      compactor: countingCompactor(state),
+    });
+
+    expect(second.toolResultPruning.originalTokens).toBeLessThan(first.toolResultPruning.originalTokens);
+    expect(second.toolResultPruning.overBudget).toBe(false);
+    expect(second.projection.compaction).toBeUndefined();
+    expect(state.calls).toBe(1);
+  });
+
   test("projects Branch Summary as independent historical Context without changing UI messages", async () => {
     const state = { calls: 0 };
     const messages = [

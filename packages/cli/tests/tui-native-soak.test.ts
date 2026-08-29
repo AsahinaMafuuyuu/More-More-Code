@@ -41,6 +41,9 @@ describe("native TUI soak harness", () => {
     expect(bootstrapSource).toContain('await import("./tui-stability-soak-app")');
     expect(bootstrapSource).not.toMatch(/@opentui\/(?:core|react)/);
     expect(appSource).toContain("createCliRenderer");
+    expect(appSource).toContain("MORE_MORE_CODE_TUI_SOAK_BUFFERED_OUTPUT");
+    expect(appSource).toMatch(/bufferedOutput[\s\S]*?"memory"[\s\S]*?"stdout"/);
+    expect(appSource).toMatch(/createCliRenderer\([\s\S]*?bufferedOutput/);
     expect(appSource).toContain("SessionWorkspace");
     expect(appSource).toContain("createSessionUiCommitScheduler");
     expect(appSource).not.toContain("testRender");

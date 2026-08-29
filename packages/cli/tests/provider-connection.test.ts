@@ -39,6 +39,15 @@ const anthropicProvider: ProviderConfig = {
     auth: { type: "api-key", credentialRef: "provider:anthropic:api-key" },
 };
 
+const googleProvider: ProviderConfig = {
+    id: "google",
+    kind: "google",
+    displayName: "Google",
+    enabled: true,
+    models: ["gemini-test"],
+    auth: { type: "api-key", credentialRef: "provider:google:api-key" },
+};
+
 function credentials(value: string | null): CredentialStore {
     return {
         async get() { return value; },
@@ -56,6 +65,40 @@ describe("provider connection validation", () => {
             protocol: "openai-chat-completions",
             url: "https://gateway.example.test/v1/chat/completions",
         });
+    });
+
+    test("resolves Google through the native Generative AI protocol", () => {
+        expect(resolveProviderRequestPreview(googleProvider, "gemini-test")).toEqual({
+            providerId: "google",
+            modelId: "gemini-test",
+            method: "POST",
+            protocol: "google-generative-ai",
+            url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-test:streamGenerateContent?alt=sse",
+        });
+    });
+
+    test("sends the Google API key in a header rather than the URL", async () => {
+        let requestURL = "";
+        let requestHeaders = new Headers();
+        let requestBody = "";
+        await testProviderConnection({
+            provider: googleProvider,
+            modelId: "gemini-test",
+            credentialStore: credentials(secret),
+            codexOAuthBroker: new UnavailableCodexOAuthBroker(),
+            fetch: async (input, init) => {
+                requestURL = String(input);
+                requestHeaders = new Headers(init?.headers);
+                requestBody = String(init?.body);
+                return new Response(JSON.stringify({ candidates: [] }), { status: 200 });
+            },
+        });
+
+        expect(requestURL).not.toContain(secret);
+        expect(requestHeaders.get("x-goog-api-key")).toBe(secret);
+        expect(requestHeaders.get("authorization")).toBeNull();
+        expect(requestBody).toContain('"contents"');
+        expect(requestBody).toContain('"maxOutputTokens":1');
     });
 
     test("uses an injected fetch for a minimum-output connection probe without returning the credential", async () => {

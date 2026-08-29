@@ -1,4 +1,3 @@
-import type { LanguageModelUsage } from "ai";
 import type {
     RuntimeModelStepCost,
     RuntimePricingSnapshot,
@@ -12,6 +11,42 @@ export type NormalizedProviderUsage = {
     inputTokens?: RuntimeUsageInputTokens;
     outputTokens?: RuntimeUsageOutputTokens;
 };
+
+/** Provider-independent allowlist emitted by native adapters. */
+export type ProviderUsage = {
+    inputTokens?: number;
+    inputNoCacheTokens?: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+    outputTokens?: number;
+    outputTextTokens?: number;
+    outputReasoningTokens?: number;
+};
+
+const PROVIDER_USAGE_FIELDS = [
+    "inputTokens",
+    "inputNoCacheTokens",
+    "cacheReadTokens",
+    "cacheWriteTokens",
+    "outputTokens",
+    "outputTextTokens",
+    "outputReasoningTokens",
+] as const satisfies readonly (keyof ProviderUsage)[];
+
+/**
+ * Aggregate multiple Provider requests caused by one Agent Model Step.
+ * A bucket is retained only when every request reported it, so accounting
+ * never manufactures complete cache/cost telemetry from partial Provider data.
+ */
+export function aggregateProviderUsage(usages: readonly ProviderUsage[]): ProviderUsage | undefined {
+    if (usages.length === 0) return undefined;
+    const aggregate: ProviderUsage = {};
+    for (const field of PROVIDER_USAGE_FIELDS) {
+        if (!usages.every((usage) => usage[field] !== undefined)) continue;
+        aggregate[field] = usages.reduce((total, usage) => total + usage[field]!, 0);
+    }
+    return Object.keys(aggregate).length > 0 ? aggregate : undefined;
+}
 
 type RuntimeUsageCompletion = NormalizedProviderUsage & {
     providerId: string;
@@ -44,21 +79,21 @@ export function createRuntimeUsagePayload(input: {
 }
 
 /**
- * Reduce AI SDK usage into the small provider-independent allowlist that is
+ * Reduce native provider usage into the small provider-independent allowlist that is
  * safe to persist as Runtime telemetry. Missing provider buckets remain
  * missing; explicit zero remains a real reported value.
  */
-export function normalizeProviderUsage(usage: LanguageModelUsage): NormalizedProviderUsage {
+export function normalizeProviderUsage(usage: ProviderUsage): NormalizedProviderUsage {
     const inputTokens = compactTokenGroup({
         total: usage.inputTokens,
-        noCache: usage.inputTokenDetails?.noCacheTokens,
-        cacheRead: usage.inputTokenDetails?.cacheReadTokens,
-        cacheWrite: usage.inputTokenDetails?.cacheWriteTokens,
+        noCache: usage.inputNoCacheTokens,
+        cacheRead: usage.cacheReadTokens,
+        cacheWrite: usage.cacheWriteTokens,
     });
     const outputTokens = compactTokenGroup({
         total: usage.outputTokens,
-        text: usage.outputTokenDetails?.textTokens,
-        reasoning: usage.outputTokenDetails?.reasoningTokens,
+        text: usage.outputTextTokens,
+        reasoning: usage.outputReasoningTokens,
     });
 
     return {

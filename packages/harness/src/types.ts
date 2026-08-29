@@ -29,6 +29,27 @@ export type AgentInteractionInput = {
   metadata?: AgentInteractionMetadata;
 };
 
+export type ToolExecutionMode = "serial" | "parallel";
+
+export type AgentToolExecutionEffect = "read" | "write" | "process" | "unknown";
+
+export type AgentToolExecutionSafety = {
+  parallelSafe: boolean;
+  effect: AgentToolExecutionEffect;
+};
+
+export type AgentToolBatchExecution = {
+  mode: ToolExecutionMode;
+  maxConcurrency: number;
+};
+
+export type AgentPendingInteractionOutcomeReason = "run-interrupted" | "run-failed";
+
+export type AgentPendingInteractionOutcome = {
+  interaction: AgentInteraction;
+  reason: AgentPendingInteractionOutcomeReason;
+};
+
 export type AgentStepProgress = {
   message?: string;
   completed?: number;
@@ -116,6 +137,17 @@ export type AgentModelStepResult<TToolCall extends AgentToolCall = AgentToolCall
 export type AgentLoopAdapter<TToolCall extends AgentToolCall = AgentToolCall> = {
   runModelStep(context: AgentModelStepContext): Promise<AgentModelStepResult<TToolCall>>;
   runToolStep(toolCall: TToolCall, context: AgentToolStepContext): Promise<void>;
+  /**
+   * Durable-on-consume seam for queued steering/follow-up input. The Harness
+   * selects the interaction, then the adapter must commit its semantic user
+   * message before the next Turn/Provider side effect can begin.
+   */
+  commitInteraction?(
+    interaction: AgentInteraction,
+    context: { run: AgentRun; signal: AbortSignal },
+  ): Promise<AgentInteraction>;
+  /** Source-specific safety metadata used by the provider-independent batch scheduler. */
+  getToolExecutionSafety?(toolCall: TToolCall): AgentToolExecutionSafety;
   abortModelStep?(): void;
 };
 
@@ -123,5 +155,7 @@ export type AgentLoopRunOptions<TToolCall extends AgentToolCall = AgentToolCall>
   sessionId: string;
   inputMessageId?: string;
   adapter: AgentLoopAdapter<TToolCall>;
+  toolExecution?: AgentToolBatchExecution;
   onStateChange?: (run: AgentRun) => void;
+  onPendingInteractionOutcome?: (outcome: AgentPendingInteractionOutcome) => void;
 };

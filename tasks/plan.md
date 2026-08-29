@@ -1536,7 +1536,7 @@ Provider domain model
 
 ### Task 5: Implement the four built-in adapters and Custom OpenAI-compatible adapter
 
-**Description:** Make Provider Registry resolve provider configuration/auth into Vercel AI SDK models while preserving the existing provider-independent Context and provider-specific request compiler seam.
+**Historical description:** Stage 6.4 originally made Provider Registry resolve provider configuration/auth into Vercel AI SDK models while preserving the existing provider-independent Context and provider-specific request compiler seam. **ADR-0031 (2026-08-28) supersedes only that SDK execution mechanism:** the same Provider Registry/Context boundaries now resolve into project-owned native Provider descriptors and `fetch()`/SSE adapters. See `tasks/provider-native-runtime-plan.md` and `docs/PROVIDER-NATIVE-RUNTIME-DELIVERY.md`.
 
 **Acceptance criteria:**
 - OpenAI, Anthropic, Google, and DeepSeek resolve through configured provider accounts instead of ambient-only globals.
@@ -2408,6 +2408,32 @@ Delivered.
 
 ---
 
+# Stage 6.5 Follow-up — Tool Batch, Model Loop & Runtime Interaction Queue
+
+**Status:** Implementation complete / automated + native stress gates passed — release certification only retains the documented human/provider-backed active-run interaction acceptance. See `docs/TOOL-BATCH-MODEL-LOOP-INTERACTION-DELIVERY.md` for evidence.
+
+## Scope
+
+- Tool execution configurable as serial or bounded parallel, default serial.
+- One model-emitted Tool Call set is one Tool Batch with a full-result barrier.
+- ToolUse no longer counts as a primary Agent Model Loop.
+- Follow-up starts a new Interaction Round/budget epoch; steering stays in the current Round.
+- Active-run Enter queues a cancellable follow-up; explicit steering is a separate action.
+- Pending interactions remain ephemeral until consumed, then commit durably before Provider work.
+- Collapsed reasoning/Tool presentation remains visibly active without a Session-root render loop.
+
+## Delivery documents
+
+- `docs/TOOL-BATCH-MODEL-LOOP-INTERACTION-DESIGN.md`
+- `docs/TOOL-BATCH-MODEL-LOOP-INTERACTION-PLAN.md`
+- `docs/TOOL-BATCH-MODEL-LOOP-INTERACTION-TEST.md`
+- `docs/TOOL-BATCH-MODEL-LOOP-INTERACTION-DELIVERY.md`
+- `docs/decisions/0032-tool-batch-model-loop-and-runtime-interaction-queue.md`
+
+**Implementation order:** Harness semantics -> config/scheduler -> durable-on-consume queue -> Composer/active UX -> full regression. UI cancellation must not ship before the persistence boundary is corrected.
+
+---
+
 # Stage 6.5 UI Track — Agent Runtime Workbench
 
 **Status:** In progress — UI Slice 1 / P0 Runtime Activity Foundation delivered
@@ -2809,6 +2835,111 @@ native stress validation. It must not redesign Harness/Session semantics.
 UI-S1 through UI-S7 are delivered and
 `docs/UI-OPENTUI-STABILITY-DELIVERY.md` is marked Delivered.
 
+## Priority P0.7 — Transcript Disclosure & Cache-Stable Context
+
+**Status: DELIVERED — 2026-08-28**
+
+### Task UI-S8: Compact reasoning and Tool transcript presentation
+
+**Acceptance criteria:**
+- [x] Reasoning is collapsed to two terminal rows by default and expands in
+  place without rewriting its content.
+- [x] Two or more adjacent ToolUse parts collapse into one semantic aggregate
+  row with total/completed/failed counts.
+- [x] A lone ToolUse stays one row by default instead of receiving a redundant
+  parent group.
+- [x] Expanded Tool groups preserve execution order and each ToolUse can
+  independently expand its bounded detail view.
+- [x] Tool identity, disclosure state and terminal status use existing theme and
+  semantic status tokens rather than new hard-coded colors.
+- [x] Tool terminal truth remains owned by the existing ToolUse projection.
+
+### Task CTX-C1: Make Tool Result Context projection cache-stable
+
+**Acceptance criteria:**
+- [x] Root cause is isolated to MORE-MORE-CODE's model-facing Context
+  projection rather than Vercel AI SDK transport/serialization.
+- [x] Individually oversized Tool Results receive a deterministic bounded
+  projection on first model exposure.
+- [x] That projection is invariant when the result changes from fresh to
+  warm/cold or when later Tool Results are appended.
+- [x] Aggregate Tool working-set pressure is reported instead of dynamically
+  redistributing token targets across already-sent historical Tool Results.
+- [x] Model-visible bounded projection references use stable Tool Call identity;
+  a later Session Entry lookup cannot rewrite an existing provider prefix.
+- [x] Complete Tool Result payloads remain canonical durable Session facts.
+- [x] ADR-0030 records the superseding cache-stability policy and ADR-0013
+  explicitly points to it.
+
+### Delivery gate
+
+- [x] Focused Context/UI regressions pass: 23/23.
+- [x] Full Harness tests pass: 107/107.
+- [x] Full CLI tests pass: 290/290.
+- [x] CLI and Harness typechecks pass.
+- [x] CLI production build passes.
+- [x] Native OpenTUI stress matrix passes: idle 20s, stream 45s, churn 45s.
+- [x] Design, Test, Delivery, Context glossary, CHANGELOG and ADRs are updated.
+
+**Stage gate:** Satisfied. P1-A remains unblocked.
+
+## Priority P0.8 — Long-Context UI Performance
+
+**Status:** DELIVERED — 2026-08-29
+
+**Primary documents:**
+
+```text
+docs/UI-LONG-CONTEXT-PERFORMANCE-DESIGN.md
+docs/UI-LONG-CONTEXT-PERFORMANCE-TEST.md
+docs/UI-LONG-CONTEXT-PERFORMANCE-DELIVERY.md
+```
+
+This stage makes the main Session UI cost independent of total historical depth during
+high-frequency streaming. It follows the mature TUI pattern of stable committed
+history plus a small mutable/live tail, while preserving complete durable Session
+history.
+
+### Task UI-LC1: Replace per-chunk full-history cloning
+
+- [x] `LocalChatRuntime` owns indexed message storage and a monotonic revision.
+- [x] Stream chunks copy only the changed assistant message/part.
+- [x] Full history is materialized only at explicit Provider/diagnostic boundaries.
+
+### Task UI-LC2: Bound main transcript materialization
+
+- [x] Main Conversation mounts only a recent bounded message window.
+- [x] Window respects recent user-round boundaries within a bounded allowance.
+- [x] One lightweight marker reports omitted older messages.
+- [x] Complete Session history remains durable and addressable.
+
+### Task UI-LC3: Remove full ToolUse reprojection from stream ticks
+
+- [x] Canonical Session tool index is computed from `sessionTree` only when it changes.
+- [x] Chat-only revisions overlay bounded live Tool state without rescanning the full
+  Session path.
+
+### Task UI-LC4: Bound hidden-content render work
+
+- [x] Collapsed reasoning sends only a bounded preview to the renderer.
+- [x] Collapsed ToolUse does not serialize hidden output detail.
+- [x] Individual very large text messages use a bounded head/tail renderer preview.
+- [x] Conversation ScrollBox enables viewport culling.
+
+### Task UI-LC5: Verify 1M-class synthetic history invariants
+
+- [x] Focused long-context tests pass.
+- [x] Full CLI regression passes.
+- [x] CLI build/typecheck passes.
+- [x] Native OpenTUI stress passes.
+- [x] `git diff --check` passes.
+- [x] Delivery document records exact results and known remaining startup/hydration
+  limits.
+
+**Stage gate:** Satisfied. The streaming/render hot path is bounded independently of
+total Session depth. Lazy durable Session hydration remains a separate future startup
+optimization rather than part of this stage.
+
 ## Priority P1-A — Inspector Foundation, Context, Usage and Tree
 
 ### Task UI-5: Design and implement one Session Inspector shell
@@ -3066,3 +3197,87 @@ Refactor the Server into optional cloud-product infrastructure: account/subscrip
 Resume the Stage 6.3 ProcessSandbox security roadmap after Provider Runtime, Local Session authority, and optional Cloud Sync are established. Design a Windows native isolation adapter using AppContainer/restricted-token/Job-object or an equivalently defensible mechanism, with explicit filesystem/network/process guarantees and cross-platform E2E verification.
 
 The existing Stage 6.3 requirements remain unchanged: direct fallback is not OS isolation, hard restrictions fail closed, and Permission/Approval/ToolRuntime/ProcessSandbox remain separate seams.
+
+---
+
+# Stage C — Context Cache Stability & Reliable Compaction Runtime
+
+**Status:** DELIVERED / VERIFIED (C1–C6) — 2026-08-29; C7 deferred by explicit investigation gate
+
+**Approved design:**
+
+```text
+docs/CONTEXT-CACHE-COMPACTION-RELIABILITY-DESIGN.md
+docs/PI-INSPIRED-CONTEXT-COMPACTION-DESIGN.md
+docs/CONTEXT-CACHE-COMPACTION-RELIABILITY-DELIVERY.md
+```
+
+The temporary exact Provider-request recorder delivered before this stage remains
+opt-in and local-only. It is deliberately **not** removed in this stage because the
+user has not yet closed the cache investigation; C7 remains a separate explicit
+closeout gate.
+
+## Task C1: Permanent cache identities and diagnostics
+
+**Acceptance criteria:**
+- [x] Replace the overloaded prefix identity with explicit `CacheFamilyId` semantics while retaining compatibility where needed.
+- [x] Derive branch/checkpoint-local `ContextEpochId` and Provider-visible `RenderedPrefixDigest` without persisting full prompt bodies.
+- [x] Classify expected epoch rebases separately from unexplained same-epoch prefix mutation and Provider/routing uncertainty.
+- [x] Tool-heavy append-only fixtures prove earlier rendered prefixes remain byte-stable inside one epoch.
+
+**Verification:** focused cache identity / Provider runtime tests.
+
+## Task C2: Provider cache policy compilation
+
+**Acceptance criteria:**
+- [x] Provider capabilities explicitly gate cache controls; unsupported fields never leak to generic compatible endpoints.
+- [x] Anthropic stable/conversation breakpoints remain deterministic and bounded.
+- [x] Tool-batch-end breakpoint selection is deterministic and based on model-emitted order, not execution completion order.
+- [x] Tool-definition stability is never traded for weaker capability enforcement.
+
+**Verification:** Provider request golden/body tests for OpenAI Responses, Anthropic, Google and DeepSeek/OpenAI-compatible protocols.
+
+## Task C3: Pi-inspired Compaction Plan + Checkpoint V2
+
+**Acceptance criteria:**
+- [x] Compaction source is an older contiguous prefix and a configurable recent raw suffix remains uncompressed when feasible.
+- [x] Normal cut points use complete semantic groups; Tool Call/Result groups are never split.
+- [x] One oversized semantic group may use the documented split-group escape hatch without splitting a Tool interaction.
+- [x] V2 checkpoint stores structured state, source digest, provenance and Required Context Anchors while V1 remains readable.
+
+**Verification:** Harness selection tests + CLI checkpoint/reducer tests.
+
+## Task C4: Validator and reliable deterministic fallback
+
+**Acceptance criteria:**
+- [x] Semantic output is parsed/validated against known source IDs and required anchors.
+- [x] Deterministic fallback is priority-aware and never uses arbitrary tail truncation as a durable checkpoint.
+- [x] P0 anchors either survive or compaction aborts/fails explicitly according to trigger semantics.
+- [x] Repeated checkpoint chaining preserves required constraints/pending work.
+
+**Verification:** malformed/empty/oversized/hallucinated reducer fixtures and repeated-compaction regressions.
+
+## Task C5: Transactional cutover and Runtime Activity UI
+
+**Acceptance criteria:**
+- [x] Provider execution follows `plan -> reduce -> validate -> durable commit -> rehydrate -> Provider`.
+- [x] The Provider request is compiled from the checkpoint re-read from Session authority, not the pre-commit candidate projection.
+- [x] Compaction lifecycle phases are Runtime Activity only and never become Session messages.
+- [x] UI updates only on lifecycle phase changes and expose fallback/abort/completed before/after metrics.
+
+**Verification:** LocalModelTransport/SessionController durability ordering + Runtime Activity UI tests + crash/restart fixture.
+
+## Task C6: Policy wiring and closeout verification
+
+**Acceptance criteria:**
+- [x] Soft/hard/target/recent-tail/checkpoint-budget values are profile policy, not Provider-specific Context semantics.
+- [x] Tool pressure compacts only enough old history to restore target headroom.
+- [x] Focused Context/cache/compaction tests, Harness/CLI full suites, typechecks, production build, native OpenTUI stress and `git diff --check` pass.
+- [x] DESIGN/DELIVERY/CHANGELOG/CONTEXT accurately distinguish implemented functionality from deferred C7 cleanup.
+
+**Dependencies:** C1 -> C2/C3 -> C4 -> C5 -> C6.
+
+## Deferred C7: Remove temporary full-context recorder
+
+- [ ] Remove recorder only after the user explicitly closes the cache investigation.
+- [ ] Keep only bounded hashes/cache telemetry/miss classification after removal.

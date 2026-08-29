@@ -1,4 +1,4 @@
-import { isToolUIPart } from "ai";
+import { isToolUIPart } from "./chat-types";
 import {
     appendSessionEntry,
     appendSessionTreeMessages,
@@ -12,7 +12,7 @@ import {
 import type { Message } from "./chat-types";
 
 /**
- * Canonicalizes one AI SDK/UI message for durable Session history.
+ * Canonicalizes one runtime/UI message for durable Session history.
  *
  * This is intentionally narrower than a generic JavaScript serializer:
  * `undefined` is canonicalized only where JSON has an unambiguous absence
@@ -30,8 +30,8 @@ export function normalizeDurableMessages(messages: readonly Message[]): Message[
 }
 
 /**
- * The single CLI message-to-Session-Tree append boundary. Callers supply AI
- * SDK/UI messages; only their normalized durable representations reach the
+ * The single CLI message-to-Session-Tree append boundary. Callers supply
+ * runtime/UI messages; only their normalized durable representations reach the
  * provider-independent Harness constructor.
  */
 export function appendDurableSessionMessages(
@@ -92,8 +92,8 @@ export function appendFinalizedDurableAssistantMessage(
 }
 
 /**
- * AI SDK keeps one assistant UIMessage alive across Tool continuations and
- * appends a `step-start` marker before each new model step. Durable Session
+ * A UI runtime may keep one assistant message alive across Tool continuations
+ * and append a `step-start` marker before each new model step. Durable Session
  * semantics are step-scoped instead: every completed AgentLoop Model Step is
  * one immutable assistant_message Entry.
  *
@@ -178,7 +178,7 @@ function terminalToolPresentation(
 }
 
 /**
- * Reconstructs effective AI SDK/UI messages from canonical Session facts.
+ * Reconstructs effective runtime/UI messages from canonical Session facts.
  * Legacy `message_update` entries are replayed by Harness first; terminal Tool
  * state is then joined from exact `tool_call`/`tool_result` facts. The source
  * Session Tree is never mutated.

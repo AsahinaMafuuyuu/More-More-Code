@@ -17,7 +17,9 @@ export type ToolUseDisplay = {
   detailLines: string[];
 };
 
-export function createToolUseDisplay(view: ToolUseView, width: number): ToolUseDisplay {
+export type ToolUseSummaryDisplay = Omit<ToolUseDisplay, "detailLines">;
+
+export function createToolUseSummary(view: ToolUseView, width: number): ToolUseSummaryDisplay {
   const safeWidth = Math.max(20, Math.floor(width));
   const status = formatToolUseStatus(view.status);
   const toolName = formatActivityToolName(view.toolName);
@@ -33,6 +35,12 @@ export function createToolUseDisplay(view: ToolUseView, width: number): ToolUseD
   }
   collapsed = boundText(collapsed, safeWidth);
 
+  return { collapsed, status };
+}
+
+/** Expensive detail serialization is intentionally isolated from collapsed rows. */
+export function createToolUseDetailLines(view: ToolUseView): string[] {
+  const duration = formatActivityDuration(view.durationMs);
   const detailLines: string[] = [];
   if (hasOwn(view, "input")) {
     detailLines.push(boundDetailLine("input", safeDetail(view.input)));
@@ -53,7 +61,14 @@ export function createToolUseDisplay(view: ToolUseView, width: number): ToolUseD
     detailLines.push(boundDetailLine("diagnostic", diagnosticText(view.diagnostic)));
   }
 
-  return { collapsed, status, detailLines };
+  return detailLines;
+}
+
+export function createToolUseDisplay(view: ToolUseView, width: number): ToolUseDisplay {
+  return {
+    ...createToolUseSummary(view, width),
+    detailLines: createToolUseDetailLines(view),
+  };
 }
 
 export function formatToolUseStatus(status: ToolUseStatus): ToolUseStatusDisplay {
@@ -85,7 +100,11 @@ function summarizeToolInput(value: unknown) {
   if (typeof value === "number" || typeof value === "boolean" || value === null) {
     return String(value);
   }
-  if (Array.isArray(value)) return boundText(safeDetail(value), 120);
+  if (Array.isArray(value)) {
+    const preview = value.slice(0, 8);
+    const suffix = value.length > preview.length ? ` … +${value.length - preview.length}` : "";
+    return boundText(`${safeDetail(preview)}${suffix}`, 120);
+  }
   if (typeof value === "object") {
     const primitives = Object.values(value as Record<string, unknown>)
       .filter((candidate) => (

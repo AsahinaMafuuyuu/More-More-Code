@@ -2,6 +2,7 @@
 import { TextAttributes } from "@opentui/core";
 import { useTheme } from "../../providers/theme";
 import { Mode, type ModeType } from "@more-more-code/shared";
+import { MessageTextDisclosure } from "./message-text-disclosure";
 
 type Props = {
     message: string;
@@ -29,7 +30,7 @@ export function UserMessage({ message, mode }: Props) {
                     backgroundColor={colors.surface}
                     width="100%"
                 >
-                    <text>{message}</text>
+                    <MessageTextDisclosure text={message} />
                 </box>
             </box>
         </box>

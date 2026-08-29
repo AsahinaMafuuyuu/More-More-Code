@@ -32,7 +32,9 @@ const BUILT_IN_PRICING_REVISIONS: readonly PricingRevision[] = SUPPORTED_CHAT_MO
     }),
 ).filter((revision) => revision.providerId !== "deepseek");
 
-const DEEPSEEK_OFFICIAL_TARIFF_EFFECTIVE_FROM = Date.parse("2026-08-27T00:00:00.000Z");
+// DeepSeek's current peak/off-peak tariff took effect at 2026-08-16 16:00 UTC.
+// Peak windows apply every day, not only on weekdays.
+const DEEPSEEK_OFFICIAL_TARIFF_EFFECTIVE_FROM = Date.parse("2026-08-16T16:00:00.000Z");
 const DEEPSEEK_PEAK_WINDOWS_UTC = [[1, 4], [6, 10]] as const;
 
 const DEEPSEEK_TIME_OF_USE_RATES = {
@@ -40,13 +42,11 @@ const DEEPSEEK_TIME_OF_USE_RATES = {
         peak: {
             inputNoCacheUsdPerMillionTokens: 0.44,
             cacheReadUsdPerMillionTokens: 0.014,
-            cacheWriteUsdPerMillionTokens: 0.44,
             outputUsdPerMillionTokens: 1.32,
         },
         offPeak: {
             inputNoCacheUsdPerMillionTokens: 0.22,
             cacheReadUsdPerMillionTokens: 0.007,
-            cacheWriteUsdPerMillionTokens: 0.22,
             outputUsdPerMillionTokens: 0.66,
         },
     },
@@ -54,13 +54,11 @@ const DEEPSEEK_TIME_OF_USE_RATES = {
         peak: {
             inputNoCacheUsdPerMillionTokens: 1.32,
             cacheReadUsdPerMillionTokens: 0.044,
-            cacheWriteUsdPerMillionTokens: 1.32,
             outputUsdPerMillionTokens: 3.96,
         },
         offPeak: {
             inputNoCacheUsdPerMillionTokens: 0.66,
             cacheReadUsdPerMillionTokens: 0.022,
-            cacheWriteUsdPerMillionTokens: 0.66,
             outputUsdPerMillionTokens: 1.98,
         },
     },
@@ -72,7 +70,7 @@ export function resolvePricingRevision(input: PricingResolutionInput): PricingRe
     // identity. V1 deliberately has no implicit Custom Provider pricing.
     if (input.providerKind === "custom") return null;
 
-    // DeepSeek V4 uses a recurring weekday UTC peak/off-peak tariff. Resolve
+    // DeepSeek V4 uses recurring daily UTC peak/off-peak windows. Resolve
     // that schedule to one concrete immutable snapshot at Model Step time so
     // persisted historical Cost never depends on a later catalog lookup.
     if (input.revisions === undefined
@@ -161,8 +159,6 @@ function resolveDeepSeekPricingSnapshot(modelId: string, at: number): PricingRev
 
 function isDeepSeekPeakAt(at: number) {
     const date = new Date(at);
-    const day = date.getUTCDay();
-    if (day === 0 || day === 6) return false;
     const hour = date.getUTCHours();
     return DEEPSEEK_PEAK_WINDOWS_UTC.some(([start, end]) => hour >= start && hour < end);
 }
@@ -172,12 +168,10 @@ function resolveDeepSeekTariffInterval(at: number) {
     const midnight = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
     const boundaries = [DEEPSEEK_OFFICIAL_TARIFF_EFFECTIVE_FROM];
 
-    // Eight days on either side always covers the previous and next weekday
-    // tariff transition, including a full weekend.
-    for (let dayOffset = -8; dayOffset <= 8; dayOffset += 1) {
+    // Two days on either side covers the previous and next daily tariff
+    // transition even at the edge of a UTC day.
+    for (let dayOffset = -2; dayOffset <= 2; dayOffset += 1) {
         const dayStart = new Date(midnight + dayOffset * 86_400_000);
-        const weekday = dayStart.getUTCDay();
-        if (weekday === 0 || weekday === 6) continue;
         for (const [start, end] of DEEPSEEK_PEAK_WINDOWS_UTC) {
             boundaries.push(dayStart.getTime() + start * 3_600_000);
             boundaries.push(dayStart.getTime() + end * 3_600_000);

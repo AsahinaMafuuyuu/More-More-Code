@@ -1,5 +1,17 @@
 # Stage 5.1 + Stage 6 — Session Semantics & Tool Runtime
 
+## Stage C — Context Cache Stability & Reliable Compaction Runtime (2026-08-29)
+
+- [x] C1 permanent `CacheFamilyId` / `ContextEpochId` / `RenderedPrefixDigest` + miss classification
+- [x] C2 provider capability-aware cache controls and deterministic batch breakpoints
+- [x] C3 Pi-style recent raw suffix selection + Compaction Plan + Checkpoint V2 + V1 compatibility
+- [x] C4 required-anchor validation + priority-aware deterministic fallback without arbitrary tail truncation
+- [x] C5 transactional `commit -> rehydrate -> Provider` cutover + Compaction Runtime Activity UI
+- [x] C6 focused/full regressions, typechecks/build/stress and documentation closeout
+- [ ] C7 remove temporary full-context recorder only after explicit investigation closeout
+
+---
+
 ## Stage 5.1 — Semantic Lock
 
 - [x] Keep chained compaction semantics covered: a replacement checkpoint compacts the previous checkpoint plus newly omitted history

@@ -1,7 +1,10 @@
 import { TextAttributes } from "@opentui/core";
 import { useMemo, useState } from "react";
 import type { ToolUseStatus, ToolUseView } from "../../lib/tool-use-projection";
-import { createToolUseDisplay } from "../../lib/tool-use-view-model";
+import {
+  createToolUseDetailLines,
+  createToolUseSummary,
+} from "../../lib/tool-use-view-model";
 import { useTheme } from "../../providers/theme";
 import { useUiTerminalDimensions } from "../../providers/terminal-dimensions";
 import { EmptyBorder } from "../border";
@@ -14,9 +17,13 @@ export function ToolUse({ view }: Props) {
   const { colors } = useTheme();
   const dimensions = useUiTerminalDimensions();
   const [expanded, setExpanded] = useState(false);
-  const display = useMemo(
-    () => createToolUseDisplay(view, Math.max(20, dimensions.width - 10)),
+  const summary = useMemo(
+    () => createToolUseSummary(view, Math.max(20, dimensions.width - 10)),
     [dimensions.width, view],
+  );
+  const detailLines = useMemo(
+    () => expanded ? createToolUseDetailLines(view) : [],
+    [expanded, view],
   );
   const color = statusColor(view.status, colors);
 
@@ -37,12 +44,12 @@ export function ToolUse({ view }: Props) {
         gap={1}
         onMouseDown={() => setExpanded((current) => !current)}
       >
-        <text fg={color}>{expanded ? "▾" : "▸"}</text>
-        <text fg={color}>{display.status.glyph}</text>
-        <text>{display.collapsed}</text>
+        <text fg={colors.sessionTool}>{expanded ? "▾" : "▸"}</text>
+        <text fg={color}>{summary.status.glyph}</text>
+        <text attributes={TextAttributes.BOLD} fg={color}>{summary.collapsed}</text>
       </box>
 
-      {expanded && display.detailLines.map((line, index) => (
+      {expanded && detailLines.map((line, index) => (
         <box key={`${view.toolCallId}:detail:${index}`} width="100%" paddingLeft={4}>
           <text
             attributes={TextAttributes.DIM}

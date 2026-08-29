@@ -13,6 +13,7 @@ import {
   selectActivity,
   selectComposerRuntime,
   selectConversation,
+  selectInteractionQueue,
   selectStatus,
 } from "../src/ui/session/store/session-ui-selectors";
 
@@ -24,6 +25,7 @@ describe("Session UI render isolation", () => {
       activity: 0,
       status: 0,
       composer: 0,
+      queue: 0,
     };
 
     function ConversationProbe() {
@@ -44,7 +46,12 @@ describe("Session UI render isolation", () => {
     function ComposerProbe() {
       renders.composer += 1;
       const value = useSessionUiSelector(selectComposerRuntime);
-      return <text>{value.submitMode}</text>;
+      return <text>{value.runActive ? "active" : "idle"}</text>;
+    }
+    function QueueProbe() {
+      renders.queue += 1;
+      const value = useSessionUiSelector(selectInteractionQueue);
+      return <text>{value.pending.length}</text>;
     }
 
     let setup!: Awaited<ReturnType<typeof testRender>>;
@@ -56,6 +63,7 @@ describe("Session UI render isolation", () => {
             <ActivityProbe />
             <StatusProbe />
             <ComposerProbe />
+            <QueueProbe />
           </box>
         </SessionUiStoreProvider>,
         { width: 80, height: 20 },
@@ -77,6 +85,7 @@ describe("Session UI render isolation", () => {
       expect(renders.conversation).toBe(initial.conversation);
       expect(renders.status).toBe(initial.status);
       expect(renders.composer).toBe(initial.composer);
+      expect(renders.queue).toBe(initial.queue);
 
       const afterActivity = { ...renders };
       await act(async () => {
@@ -91,6 +100,26 @@ describe("Session UI render isolation", () => {
       expect(renders.conversation).toBe(afterActivity.conversation);
       expect(renders.activity).toBe(afterActivity.activity);
       expect(renders.composer).toBe(afterActivity.composer);
+      expect(renders.queue).toBe(afterActivity.queue);
+
+      const afterStatus = { ...renders };
+      await act(async () => {
+        store.setSlice("interactionQueue", {
+          pending: [{
+            id: "pending-1",
+            kind: "follow-up",
+            text: "queued",
+            createdAt: 1,
+          }],
+          outcomes: [],
+        });
+        await setup.flush({ maxPasses: 10 });
+      });
+      expect(renders.queue).toBe(afterStatus.queue + 1);
+      expect(renders.conversation).toBe(afterStatus.conversation);
+      expect(renders.activity).toBe(afterStatus.activity);
+      expect(renders.status).toBe(afterStatus.status);
+      expect(renders.composer).toBe(afterStatus.composer);
     } finally {
       setup.renderer.destroy();
       store.destroy();

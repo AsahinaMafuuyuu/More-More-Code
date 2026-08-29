@@ -3,10 +3,12 @@ import { homedir } from "os";
 import { dirname, join, resolve } from "path";
 import { z } from "zod";
 import type {
+    AgentToolBatchExecution,
     PermissionEffect,
     PermissionRule,
     PermissionScope,
 } from "@more-more-code/harness";
+import { MAX_TOOL_BATCH_CONCURRENCY } from "@more-more-code/harness";
 import {
     DEFAULT_CHAT_MODEL_REF,
     type ModelRef,
@@ -46,6 +48,18 @@ const permissionRuleSchema = z.object({
 const sandboxModeSchema = z.enum(["off", "auto", "required"]);
 const sandboxNetworkSchema = z.enum(["inherit", "deny"]);
 const sandboxEnvironmentSchema = z.enum(["inherit", "safe"]);
+const toolExecutionModeSchema = z.enum(["serial", "parallel"]);
+const toolExecutionConcurrencySchema = z.number()
+    .int()
+    .min(1)
+    .max(MAX_TOOL_BATCH_CONCURRENCY);
+const toolExecutionPatchSchema = z.object({
+    mode: toolExecutionModeSchema.optional(),
+    maxConcurrency: toolExecutionConcurrencySchema.optional(),
+}).strict().refine(
+    (value) => value.mode !== undefined || value.maxConcurrency !== undefined,
+    "Expected at least one Tool execution field",
+);
 const environmentVariableNameSchema = z.string()
     .trim()
     .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "Expected an environment variable name");
@@ -69,6 +83,10 @@ const agentConfigFileSchema = z.object({
         native: z.object({
             enabled: z.boolean().optional(),
         }).optional(),
+        execution: z.object({
+            mode: toolExecutionModeSchema.optional(),
+            maxConcurrency: toolExecutionConcurrencySchema.optional(),
+        }).strict().optional(),
         mcp: z.object({
             servers: z.record(z.string(), mcpServerSchema).optional(),
         }).optional(),
@@ -105,6 +123,10 @@ export type ResolvedAgentConfig = {
     tools: {
         native: {
             enabled: boolean;
+        };
+        execution: {
+            mode: z.infer<typeof toolExecutionModeSchema>;
+            maxConcurrency: number;
         };
         mcp: {
             servers: Record<string, McpServerConfig>;
@@ -156,6 +178,10 @@ const DEFAULT_CONFIG: ResolvedAgentConfig = {
     tools: {
         native: {
             enabled: true,
+        },
+        execution: {
+            mode: "serial",
+            maxConcurrency: 4,
         },
         mcp: {
             servers: {},
@@ -299,6 +325,12 @@ export function mergeAgentConfig(
         if (config.tools?.native?.enabled !== undefined) {
             resolved.tools.native.enabled = config.tools.native.enabled;
         }
+        if (config.tools?.execution?.mode !== undefined) {
+            resolved.tools.execution.mode = config.tools.execution.mode;
+        }
+        if (config.tools?.execution?.maxConcurrency !== undefined) {
+            resolved.tools.execution.maxConcurrency = config.tools.execution.maxConcurrency;
+        }
         if (config.tools?.mcp?.servers) {
             resolved.tools.mcp.servers = {
                 ...resolved.tools.mcp.servers,
@@ -395,6 +427,58 @@ export async function saveAgentConfigModel(input: {
     const nextProject = scope === "project"
         ? agentConfigFileSchema.parse({ ...projectConfig, model })
         : projectConfig;
+
+    await atomicWriteConfig(
+        scope === "global" ? paths.globalConfigPath : paths.projectConfigPath,
+        serializeAgentConfig(scope === "global" ? nextGlobal : nextProject),
+    );
+
+    return {
+        paths,
+        global: nextGlobal,
+        project: nextProject,
+        resolved: mergeAgentConfig(nextGlobal, nextProject),
+    };
+}
+
+/**
+ * Persist a typed Tool Batch execution override through the same Agent Config
+ * authority used by /config. Nested config objects are merged rather than
+ * replaced so changing execution policy cannot discard native/MCP settings.
+ */
+export async function saveAgentConfigToolExecution(input: {
+    execution: Partial<AgentToolBatchExecution>;
+    scope?: ConfigScope;
+    workspaceRoot?: string;
+    globalHome?: string;
+    ensureLayout?: boolean;
+}): Promise<AgentConfigBundle> {
+    const scope = input.scope ?? "project";
+    const execution = toolExecutionPatchSchema.parse(input.execution);
+    const paths = resolveAgentConfigPaths({
+        workspaceRoot: input.workspaceRoot,
+        globalHome: input.globalHome,
+    });
+    if (input.ensureLayout !== false) {
+        await ensureAgentConfigLayout(paths);
+    }
+
+    const [globalConfig, projectConfig] = await Promise.all([
+        readConfigFile(paths.globalConfigPath),
+        readConfigFile(paths.projectConfigPath),
+    ]);
+    const applyExecutionPatch = (config: AgentConfigFile): AgentConfigFile => agentConfigFileSchema.parse({
+        ...config,
+        tools: {
+            ...config.tools,
+            execution: {
+                ...config.tools?.execution,
+                ...execution,
+            },
+        },
+    });
+    const nextGlobal = scope === "global" ? applyExecutionPatch(globalConfig) : globalConfig;
+    const nextProject = scope === "project" ? applyExecutionPatch(projectConfig) : projectConfig;
 
     await atomicWriteConfig(
         scope === "global" ? paths.globalConfigPath : paths.projectConfigPath,

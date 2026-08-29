@@ -1,8 +1,3 @@
-import { createAnthropic } from "@ai-sdk/anthropic";
-import { createDeepSeek, type DeepSeekLanguageModelChatOptions } from "@ai-sdk/deepseek";
-import { createOpenAI } from "@ai-sdk/openai";
-import type { FetchFunction, ProviderOptions } from "@ai-sdk/provider-utils";
-import type { LanguageModel } from "ai";
 import {
     findSupportedChatModel,
     inferModelRefFromLegacyModelId,
@@ -12,32 +7,34 @@ import {
 } from "@more-more-code/shared";
 import type { AgentEnvironment } from "./agent-environment";
 import { getAgentEnvironment } from "./agent-environment";
-import { resolveProviderAuth } from "./provider-auth";
+import { resolveProviderAuth, type ResolvedProviderAuth } from "./provider-auth";
 import type { ProviderConfig } from "./provider-registry";
-import { BUILT_IN_PROVIDER_BASE_URLS } from "./provider-runtime";
+import { BUILT_IN_PROVIDER_BASE_URLS } from "./provider-endpoints";
+import type { ProviderRequestProtocol } from "./provider-runtime";
+
+export type ProviderModelOptions = {
+    reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+};
 
 export type ResolvedModel = {
-    model: LanguageModel;
     provider: ProviderKind;
     providerId: ProviderId;
     modelId: string;
-    providerOptions?: ProviderOptions;
+    protocol: ProviderRequestProtocol;
+    endpoint: string;
+    auth: ResolvedProviderAuth;
+    modelOptions?: ProviderModelOptions;
 };
 
-const DEEPSEEK_PROVIDER_OPTIONS: Record<string, ProviderOptions | undefined> = {
-    "deepseek-v4-flash": {
-        deepseek: {
-            thinking: { type: "enabled" },
-            reasoningEffort: "medium",
-        } satisfies DeepSeekLanguageModelChatOptions,
-    },
-    "deepseek-v4-pro": {
-        deepseek: {
-            thinking: { type: "enabled" },
-            reasoningEffort: "medium",
-        } satisfies DeepSeekLanguageModelChatOptions,
-    },
+const DEEPSEEK_PROVIDER_OPTIONS: Record<string, ProviderModelOptions | undefined> = {
+    "deepseek-v4-flash": { reasoningEffort: "medium" },
+    "deepseek-v4-pro": { reasoningEffort: "medium" },
 };
+
+function providerModelOptions(providerKind: ProviderKind, modelId: string): ProviderModelOptions | undefined {
+    if (providerKind === "deepseek") return DEEPSEEK_PROVIDER_OPTIONS[modelId];
+    return undefined;
+}
 
 export function normalizeModelRef(input: ModelRef | string, providerId?: string): ModelRef {
     if (typeof input !== "string") {
@@ -59,9 +56,7 @@ export function normalizeModelRef(input: ModelRef | string, providerId?: string)
 function assertConfiguredModel(provider: ProviderConfig, ref: ModelRef) {
     if (!provider.enabled) throw new Error(`Provider '${provider.id}' is disabled`);
     if (!provider.models.includes(ref.modelId)) {
-        throw new Error(
-            `Model '${ref.modelId}' is not configured for provider '${provider.id}'`,
-        );
+        throw new Error(`Model '${ref.modelId}' is not configured for provider '${provider.id}'`);
     }
 }
 
@@ -75,17 +70,26 @@ export function resolveConfiguredProvider(
     return provider;
 }
 
-/**
- * Resolve a configured ModelRef into an AI SDK LanguageModel. Provider config
- * and credentials are resolved before returning, so missing/invalid auth fails
- * before the Model Step can perform a network side effect.
- */
+/** Resolve non-secret execution options for presentation and request compilation. */
+export function getConfiguredModelOptions(
+    modelRef: ModelRef,
+    environment: AgentEnvironment = getAgentEnvironment(),
+): ProviderModelOptions | undefined {
+    const provider = resolveConfiguredProvider(modelRef, environment);
+    const options = providerModelOptions(provider.kind, modelRef.modelId);
+    return options ? structuredClone(options) : undefined;
+}
+
+function customEndpoint(baseURL: string) {
+    return `${baseURL.replace(/\/+$/, "")}/chat/completions`;
+}
+
+/** Resolve Provider Registry + Credential Store into a native execution descriptor. */
 export async function resolveChatModel(
     modelRef: ModelRef,
     environment: AgentEnvironment = getAgentEnvironment(),
 ): Promise<ResolvedModel> {
     const provider = resolveConfiguredProvider(modelRef, environment);
-
     const auth = await resolveProviderAuth({
         provider,
         credentialStore: environment.credentials,
@@ -93,94 +97,62 @@ export async function resolveChatModel(
     });
 
     switch (provider.kind) {
-        case "openai": {
+        case "openai":
             if (auth.type !== "api-key" && auth.type !== "codex-oauth") {
                 throw new Error(`Unsupported OpenAI auth strategy: ${auth.type}`);
             }
-            const openai = createOpenAI({
-                apiKey: auth.value,
-                baseURL: BUILT_IN_PROVIDER_BASE_URLS.openai,
-            });
             return {
-                model: openai.responses(modelRef.modelId),
                 provider: provider.kind,
                 providerId: provider.id,
                 modelId: modelRef.modelId,
+                protocol: "openai-responses",
+                endpoint: `${BUILT_IN_PROVIDER_BASE_URLS.openai}/responses`,
+                auth,
             };
-        }
-        case "anthropic": {
+        case "anthropic":
             if (auth.type !== "api-key") throw new Error(`Unsupported Anthropic auth strategy: ${auth.type}`);
-            const anthropic = createAnthropic({
-                apiKey: auth.value,
-                baseURL: BUILT_IN_PROVIDER_BASE_URLS.anthropic,
-            });
             return {
-                model: anthropic(modelRef.modelId),
                 provider: provider.kind,
                 providerId: provider.id,
                 modelId: modelRef.modelId,
+                protocol: "anthropic-messages",
+                endpoint: `${BUILT_IN_PROVIDER_BASE_URLS.anthropic}/messages`,
+                auth,
             };
-        }
-        case "deepseek": {
+        case "deepseek":
             if (auth.type !== "api-key") throw new Error(`Unsupported DeepSeek auth strategy: ${auth.type}`);
-            const deepseek = createDeepSeek({
-                apiKey: auth.value,
-                baseURL: BUILT_IN_PROVIDER_BASE_URLS.deepseek,
-            });
+            const modelOptions = providerModelOptions(provider.kind, modelRef.modelId);
             return {
-                model: deepseek(modelRef.modelId),
                 provider: provider.kind,
                 providerId: provider.id,
                 modelId: modelRef.modelId,
-                providerOptions: DEEPSEEK_PROVIDER_OPTIONS[modelRef.modelId],
+                protocol: "openai-chat-completions",
+                endpoint: `${BUILT_IN_PROVIDER_BASE_URLS.deepseek}/chat/completions`,
+                auth,
+                ...(modelOptions ? { modelOptions } : {}),
             };
-        }
-        case "google": {
+        case "google":
             if (auth.type !== "api-key") throw new Error(`Unsupported Google auth strategy: ${auth.type}`);
-            // Google exposes an OpenAI-compatible Gemini endpoint. Keeping this
-            // transport behind the provider resolver avoids leaking protocol
-            // choices into AgentLoop/Context and avoids a second model runtime.
-            const google = createOpenAI({
-                name: "google",
-                baseURL: BUILT_IN_PROVIDER_BASE_URLS.google,
-                apiKey: auth.value,
-            });
             return {
-                model: google.chat(modelRef.modelId),
                 provider: provider.kind,
                 providerId: provider.id,
                 modelId: modelRef.modelId,
+                protocol: "google-generative-ai",
+                endpoint: `${BUILT_IN_PROVIDER_BASE_URLS.google}/models/${encodeURIComponent(modelRef.modelId)}:streamGenerateContent?alt=sse`,
+                auth,
             };
-        }
-        case "custom": {
-            let apiKey: string | undefined;
-            if (auth.type === "api-key" || auth.type === "bearer") apiKey = auth.value;
-            else if (auth.type !== "none") throw new Error(`Unsupported custom provider auth strategy: ${auth.type}`);
-            const unauthenticatedFetch = auth.type === "none"
-                ? async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
-                    const requestHeaders = new Headers(init?.headers);
-                    requestHeaders.delete("authorization");
-                    requestHeaders.delete("x-api-key");
-                    return fetch(input, { ...init, headers: requestHeaders });
-                }
-                : undefined;
-            const custom = createOpenAI({
-                name: provider.id,
-                baseURL: provider.baseURL,
-                // The OpenAI SDK requires a non-empty key before invoking its
-                // fetch hook. For explicit no-auth providers we supply a
-                // non-secret sentinel and remove the generated auth header in
-                // the fetch adapter below, preventing ambient OPENAI_API_KEY use.
-                apiKey: apiKey ?? "more-more-code-no-auth",
-                ...(unauthenticatedFetch ? { fetch: unauthenticatedFetch as FetchFunction } : {}),
-            });
+        case "custom":
+            if (auth.type !== "api-key" && auth.type !== "bearer" && auth.type !== "none") {
+                throw new Error(`Unsupported custom provider auth strategy: ${auth.type}`);
+            }
             return {
-                model: custom.chat(modelRef.modelId),
                 provider: provider.kind,
                 providerId: provider.id,
                 modelId: modelRef.modelId,
+                protocol: "openai-chat-completions",
+                endpoint: customEndpoint(provider.baseURL),
+                auth,
             };
-        }
     }
 }
 

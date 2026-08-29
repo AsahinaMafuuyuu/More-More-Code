@@ -29,6 +29,9 @@ const options = parseTuiSoakOptions(Bun.argv.slice(2));
 const pressure = resolveTuiSoakPressure(options.workload);
 const runtime = assertSupportedBunRuntime(Bun.version, Bun.revision);
 const renderProfile = resolveTuiRenderProfile(options.renderProfile);
+const bufferedOutput = process.env.MORE_MORE_CODE_TUI_SOAK_BUFFERED_OUTPUT === "memory"
+  ? "memory"
+  : "stdout";
 const opentuiVersion = readOpenTuiVersion();
 const startedAt = Date.now();
 const memoryAtStart = process.memoryUsage();
@@ -63,6 +66,7 @@ const scheduler = createSessionUiCommitScheduler({
 const renderer = await createCliRenderer({
   targetFps: renderProfile.targetFps,
   maxFps: renderProfile.maxFps,
+  bufferedOutput,
   exitOnCtrlC: false,
 });
 const root = createRoot(renderer);
@@ -138,6 +142,7 @@ console.log(JSON.stringify({
   durationSeconds: options.durationSeconds,
   elapsedMs,
   renderProfile: renderProfile.name,
+  bufferedOutput,
   bunVersion: runtime.version,
   bunRevision: runtime.revision ?? null,
   opentuiVersion,
@@ -205,7 +210,6 @@ function startWorkload() {
         disabled: active,
         runActive: active,
         canInterrupt: active,
-        submitMode: active ? "steer" : "submit",
         followUpAvailable: active,
       },
     });
@@ -292,6 +296,7 @@ function createConversation(
   } as unknown as Message;
   return {
     messages: [message],
+    hiddenMessageCount: 0,
     toolUses,
     currentRun: null,
     errorMessage: null,

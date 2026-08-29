@@ -16,8 +16,10 @@ import { resolveInteractionAction, type InteractionState } from "../interaction/
 export type ComposerProps = {
   onSubmit: (text: string) => void;
   onFollowUp?: (text: string) => void;
+  onSteer?: (text: string) => void;
   onIntent?: (intent: ComposerIntent) => void | Promise<void>;
   disabled?: boolean;
+  runActive?: boolean;
   mode: ModeType;
   workspaceRoot?: string;
 };
@@ -25,8 +27,10 @@ export type ComposerProps = {
 export function Composer({
   onSubmit,
   onFollowUp,
+  onSteer,
   onIntent,
   disabled = false,
+  runActive = false,
   mode,
   workspaceRoot = process.cwd(),
 }: ComposerProps) {
@@ -52,7 +56,8 @@ export function Composer({
     inspector: isTopLayer("inspector"),
     composer: isTopLayer("base"),
     runInterruptible: false,
-  }), [commandOpen, isTopLayer, mentionOpen]);
+    runActive,
+  }), [commandOpen, isTopLayer, mentionOpen, runActive]);
 
   useEffect(() => {
     if (commandOpen) push("command", () => true);
@@ -130,12 +135,13 @@ export function Composer({
       executeMention(mentionSelectedIndex);
       return;
     }
-    if (action?.action !== "submit") return;
+    if (action?.action !== "submit" && action?.action !== "follow-up") return;
     const value = editorRef.current?.getText().trim() ?? "";
     if (!value) return;
-    onSubmit(value);
+    if (action.action === "follow-up") onFollowUp?.(value);
+    else onSubmit(value);
     clearEditor();
-  }, [clearEditor, commandSelectedIndex, disabled, executeCommand, executeMention, getInteractionState, mentionSelectedIndex, onSubmit]);
+  }, [clearEditor, commandSelectedIndex, disabled, executeCommand, executeMention, getInteractionState, mentionSelectedIndex, onFollowUp, onSubmit]);
 
   const followUp = useCallback(() => {
     if (disabled || !onFollowUp || commandOpen || mentionOpen) return;
@@ -145,10 +151,18 @@ export function Composer({
     clearEditor();
   }, [clearEditor, commandOpen, disabled, mentionOpen, onFollowUp]);
 
+  const steer = useCallback(() => {
+    if (disabled || !onSteer || commandOpen || mentionOpen) return;
+    const value = editorRef.current?.getText().trim() ?? "";
+    if (!value) return;
+    onSteer(value);
+    clearEditor();
+  }, [clearEditor, commandOpen, disabled, mentionOpen, onSteer]);
+
   useKeyboard((key) => {
     if (disabled) return;
-    const interactionKey = (key.name === "enter" || key.name === "return") && (key.option || key.meta)
-      ? "follow-up"
+    const interactionKey = (key.name === "enter" || key.name === "return") && key.ctrl
+      ? "steering"
       : key.name === "escape" || key.name === "up" || key.name === "down" || key.name === "tab"
         ? key.name
         : null;
@@ -186,6 +200,10 @@ export function Composer({
       case "follow-up":
         key.stopPropagation();
         followUp();
+        return;
+      case "steering":
+        key.stopPropagation();
+        steer();
         return;
     }
   });

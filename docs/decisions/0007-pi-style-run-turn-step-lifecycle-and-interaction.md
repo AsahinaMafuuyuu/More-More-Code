@@ -98,6 +98,23 @@ A follow-up remains part of the same structural Run and therefore preserves one 
 
 This prevents a long completed interaction from leaving only one or two remaining loop iterations for a newly queued follow-up while keeping replay/history semantics intact.
 
+### Multi-dimensional runaway budgets (2026-08-29 amendment)
+
+The original implementation used one default `maxSteps=64` budget where both a Provider Model Step and every individual Tool Call consumed one unit. Real coding-agent workloads showed that this conflated two materially different resources: one legitimate interaction reached 27 model iterations plus 37 distinct Tool executions and failed exactly at 64 total Steps even though there was no repeated identical Tool Call.
+
+The Harness therefore keeps a finite fail-safe but no longer treats one small total-Step counter as the primary workload policy. One interaction epoch now has independent limits:
+
+```text
+maxTurns      = 128
+maxModelSteps = 128
+maxToolSteps  = 512
+maxSteps      = 1024  # absolute safety ceiling
+```
+
+`follow-up` still starts a fresh budget epoch. Model and Tool budgets are checked before their respective side effects, and the total-Step ceiling remains an independent last-resort guard for future Step kinds and configuration overrides.
+
+This is deliberately not an unlimited loop. Long-running agents still need bounded resources and explicit interruption. Future protection may add wall-clock/cost budgets and semantic no-progress/cycle detection, but such detectors must not classify a long sequence of distinct repository-inspection Tool Calls as a loop merely because it exceeds 64 Steps.
+
 ### Step lifecycle
 
 A Step remains one concrete execution unit:

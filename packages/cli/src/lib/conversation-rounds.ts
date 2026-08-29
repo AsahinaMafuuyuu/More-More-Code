@@ -1,4 +1,4 @@
-import { isToolUIPart } from "ai";
+import { isToolUIPart } from "./chat-types";
 import type { AgentRunStatus } from "@more-more-code/harness";
 import type { ModeType, ModelRef } from "@more-more-code/shared";
 import type { Message } from "./chat-types";

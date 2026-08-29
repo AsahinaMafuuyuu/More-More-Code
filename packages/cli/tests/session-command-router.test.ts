@@ -15,6 +15,16 @@ describe("Session command router", () => {
       type: "change-mode",
       mode: "PLAN",
     })).toEqual({ type: "change-mode", mode: "PLAN" });
+    expect(resolveSessionCommandIntent({
+      type: "command",
+      commandName: "config",
+      commandValue: "/config",
+    })).toEqual({ type: "open-dialog", dialog: "settings" });
+    expect(resolveSessionCommandIntent({
+      type: "command",
+      commandName: "settings",
+      commandValue: "/settings",
+    })).toEqual({ type: "open-dialog", dialog: "settings" });
   });
 
   test("executes exactly one application action per intent", async () => {

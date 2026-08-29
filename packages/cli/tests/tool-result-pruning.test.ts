@@ -63,7 +63,41 @@ function freshTail(): Message {
 }
 
 describe("Tool Result pruning", () => {
-  test("keeps the newest result full and prunes an older oversized shell result without mutating canonical messages", () => {
+  test("keeps an oversized Tool Result model projection stable as newer results are appended", () => {
+    const oversized = toolMessage({
+      id: "stable-message",
+      toolName: "bash",
+      toolCallId: "stable-call",
+      toolInput: { command: "bun test" },
+      output: {
+        stdout: `${"PASS stable cache prefix\n".repeat(700)}FAIL retain this diagnostic\n`,
+        stderr: "",
+        exitCode: 1,
+      },
+    });
+
+    const first = projectToolResultWorkingSet({
+      messages: [oversized],
+      profile,
+      inputBudgetTokens: 10_000,
+    });
+    const later = projectToolResultWorkingSet({
+      messages: [oversized, freshTail()],
+      profile,
+      inputBudgetTokens: 10_000,
+      // A durable Session lookup may become available after first exposure;
+      // that must not rewrite model-visible history.
+      resolveSourceEntryId: () => "entry-stable-call",
+    });
+
+    const firstEnvelope = projectionEnvelope(first.messages[0]!);
+    const laterEnvelope = projectionEnvelope(later.messages[0]!);
+    expect(firstEnvelope.type).toBe("more-more-code.tool-result-projection");
+    expect(laterEnvelope).toEqual(firstEnvelope);
+    expect(firstEnvelope.source).toBe("tool-call:stable-call");
+  });
+
+  test("keeps a small newest result full and bounds an older oversized shell result without mutating canonical messages", () => {
     const old = toolMessage({
       id: "shell-message",
       toolName: "bash",
@@ -88,7 +122,7 @@ describe("Tool Result pruning", () => {
     expect(projected.messages[1]).toEqual(messages[1]);
     const envelope = projectionEnvelope(projected.messages[0]!);
     expect(envelope.type).toBe("more-more-code.tool-result-projection");
-    expect(envelope.source).toBe("session-entry:entry-shell-call");
+    expect(envelope.source).toBe("tool-call:shell-call");
     expect(envelope.content).toContain("ERROR build failed");
     expect(envelope.content).toContain("fatal: compilation failed");
     expect(messages).toEqual(canonical);
@@ -169,7 +203,7 @@ describe("Tool Result pruning", () => {
     expect(envelope.content).toContain("lines omitted");
   });
 
-  test("generic oversized results receive a bounded projection with a durable reference", () => {
+  test("generic oversized results receive a bounded projection with a stable Tool-call reference", () => {
     const projected = projectToolResultWorkingSet({
       messages: [
         toolMessage({
@@ -186,7 +220,7 @@ describe("Tool Result pruning", () => {
     });
 
     const envelope = projectionEnvelope(projected.messages[0]!);
-    expect(envelope.source).toBe("session-entry:durable-tool-result");
+    expect(envelope.source).toBe("tool-call:generic-call");
     expect(projected.stats.projectedTokens).toBeLessThan(projected.stats.originalTokens);
   });
 });

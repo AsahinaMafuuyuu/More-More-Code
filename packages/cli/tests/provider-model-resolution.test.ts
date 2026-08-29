@@ -6,6 +6,7 @@ import { bootstrapAgentEnvironment } from "../src/lib/agent-environment";
 import { defaultCredentialRef } from "../src/lib/provider-registry";
 import { EnvironmentCredentialStore } from "../src/lib/credential-store";
 import {
+    getConfiguredModelOptions,
     normalizeModelRef,
     resolveChatModel,
 } from "../src/lib/models";
@@ -93,5 +94,17 @@ describe("provider model resolution", () => {
         expect(profile.contextWindowTokens).toBe(128_000);
         expect(profile.reservedOutputTokens).toBe(12_288);
         expect(profile.tokenCounter.id).toBe("openai-compatible-estimator-v1");
+    });
+
+    test("exposes non-secret model reasoning options without resolving credentials", async () => {
+        const environment = await bootstrap();
+        expect(getConfiguredModelOptions({
+            providerId: "deepseek",
+            modelId: "deepseek-v4-flash",
+        }, environment)).toEqual({ reasoningEffort: "medium" });
+        expect(getConfiguredModelOptions({
+            providerId: "openai",
+            modelId: "gpt-5.5",
+        }, environment)).toBeUndefined();
     });
 });

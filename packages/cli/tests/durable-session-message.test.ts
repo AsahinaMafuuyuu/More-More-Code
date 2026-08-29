@@ -210,7 +210,7 @@ describe("durable Session message normalization", () => {
     );
   });
 
-  test("persists two Tool-continuation model steps even when AI SDK reuses one UIMessage id", () => {
+  test("persists two Tool-continuation model steps even when the UI runtime reuses one message id", () => {
     let nextId = 0;
     const options: SessionTreeOptions<Message> = {
       createId: () => `step-entry-${nextId += 1}`,

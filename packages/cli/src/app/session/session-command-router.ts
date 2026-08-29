@@ -41,6 +41,7 @@ const COMMAND_INTENTS: Readonly<Record<string, SessionCommandIntent>> = {
   parent: { type: "navigate-tree", target: "parent" },
   root: { type: "navigate-tree", target: "root" },
   compact: { type: "compact-context" },
+  config: { type: "open-dialog", dialog: "settings" },
   settings: { type: "open-dialog", dialog: "settings" },
   theme: { type: "open-dialog", dialog: "theme" },
   exit: { type: "exit" },

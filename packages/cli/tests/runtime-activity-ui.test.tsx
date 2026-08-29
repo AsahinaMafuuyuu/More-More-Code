@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { act } from "react";
 import { testRender } from "@opentui/react/test-utils";
 import { ActivityView } from "../src/components/activity-view";
+import { BotMessage } from "../src/components/messages/bot-message";
 import { ToolUse } from "../src/components/messages/tool-use";
 import { ThemeProvider } from "../src/providers/theme";
 import { TerminalDimensionsProvider } from "../src/providers/terminal-dimensions";
@@ -68,6 +69,110 @@ function UiProviders({ children }: { children: React.ReactNode }) {
 }
 
 describe("Runtime Activity UI", () => {
+  test("collapses long reasoning to two rows by default", async () => {
+    let setup!: Awaited<ReturnType<typeof testRender>>;
+    await act(async () => {
+      setup = await testRender(
+        <UiProviders>
+          <BotMessage
+            parts={[{
+              type: "reasoning",
+              text: `FIRST reasoning ${"context ".repeat(50)}\nSECOND reasoning ${"detail ".repeat(50)}\nLATE_REASONING_MARKER`,
+            } as never]}
+            toolUses={{}}
+          />
+        </UiProviders>,
+        { width: 54, height: 40 },
+      );
+    });
+    try {
+      await flush(setup);
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("Thinking:");
+      expect(frame).toContain("▸");
+      expect(frame).not.toContain("LATE_REASONING_MARKER");
+
+      await act(async () => {
+        await setup.mockMouse.click(4, 0);
+        await setup.flush({ maxPasses: 10 });
+      });
+      const expanded = setup.captureCharFrame();
+      expect(expanded).toContain("▾");
+      expect(expanded).toContain("LATE_REASONING_MARKER");
+    } finally {
+      setup.renderer.destroy();
+    }
+  });
+
+  test("collapsed streaming reasoning keeps an explicit active marker", async () => {
+    let setup!: Awaited<ReturnType<typeof testRender>>;
+    await act(async () => {
+      setup = await testRender(
+        <UiProviders>
+          <BotMessage
+            parts={[{
+              type: "reasoning",
+              text: `Working ${"detail ".repeat(40)}`,
+              state: "streaming",
+            } as never]}
+            toolUses={{}}
+          />
+        </UiProviders>,
+        { width: 70, height: 20 },
+      );
+    });
+    try {
+      await flush(setup);
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("Thinking:");
+      expect(frame).toContain("● active");
+      expect(frame).toContain("▸");
+    } finally {
+      setup.renderer.destroy();
+    }
+  });
+
+  test("collapses consecutive tools into one aggregate status row", async () => {
+    const parts = [
+      { type: "tool-readFile", toolCallId: "call-1", state: "output-available", input: { path: "a.ts" }, output: "a" },
+      { type: "tool-grep", toolCallId: "call-2", state: "output-available", input: { pattern: "x" }, output: "b" },
+      { type: "tool-bash", toolCallId: "call-3", state: "output-error", input: { command: "bun test" }, errorText: "failed" },
+    ] as never;
+    const toolUses: Record<string, ToolUseView> = {
+      "call-1": { toolCallId: "call-1", toolName: "readFile", status: "completed" },
+      "call-2": { toolCallId: "call-2", toolName: "grep", status: "completed" },
+      "call-3": { toolCallId: "call-3", toolName: "bash", status: "failed", error: "failed" },
+    };
+    let setup!: Awaited<ReturnType<typeof testRender>>;
+    await act(async () => {
+      setup = await testRender(
+        <UiProviders><BotMessage parts={parts} toolUses={toolUses} /></UiProviders>,
+        { width: 90, height: 20 },
+      );
+    });
+    try {
+      await flush(setup);
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("Tools 3");
+      expect(frame).toContain("2 completed");
+      expect(frame).toContain("1 failed");
+      expect(frame).not.toContain("Read File");
+      expect(frame).not.toContain("Grep");
+      expect(frame).not.toContain("Bash");
+
+      await act(async () => {
+        await setup.mockMouse.click(4, 0);
+        await setup.flush({ maxPasses: 10 });
+      });
+      const expanded = setup.captureCharFrame();
+      expect(expanded).toContain("Read File");
+      expect(expanded).toContain("Grep");
+      expect(expanded).toContain("Bash");
+    } finally {
+      setup.renderer.destroy();
+    }
+  });
+
   test("advances elapsed time inside ActivityView without rerendering its parent", async () => {
     const startedAt = Date.now() - 1_000;
     const tickingActivity = activity();
@@ -204,6 +309,15 @@ describe("Runtime Activity UI", () => {
       expect(frame).toContain("✓");
       expect(frame).toContain("Bash · bun test packages/cli · completed · 2.4s");
       expect(frame).not.toContain("...");
+
+      await act(async () => {
+        await setup.mockMouse.click(4, 0);
+        await setup.flush({ maxPasses: 10 });
+      });
+      const expanded = setup.captureCharFrame();
+      expect(expanded).toContain("input");
+      expect(expanded).toContain("output");
+      expect(expanded).toContain("191 pass");
     } finally {
       setup.renderer.destroy();
     }

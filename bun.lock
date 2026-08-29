@@ -14,18 +14,12 @@
         "more-more-code": "./bin/more-more-code",
       },
       "dependencies": {
-        "@ai-sdk/anthropic": "^4.0.12",
-        "@ai-sdk/deepseek": "^3.0.7",
-        "@ai-sdk/openai": "^4.0.11",
-        "@ai-sdk/provider-utils": "^5.0.7",
-        "@ai-sdk/react": "^4.0.40",
         "@more-more-code/harness": "workspace:*",
         "@more-more-code/runtime-store": "workspace:*",
         "@more-more-code/session-store": "workspace:*",
         "@more-more-code/shared": "workspace:*",
         "@opentui/core": "0.5.9",
         "@opentui/react": "0.5.9",
-        "ai": "^7.0.37",
         "open": "^11.0.0",
         "pretty-ms": "^9.3.0",
         "react": "^19.2.6",
@@ -95,7 +89,6 @@
     "packages/shared": {
       "name": "@more-more-code/shared",
       "dependencies": {
-        "ai": "^7.0.37",
         "zod": "^4.4.3",
       },
     },

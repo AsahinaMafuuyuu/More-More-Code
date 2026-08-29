@@ -1,4 +1,4 @@
-import { getToolName, isToolUIPart } from "ai";
+import { getToolName, isToolUIPart } from "./chat-types";
 import {
   projectSessionEntryPath,
   type ApprovalRequest,
@@ -46,28 +46,29 @@ export type ToolUseProjectionInput = {
   pendingApprovals?: readonly ApprovalRequest[];
 };
 
+type SessionPathEntry = ReturnType<typeof projectSessionEntryPath<Message>>[number];
+type ToolCallEntry = Extract<SessionPathEntry, { type: "tool_call" }>;
+type ToolResultEntry = Extract<SessionPathEntry, { type: "tool_result" }>;
+
+export type CanonicalToolUseIndex = Readonly<{
+  calls: ReadonlyMap<string, ToolCallEntry>;
+  results: ReadonlyMap<string, ToolResultEntry>;
+  integrityIssues: ReadonlySet<string>;
+}>;
+
 /**
- * Projects semantic ToolUse presentation from existing authorities without
- * creating a second durable terminal state. Canonical Session `tool_result`
- * wins over process-local/live hints; current Activity and Approval state are
- * used only while no canonical terminal exists.
+ * Session-path work is intentionally separated from chat streaming work. The
+ * returned index is safe to memoize by SessionTree identity/revision and reuse
+ * across arbitrarily many text/reasoning deltas.
  */
-export function projectToolUses(input: ToolUseProjectionInput): Readonly<Record<string, ToolUseView>> {
-  const liveParts = new Map<string, ToolPart>();
-  const calls = new Map<string, Extract<ReturnType<typeof projectSessionEntryPath<Message>>[number], { type: "tool_call" }>>();
-  const results = new Map<string, Extract<ReturnType<typeof projectSessionEntryPath<Message>>[number], { type: "tool_result" }>>();
+export function createCanonicalToolUseIndex(
+  sessionTree: SessionTreeState<Message>,
+): CanonicalToolUseIndex {
+  const calls = new Map<string, ToolCallEntry>();
+  const results = new Map<string, ToolResultEntry>();
   const integrityIssues = new Set<string>();
 
-  for (const message of input.messages) {
-    if (message.role !== "assistant") continue;
-    for (const part of message.parts) {
-      if (!isToolUIPart(part)) continue;
-      if (liveParts.has(part.toolCallId)) integrityIssues.add(part.toolCallId);
-      else liveParts.set(part.toolCallId, part as ToolPart);
-    }
-  }
-
-  for (const entry of projectSessionEntryPath(input.sessionTree)) {
+  for (const entry of projectSessionEntryPath(sessionTree)) {
     if (entry.type === "tool_call") {
       if (calls.has(entry.toolCallId)) integrityIssues.add(entry.toolCallId);
       else calls.set(entry.toolCallId, entry);
@@ -78,6 +79,53 @@ export function projectToolUses(input: ToolUseProjectionInput): Readonly<Record<
       integrityIssues.add(entry.toolCallId);
     }
     if (!results.has(entry.toolCallId)) results.set(entry.toolCallId, entry);
+  }
+
+  return { calls, results, integrityIssues };
+}
+
+export type ToolUseIndexedProjectionInput = {
+  messages: readonly Message[];
+  canonical: CanonicalToolUseIndex;
+  activity?: AgentActivityView | null;
+  pendingApprovals?: readonly ApprovalRequest[];
+  /**
+   * Compatibility mode for callers that require every canonical ToolUse. The
+   * main Conversation UI leaves this false so output cardinality is bounded by
+   * the materialized transcript + active runtime state.
+   */
+  includeAllCanonical?: boolean;
+};
+
+/**
+ * Projects semantic ToolUse presentation from existing authorities without
+ * creating a second durable terminal state. Canonical Session `tool_result`
+ * wins over process-local/live hints; current Activity and Approval state are
+ * used only while no canonical terminal exists.
+ */
+export function projectToolUses(input: ToolUseProjectionInput): Readonly<Record<string, ToolUseView>> {
+  return projectToolUsesFromIndex({
+    messages: input.messages,
+    canonical: createCanonicalToolUseIndex(input.sessionTree),
+    activity: input.activity,
+    pendingApprovals: input.pendingApprovals,
+    includeAllCanonical: true,
+  });
+}
+
+export function projectToolUsesFromIndex(
+  input: ToolUseIndexedProjectionInput,
+): Readonly<Record<string, ToolUseView>> {
+  const liveParts = new Map<string, ToolPart>();
+  const localIntegrityIssues = new Set<string>();
+
+  for (const message of input.messages) {
+    if (message.role !== "assistant") continue;
+    for (const part of message.parts) {
+      if (!isToolUIPart(part)) continue;
+      if (liveParts.has(part.toolCallId)) localIntegrityIssues.add(part.toolCallId);
+      else liveParts.set(part.toolCallId, part as ToolPart);
+    }
   }
 
   const activeToolSteps = new Map<string, { toolName: string; durationMs?: number }>();
@@ -98,17 +146,19 @@ export function projectToolUses(input: ToolUseProjectionInput): Readonly<Record<
 
   const ids = new Set<string>([
     ...liveParts.keys(),
-    ...calls.keys(),
-    ...results.keys(),
     ...activeToolSteps.keys(),
     ...approvals.keys(),
   ]);
+  if (input.includeAllCanonical) {
+    for (const id of input.canonical.calls.keys()) ids.add(id);
+    for (const id of input.canonical.results.keys()) ids.add(id);
+  }
   const projected: Record<string, ToolUseView> = {};
 
   for (const toolCallId of ids) {
     const part = liveParts.get(toolCallId);
-    const call = calls.get(toolCallId);
-    const result = results.get(toolCallId);
+    const call = input.canonical.calls.get(toolCallId);
+    const result = input.canonical.results.get(toolCallId);
     const approval = approvals.get(toolCallId);
     const activeStep = activeToolSteps.get(toolCallId);
     const toolName = call?.toolName
@@ -123,7 +173,7 @@ export function projectToolUses(input: ToolUseProjectionInput): Readonly<Record<
       ...(call ? { input: call.input } : partInput(part) !== undefined ? { input: partInput(part) } : {}),
     };
 
-    if (integrityIssues.has(toolCallId)) {
+    if (localIntegrityIssues.has(toolCallId) || input.canonical.integrityIssues.has(toolCallId)) {
       projected[toolCallId] = {
         ...common,
         status: "incomplete",

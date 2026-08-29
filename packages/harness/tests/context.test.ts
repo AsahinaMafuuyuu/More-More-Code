@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   ContextManager,
   compileContextRecords,
+  createCompactionCheckpointV2,
+  createEmptyCompactionCheckpointState,
   type ContextRecord,
 } from "../src";
 
@@ -63,6 +65,95 @@ describe("canonical context compilation", () => {
 });
 
 describe("ContextManager", () => {
+  test("preserves P0 constraints and pending work across 20 repeated checkpoint replacements", async () => {
+    const manager = new ContextManager<string>();
+    const budget = {
+      contextWindowTokens: 120,
+      reservedOutputTokens: 0,
+      safetyMarginTokens: 0,
+    };
+    const policy = {
+      maxSummaryTokens: 20,
+      softLimitRatio: 0.5,
+      hardLimitRatio: 0.8,
+      targetUtilizationRatio: 0.4,
+      retainRecentMinTokens: 20,
+      policyVersion: "repeat-checkpoint-test-v2",
+    } as const;
+    const durableConstraint = "Never mutate canonical Session history in place.";
+    const durablePendingWork = "Run the crash/restart verification before delivery.";
+    let records: ContextRecord<string>[] = [
+      {
+        ...record("anchor-source", 24, false, "cycle:0"),
+        requiredAnchors: [
+          {
+            id: "constraint:append-only-session",
+            priority: "P0",
+            kind: "constraint",
+            text: durableConstraint,
+            sourceRecordIds: ["anchor-source"],
+          },
+          {
+            id: "pending:restart-verification",
+            priority: "P0",
+            kind: "pending-work",
+            text: durablePendingWork,
+            sourceRecordIds: ["anchor-source"],
+          },
+        ],
+      },
+      record("initial-1", 24, false, "cycle:1"),
+      record("initial-2", 24, false, "cycle:2"),
+      record("initial-3", 24, false, "cycle:3"),
+    ];
+
+    const compactor = {
+      compact({ plan, targetTokens }: Parameters<Parameters<typeof manager.projectWithCompaction>[2]["compact"]>[0]) {
+        const state = createEmptyCompactionCheckpointState();
+        const p0 = plan.requiredAnchors.filter((anchor) => anchor.priority === "P0");
+        for (const anchor of p0) {
+          const fact = {
+            id: anchor.id,
+            text: anchor.text,
+            sourceRecordIds: [...anchor.sourceRecordIds],
+          };
+          if (anchor.kind === "pending-work") state.pendingWork.push(fact);
+          else state.constraints.push(fact);
+        }
+        const checkpoint = createCompactionCheckpointV2({
+          plan,
+          state,
+          quality: "verified",
+          coveredAnchorIds: p0.map((anchor) => anchor.id),
+        });
+        return {
+          id: `checkpoint-${checkpoint.checkpointId.slice(0, 16)}`,
+          kind: "summary" as const,
+          payload: checkpoint.renderedSummary,
+          estimatedTokens: Math.min(12, targetTokens),
+          checkpointV2: checkpoint,
+        };
+      },
+    };
+
+    for (let index = 0; index < 20; index += 1) {
+      records = [
+        ...records,
+        record(`repeat-${index}-a`, 24, false, `cycle:${index + 4}:a`),
+        record(`repeat-${index}-b`, 24, false, `cycle:${index + 4}:b`),
+      ];
+      const projection = await manager.projectWithCompaction(records, budget, compactor, policy);
+      expect(projection.compaction).toBeDefined();
+      const checkpoint = projection.records.find((item) => item.kind === "summary")?.checkpointV2;
+      expect(checkpoint).toBeDefined();
+      expect(checkpoint!.state.constraints.some((fact) => fact.text === durableConstraint)).toBe(true);
+      expect(checkpoint!.state.pendingWork.some((fact) => fact.text === durablePendingWork)).toBe(true);
+      expect(checkpoint!.validation.requiredAnchorIds.length).toBeGreaterThanOrEqual(2);
+      expect(checkpoint!.validation.coveredAnchorIds).toEqual(checkpoint!.validation.requiredAnchorIds);
+      records = projection.records;
+    }
+  });
+
   test("keeps the newest optional records that fit the input budget", () => {
     const manager = new ContextManager<string>();
     const projection = manager.project(
@@ -175,6 +266,114 @@ describe("ContextManager", () => {
       compactedRecordIds: ["u1", "a1"],
       compactedThroughRecordId: "a1",
     });
+  });
+
+  test("tool-pressure compacts only the oldest prefix needed for target headroom", async () => {
+    const manager = new ContextManager<string>();
+    let observedPlan: Parameters<Parameters<typeof manager.projectWithCompaction>[2]["compact"]>[0]["plan"] | null = null;
+    const projection = await manager.projectWithCompaction(
+      [
+        record("old", 30, false, "cycle-1"),
+        record("middle", 30, false, "cycle-2"),
+        record("recent", 20, false, "cycle-3"),
+      ],
+      { contextWindowTokens: 100, reservedOutputTokens: 0 },
+      {
+        compact({ plan, newlyCompactedRecords, retainedRecords, targetTokens }) {
+          observedPlan = plan;
+          expect(newlyCompactedRecords.map((item) => item.id)).toEqual(["old"]);
+          expect(retainedRecords.map((item) => item.id)).toEqual(["middle", "recent"]);
+          expect(targetTokens).toBe(10);
+          return {
+            id: "tool-pressure-summary",
+            kind: "summary",
+            payload: "summary",
+            estimatedTokens: 10,
+          };
+        },
+      },
+      {
+        maxSummaryTokens: 10,
+        targetUtilizationRatio: 0.6,
+        retainRecentMinTokens: 25,
+        retainRecentRatio: 0,
+      },
+      "tool-pressure",
+    );
+
+    expect(projection.records.map((item) => item.id)).toEqual([
+      "tool-pressure-summary",
+      "middle",
+      "recent",
+    ]);
+    expect(projection.compaction).toMatchObject({
+      trigger: "tool-pressure",
+      retainedHistoryTokens: 50,
+      compactedHistoryTokens: 30,
+      recentTailTargetTokens: 25,
+    });
+    expect(observedPlan).toMatchObject({
+      trigger: "tool-pressure",
+      sourceRecordIds: ["old"],
+      retainedRecordIds: ["middle", "recent"],
+      splitGroup: false,
+    });
+  });
+
+  test("uses the guarded split-group escape hatch for one pathological oversized cycle", async () => {
+    const manager = new ContextManager<string>();
+    const first = { ...record("cycle-prefix", 45, false, "cycle-1"), splitGroupId: "message-1" };
+    const second = { ...record("cycle-suffix", 45, false, "cycle-1"), splitGroupId: "message-2" };
+    const projection = await manager.projectWithCompaction(
+      [first, second],
+      { contextWindowTokens: 80, reservedOutputTokens: 0 },
+      {
+        compact({ plan, newlyCompactedRecords, retainedRecords }) {
+          expect(plan.splitGroup).toBe(true);
+          expect(plan.retainedFromRecordId).toBe("cycle-suffix");
+          expect(newlyCompactedRecords.map((item) => item.id)).toEqual(["cycle-prefix"]);
+          expect(retainedRecords.map((item) => item.id)).toEqual(["cycle-suffix"]);
+          return {
+            id: "split-summary",
+            kind: "summary",
+            payload: "summary",
+            estimatedTokens: 10,
+          };
+        },
+      },
+      {
+        maxSummaryTokens: 10,
+        targetUtilizationRatio: 0.7,
+        retainRecentMinTokens: 20,
+        allowSplitGroup: true,
+      },
+    );
+
+    expect(projection.records.map((item) => item.id)).toEqual(["split-summary", "cycle-suffix"]);
+    expect(projection.truncated).toBe(false);
+  });
+
+  test("creates a stable content-addressed CompactionPlan for identical source", async () => {
+    const manager = new ContextManager<string>();
+    const plans: Array<{ planId: string; sourceDigest: string }> = [];
+    const compact = async () => manager.projectWithCompaction(
+      [record("old", 60, false, "cycle-1"), record("tail", 30, false, "cycle-2")],
+      { contextWindowTokens: 80, reservedOutputTokens: 0 },
+      {
+        compact({ plan }) {
+          plans.push({ planId: plan.planId, sourceDigest: plan.sourceDigest });
+          return { id: "summary", kind: "summary", payload: "summary", estimatedTokens: 8 };
+        },
+      },
+      { maxSummaryTokens: 8, targetUtilizationRatio: 0.65 },
+    );
+
+    await compact();
+    await compact();
+    expect(plans).toHaveLength(2);
+    expect(plans[0]).toEqual(plans[1]);
+    expect(plans[0]!.planId).toHaveLength(64);
+    expect(plans[0]!.sourceDigest).toHaveLength(64);
   });
 
   test("classifies proactive compaction above the hard threshold separately from overflow", async () => {

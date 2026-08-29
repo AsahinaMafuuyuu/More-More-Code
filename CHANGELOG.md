@@ -6,6 +6,23 @@ All notable changes to MORE MORE CODE are recorded here.
 
 ### Added
 
+- Stage C C1–C6 Context Cache Stability & Reliable Compaction Runtime: permanent
+  `CacheFamilyId` / `ContextEpochId` / wire-level `RenderedPrefixDigest`, typed
+  cache-miss classification, capability-aware Provider cache compilation,
+  content-addressed Compaction Plans, structured Checkpoint V2, Required Context
+  Anchors and strict provenance/coverage validation.
+- Priority-aware deterministic compaction fallback that preserves P0 state or
+  aborts explicitly; arbitrary `[summary truncated]` text is no longer accepted as
+  a durable replacement checkpoint. Regression coverage chains 20 consecutive
+  checkpoint replacements while preserving hard constraints and pending work.
+- Transactional compaction execution now follows
+  `plan -> reduce -> validate -> durable commit -> rehydrate -> Provider` and
+  verifies the persisted plan identity, source digest and compacted/retained
+  membership before any primary Provider call. Real SQLite restart coverage proves
+  a rehydrated Checkpoint V2 can continue into the next checkpoint generation.
+- Compaction Runtime Activity in the existing single Active Runtime row, including
+  starting, reducing, validating, fallback, applying, rebased, aborted and failed
+  phases without writing fake Session messages.
 - ADR-0029 plus the OpenTUI Framework Stability DESIGN/PLAN/TEST/DELIVERY
   contracts now record the delivered native-renderer stabilization stage:
   Bun 1.4.0 baseline, exact OpenTUI 0.5.9 pins, removal of autonomous spinner
@@ -86,6 +103,26 @@ All notable changes to MORE MORE CODE are recorded here.
 
 ### Changed
 
+- Context Compaction source selection now retains a profile-owned token-aware recent
+  raw suffix, uses complete Model Cycle semantic groups as normal cut points, and
+  makes `tool-pressure` compact only enough oldest history to relieve measured
+  working-set pressure. One guarded oversized-group escape hatch remains available
+  without intentionally splitting a Tool Call/Result interaction.
+- GPT-5.6+ OpenAI cache compilation uses supported prompt-cache options and explicit
+  breakpoints while legacy retention behavior remains capability-gated; unsupported
+  cache fields do not leak into generic OpenAI-compatible endpoints.
+- Tool Result model projections are now cache-stable: individually oversized
+  results are deterministically bounded on first model exposure and retain the
+  same model-visible representation as newer Tool Results arrive. Aggregate
+  working-set pressure no longer rewrites warm/cold history, and projected
+  envelopes use stable Tool Call identity so a later Session-entry lookup does
+  not invalidate the provider prompt prefix. ADR-0030 records the replacement
+  policy and clarifies that this cache instability was in MORE-MORE-CODE's
+  Context projection rather than Vercel AI SDK serialization.
+- Assistant reasoning is collapsed to two terminal rows by default and expands
+  in place; adjacent ToolUse rows now collapse into one status aggregate with
+  total/completed/failed counts, while each expanded ToolUse keeps its own
+  one-line/detail disclosure and semantic status styling.
 - CLI startup now bootstraps the Agent Environment before rendering or starting any Session Run.
 - The local system prompt is now a concise coding-agent prompt that includes PLAN/BUILD rules, skill metadata, and the resolved instruction chain.
 - PLAN mode includes `loadSkill` alongside the existing read-only native tools.
@@ -140,6 +177,10 @@ All notable changes to MORE MORE CODE are recorded here.
 
 ### Deferred
 
+- Stage C7 removal of the temporary opt-in full Provider-context recorder remains
+  intentionally deferred until the cache investigation is explicitly closed. The
+  permanent runtime retains only bounded cache identities/digests and telemetry after
+  that future cleanup.
 - Windows/macOS native OS Sandbox adapters, MCP transport/auth/remote tool execution, persistent allow-for-session/project rules, and product-level Subagent runtime remain outside this delivery slice.
 - Explicit transactional/idempotent import of legacy linear/v1/v2/v3 Session snapshots remains a non-blocking follow-up; it is not required for new local Sessions and does not add a startup cloud fetch.
 - Real external-Provider E2E coverage and Codex OAuth model execution remain unclaimed until the corresponding supported contracts exist.

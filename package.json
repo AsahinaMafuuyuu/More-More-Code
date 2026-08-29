@@ -14,6 +14,7 @@
   "license": "ISC",
   "scripts": {
     "dev:cli": "bun run packages/cli/src/index.tsx",
+    "dev:cli:record-context": "bun run scripts/dev-cli-record-provider-context.ts",
     "dev:cli:watch": "bun run --watch packages/cli/src/index.tsx",
     "tui:soak": "bun run packages/cli/src/dev/tui-stability-soak.tsx",
     "tui:stress": "bun run packages/cli/src/dev/tui-stability-stress-suite.ts",

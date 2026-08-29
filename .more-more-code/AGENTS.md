@@ -28,7 +28,7 @@ When working on Context or model-provider code:
 - Stable collections such as skills and tools must use deterministic ordering and serialization.
 - Do not put OpenAI-specific cache, Responses, or reasoning fields into the canonical Context Manager.
 - OpenAI-specific behavior belongs behind `OpenAIResponsesAdapter`.
-- Keep Vercel AI SDK responsible for streaming and unified message/tool integration unless an explicit architectural decision supersedes this.
+- ADR-0031 supersedes the former Vercel AI SDK execution surface: Provider streaming/request compilation now uses project-owned native `fetch()` + SSE adapters, and runtime/UI chat state is project-owned. Do not reintroduce AI SDK as a parallel Provider or `useChat` runtime without a new explicit ADR.
 - Do not use OpenAI `previous_response_id` as the canonical MORE-MORE-CODE Session history in this stage.
 - Prefer reusing persisted compaction checkpoints instead of regenerating summaries on every Model Step.
 - Treat Provider identity, Provider implementation kind, model identity, and authentication strategy as separate concepts. Do not reintroduce a closed provider/model switch as the long-term public configuration surface.
@@ -53,6 +53,8 @@ When working on Context or model-provider code:
 
 - Treat Session Entries as append-only semantic facts. New entries append as children of the current `activeEntry`; continuing from history creates a branch instead of rewriting prior entries.
 - Keep AgentLoop source-agnostic: it owns Run/Turn/Step orchestration, while Tool Runtime owns registry visibility, permission decisions, cancellation/timeout propagation, source selection, and normalized outcomes.
+- ADR-0032 defines the next Tool/interaction scheduling boundary: ToolUse does not count as a primary Model Loop; one model output creates one complete Tool Batch; the next primary model request waits for the full batch barrier; serial execution is the default and parallel execution must be explicit, bounded, safety-aware, and provider-result-order deterministic.
+- Follow-up starts a new interaction budget round; steering remains in the current round. A cancellable pending follow-up/steering item is runtime/UI state and must not become an immutable Session `user_message` until the Harness consumes it at a safe boundary; that durable commit must still complete before the next Provider side effect.
 - Permission decisions use `allow | deny | ask`; interactive approval remains a separate UI concern.
 - Workspace path validation is not OS-level Sandbox enforcement.
 - Every native child process must cross the CLI `ProcessSandbox` seam. Do not call `Bun.spawn` from individual native Tools.

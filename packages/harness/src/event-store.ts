@@ -125,11 +125,22 @@ export type RuntimeSecurityEventPayload =
 export type RuntimeContextEventPayload = {
   schemaVersion: typeof RUNTIME_EVENT_SCHEMA_VERSION;
   kind: "context.projection";
-  phase: "started" | "completed";
+  phase:
+    | "started"
+    | "completed"
+    | "compaction-starting"
+    | "compaction-reducing"
+    | "compaction-validating"
+    | "compaction-fallback"
+    | "compaction-applying"
+    | "compaction-rebased"
+    | "compaction-aborted"
+    | "compaction-failed";
   operationId: string;
   operation: "model-step" | "manual-compaction";
   mode: string;
   model: string;
+  compactionPlanId?: string;
   inputTokensBefore?: number;
   inputTokensAfter?: number;
   inputBudgetTokens?: number;
@@ -305,7 +316,7 @@ export function isRuntimeEventPayload<TType extends RuntimeEventType>(
       return isRuntimeSecurityEventPayload(value);
     case "context":
       return value.kind === "context.projection"
-        && (value.phase === "started" || value.phase === "completed")
+        && isRuntimeContextPhase(value.phase)
         && isNonEmptyString(value.operationId)
         && (value.operation === "model-step" || value.operation === "manual-compaction")
         && isNonEmptyString(value.mode)
@@ -316,20 +327,31 @@ export function isRuntimeEventPayload<TType extends RuntimeEventType>(
             "schemaVersion", "kind", "phase", "operationId", "operation", "mode", "model",
             "runId", "turnId", "stepId",
           ])
-          : hasOnlyKeys(value, [
+          : value.phase === "completed"
+            ? hasOnlyKeys(value, [
             "schemaVersion", "kind", "phase", "operationId", "operation", "mode", "model",
             "inputTokensBefore", "inputTokensAfter", "inputBudgetTokens",
             "toolResultTokensBefore", "toolResultTokensAfter", "prunedToolResultCount",
             "overBudget", "compactionTrigger", "runId", "turnId", "stepId",
-          ])
-            && optionalNonNegativeNumber(value.inputTokensBefore)
-            && optionalNonNegativeNumber(value.inputTokensAfter)
-            && optionalNonNegativeNumber(value.inputBudgetTokens)
-            && optionalNonNegativeNumber(value.toolResultTokensBefore)
-            && optionalNonNegativeNumber(value.toolResultTokensAfter)
-            && optionalNonNegativeNumber(value.prunedToolResultCount)
-            && (value.overBudget === undefined || typeof value.overBudget === "boolean")
-            && optionalCompactionTrigger(value.compactionTrigger));
+            ])
+              && optionalNonNegativeNumber(value.inputTokensBefore)
+              && optionalNonNegativeNumber(value.inputTokensAfter)
+              && optionalNonNegativeNumber(value.inputBudgetTokens)
+              && optionalNonNegativeNumber(value.toolResultTokensBefore)
+              && optionalNonNegativeNumber(value.toolResultTokensAfter)
+              && optionalNonNegativeNumber(value.prunedToolResultCount)
+              && (value.overBudget === undefined || typeof value.overBudget === "boolean")
+              && optionalCompactionTrigger(value.compactionTrigger)
+            : hasOnlyKeys(value, [
+              "schemaVersion", "kind", "phase", "operationId", "operation", "mode", "model",
+              "compactionPlanId", "compactionTrigger", "inputTokensBefore", "inputTokensAfter",
+              "runId", "turnId", "stepId",
+            ])
+              && isNonEmptyString(value.compactionPlanId)
+              && optionalCompactionTrigger(value.compactionTrigger)
+              && value.compactionTrigger !== undefined
+              && optionalNonNegativeNumber(value.inputTokensBefore)
+              && optionalNonNegativeNumber(value.inputTokensAfter));
     case "usage":
       return isRuntimeUsageEventPayload(value);
     case "system":
@@ -681,7 +703,21 @@ function optionalCompactionTrigger(value: unknown): boolean {
     || value === "soft-limit"
     || value === "hard-limit"
     || value === "overflow"
+    || value === "tool-pressure"
     || value === "manual";
+}
+
+function isRuntimeContextPhase(value: unknown): value is RuntimeContextEventPayload["phase"] {
+  return value === "started"
+    || value === "completed"
+    || value === "compaction-starting"
+    || value === "compaction-reducing"
+    || value === "compaction-validating"
+    || value === "compaction-fallback"
+    || value === "compaction-applying"
+    || value === "compaction-rebased"
+    || value === "compaction-aborted"
+    || value === "compaction-failed";
 }
 
 function isPermissionEffect(value: unknown): boolean {

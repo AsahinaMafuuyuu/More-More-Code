@@ -17,6 +17,7 @@ export function SessionRuntimeInteraction({ controller }: { controller: SessionC
       inspector: isTopLayer("inspector"),
       composer: isTopLayer("base"),
       runInterruptible: runtime.canInterrupt,
+      runActive: runtime.runActive,
     });
     if (action?.action !== "interrupt-run") return;
     key.preventDefault();

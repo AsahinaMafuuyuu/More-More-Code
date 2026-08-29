@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
-import { useChat as useAiChat } from "@ai-sdk/react";
 import type { Message } from "../../../lib/chat-types";
+import { LocalChatRuntime } from "../../../lib/local-chat-runtime";
 import { createSessionObservability } from "../../../lib/session-observability";
 import { projectAgentActivity } from "../../../lib/agent-activity-projection";
-import { projectToolUses } from "../../../lib/tool-use-projection";
+import {
+  createCanonicalToolUseIndex,
+  projectToolUsesFromIndex,
+} from "../../../lib/tool-use-projection";
+import { projectTranscriptWindow } from "../../../lib/transcript-window";
 import { usePromptConfig } from "../../../providers/prompt-config";
 import type { SessionController } from "../../../app/session/session-controller";
 import type { SessionUiStore } from "../store/session-ui-store";
@@ -11,8 +15,10 @@ import { resolveTuiRenderProfileFromEnvironment } from "../../../tui/render-prof
 import { createSessionUiCommitScheduler } from "./session-ui-commit-scheduler";
 import {
   projectApprovalUiView,
+  projectActiveRuntimeView,
   projectComposerRuntimeView,
   projectConversationView,
+  projectInteractionQueueView,
   projectRecoveryUiView,
   projectSessionStatusView,
   type ChatPresentationStatus,
@@ -35,17 +41,18 @@ export function SessionRuntimeBridge({
     controller.getSnapshot,
     controller.getSnapshot,
   );
-  const chat = useAiChat<Message>({
+  const chat = useMemo(() => new LocalChatRuntime({
     id: controller.sessionId,
     messages: controller.getInitialMessages(),
     transport: controller.transport,
-    onFinish({ message, isAbort, isDisconnect, isError }) {
-      controller.completeModelStep({ message, isAbort, isDisconnect, isError });
+    onFinish(input) {
+      controller.completeModelStep(input);
     },
     onError(error) {
       controller.failModelStep(error);
     },
-  });
+  }), [controller]);
+  const chatSnapshot = useSyncExternalStore(chat.subscribe, chat.getSnapshot, chat.getSnapshot);
 
   controller.bindChatBridge({
     setMessages(messages) {
@@ -68,41 +75,55 @@ export function SessionRuntimeBridge({
     });
     return () => {
       commitScheduler.dispose();
+      chat.dispose();
       void controller.dispose();
       store.destroy();
     };
-  }, [commitScheduler, controller, store]);
+  }, [chat, commitScheduler, controller, store]);
 
   const observability = useMemo(() => createSessionObservability({
     context: controllerState.contextUsage,
     usage: controllerState.sessionUsage,
     usagePersistenceIncomplete: controllerState.usagePersistenceIncomplete,
+    latestProviderCacheHitRate: controllerState.latestProviderCacheHitRate,
   }), [
     controllerState.contextUsage,
     controllerState.sessionUsage,
     controllerState.usagePersistenceIncomplete,
+    controllerState.latestProviderCacheHitRate,
   ]);
 
   const activity = useMemo(() => projectAgentActivity(controllerState.run, {
     progressByStep: controllerState.activityProgressByStep,
   }), [controllerState.run, controllerState.activityProgressByStep]);
 
-  const toolUses = useMemo(() => projectToolUses({
-    messages: chat.messages,
-    sessionTree: controllerState.sessionTree,
+  const transcriptWindow = useMemo(() => projectTranscriptWindow({
+    count: chatSnapshot.messageCount,
+    getMessage: (index) => chat.getMessageAt(index),
+  }), [chat, chatSnapshot.messageCount, chatSnapshot.messageRevision]);
+
+  const canonicalToolUses = useMemo(
+    () => createCanonicalToolUseIndex(controllerState.sessionTree),
+    [controllerState.sessionTree],
+  );
+
+  const toolUses = useMemo(() => projectToolUsesFromIndex({
+    messages: transcriptWindow.messages,
+    canonical: canonicalToolUses,
     activity,
     pendingApprovals: controllerState.pendingApprovals,
-  }), [activity, chat.messages, controllerState.pendingApprovals, controllerState.sessionTree]);
+  }), [activity, canonicalToolUses, controllerState.pendingApprovals, transcriptWindow.messages]);
 
   const conversation = useMemo(() => projectConversationView({
-    messages: chat.messages,
+    messages: transcriptWindow.messages,
+    hiddenMessageCount: transcriptWindow.hiddenMessageCount,
     toolUses,
     run: controllerState.run,
-    error: controllerState.runtimeError ?? chat.error,
+    error: controllerState.runtimeError ?? chatSnapshot.error,
     runError: controllerState.run?.status === "failed"
       ? controllerState.run.error ?? null
       : null,
-  }), [chat.error, chat.messages, controllerState.run, controllerState.runtimeError, toolUses]);
+  }), [chatSnapshot.error, controllerState.run, controllerState.runtimeError, toolUses, transcriptWindow]);
 
   const status = useMemo(() => projectSessionStatusView({
     mode,
@@ -113,8 +134,29 @@ export function SessionRuntimeBridge({
   const composerRuntime = useMemo(() => projectComposerRuntimeView({
     busy: controllerState.busy,
     runStatus: controllerState.run?.status ?? null,
-    chatStatus: chat.status as ChatPresentationStatus,
-  }), [chat.status, controllerState.busy, controllerState.run?.status]);
+    chatStatus: chatSnapshot.status as ChatPresentationStatus,
+  }), [chatSnapshot.status, controllerState.busy, controllerState.run?.status]);
+
+  const interactionQueue = useMemo(() => projectInteractionQueueView({
+    pending: controllerState.pendingInteractions,
+    outcomes: controllerState.pendingInteractionOutcomes,
+  }), [controllerState.pendingInteractionOutcomes, controllerState.pendingInteractions]);
+
+  const activeRuntime = useMemo(() => projectActiveRuntimeView({
+    busy: controllerState.busy,
+    run: controllerState.run,
+    chatStatus: chatSnapshot.status as ChatPresentationStatus,
+    messages: transcriptWindow.messages,
+    toolUses,
+    contextCompactionActivity: controllerState.contextCompactionActivity,
+  }), [
+    chatSnapshot.status,
+    controllerState.busy,
+    controllerState.contextCompactionActivity,
+    controllerState.run,
+    toolUses,
+    transcriptWindow.messages,
+  ]);
 
   const approval = useMemo(
     () => projectApprovalUiView(controllerState.pendingApprovals[0]),
@@ -136,10 +178,12 @@ export function SessionRuntimeBridge({
   useEffect(() => {
     commitScheduler.commitImmediate({
       composerRuntime,
+      interactionQueue,
+      activeRuntime,
       approval,
       recovery,
     });
-  }, [approval, commitScheduler, composerRuntime, recovery]);
+  }, [activeRuntime, approval, commitScheduler, composerRuntime, interactionQueue, recovery]);
 
   return null;
 }

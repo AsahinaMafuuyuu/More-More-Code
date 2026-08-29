@@ -2,9 +2,11 @@ import { TextAttributes } from "@opentui/core";
 import { useState } from "react";
 import { join } from "path";
 import open from "open";
+import { MAX_TOOL_BATCH_CONCURRENCY } from "@more-more-code/harness";
 import { DialogSearchList } from "../dialog-search-list";
 import {
     getAgentEnvironment,
+    persistAgentEnvironmentToolExecution,
     reloadAgentEnvironment,
     type AgentEnvironment,
 } from "../../lib/agent-environment";
@@ -12,6 +14,7 @@ import { ProcessSandbox } from "../../lib/process-sandbox";
 import { useToast } from "../../providers/toast";
 
 const ACTIONS = [
+    { id: "tool-execution", label: "Configure tool execution" },
     { id: "global-config", label: "Open global config" },
     { id: "project-config", label: "Open project config" },
     { id: "global-instructions", label: "Open global instructions" },
@@ -21,6 +24,37 @@ const ACTIONS = [
 ] as const;
 
 type SettingsAction = (typeof ACTIONS)[number];
+
+type ToolExecutionAction =
+    | { id: "back"; label: string; kind: "back" }
+    | { id: "mode-serial" | "mode-parallel"; label: string; kind: "mode"; value: "serial" | "parallel" }
+    | { id: `concurrency-${number}`; label: string; kind: "concurrency"; value: number };
+
+function toolExecutionActions(environment: AgentEnvironment): ToolExecutionAction[] {
+    const current = environment.config.resolved.tools.execution;
+    const concurrency = Array.from({ length: MAX_TOOL_BATCH_CONCURRENCY }, (_, index) => index + 1);
+    return [
+        { id: "back", label: "← Back to settings", kind: "back" },
+        {
+            id: "mode-serial",
+            label: `Mode: serial${current.mode === "serial" ? " · current" : ""}`,
+            kind: "mode",
+            value: "serial",
+        },
+        {
+            id: "mode-parallel",
+            label: `Mode: parallel${current.mode === "parallel" ? " · current" : ""}`,
+            kind: "mode",
+            value: "parallel",
+        },
+        ...concurrency.map((value): ToolExecutionAction => ({
+            id: `concurrency-${value}`,
+            label: `Max concurrency: ${value}${current.maxConcurrency === value ? " · current" : ""}`,
+            kind: "concurrency",
+            value,
+        })),
+    ];
+}
 
 function SettingsSummary({ environment }: { environment: AgentEnvironment }) {
     const native = environment.tools.listSources().find((source) => source.kind === "native");
@@ -48,6 +82,12 @@ function SettingsSummary({ environment }: { environment: AgentEnvironment }) {
                 branch summary on jump: {environment.config.resolved.session.branchSummaryOnJump}
             </text>
             <text>
+                tool execution: {environment.config.resolved.tools.execution.mode}
+                {environment.config.resolved.tools.execution.mode === "parallel"
+                    ? ` · max concurrency ${environment.config.resolved.tools.execution.maxConcurrency}`
+                    : ""}
+            </text>
+            <text>
                 process sandbox: {sandbox.mode} · provider {sandbox.provider} · network {sandbox.network} · env {sandbox.environment}
             </text>
             {sandbox.reason ? (
@@ -63,9 +103,14 @@ function SettingsSummary({ environment }: { environment: AgentEnvironment }) {
 export function SettingsDialogContent() {
     const toast = useToast();
     const [environment, setEnvironment] = useState(() => getAgentEnvironment());
+    const [page, setPage] = useState<"root" | "tool-execution">("root");
 
     const execute = async (action: SettingsAction) => {
         try {
+            if (action.id === "tool-execution") {
+                setPage("tool-execution");
+                return;
+            }
             if (action.id === "reload") {
                 const next = await reloadAgentEnvironment();
                 setEnvironment(next);
@@ -102,19 +147,59 @@ export function SettingsDialogContent() {
         }
     };
 
+    const executeToolExecution = async (action: ToolExecutionAction) => {
+        if (action.kind === "back") {
+            setPage("root");
+            return;
+        }
+        try {
+            const next = await persistAgentEnvironmentToolExecution(
+                action.kind === "mode"
+                    ? { mode: action.value }
+                    : { maxConcurrency: action.value },
+                "project",
+            );
+            setEnvironment(next);
+            toast.show({
+                variant: "success",
+                message: action.kind === "mode"
+                    ? `Tool execution mode set to ${action.value}`
+                    : `Tool max concurrency set to ${action.value}`,
+            });
+        } catch (error) {
+            toast.show({
+                variant: "error",
+                message: error instanceof Error ? error.message : String(error),
+            });
+        }
+    };
+
     return (
         <box flexDirection="column" gap={1}>
             <SettingsSummary environment={environment} />
-            <DialogSearchList
-                items={[...ACTIONS]}
-                getKey={(item) => item.id}
-                filterFn={(item, query) => item.label.toLowerCase().includes(query.toLowerCase())}
-                onSelect={(item) => void execute(item)}
-                renderItem={(item, selected) => (
-                    <text fg={selected ? "black" : undefined}>{item.label}</text>
-                )}
-                placeholder="Settings action"
-            />
+            {page === "root" ? (
+                <DialogSearchList
+                    items={[...ACTIONS]}
+                    getKey={(item) => item.id}
+                    filterFn={(item, query) => item.label.toLowerCase().includes(query.toLowerCase())}
+                    onSelect={(item) => void execute(item)}
+                    renderItem={(item, selected) => (
+                        <text fg={selected ? "black" : undefined}>{item.label}</text>
+                    )}
+                    placeholder="Settings action"
+                />
+            ) : (
+                <DialogSearchList
+                    items={toolExecutionActions(environment)}
+                    getKey={(item) => item.id}
+                    filterFn={(item, query) => item.label.toLowerCase().includes(query.toLowerCase())}
+                    onSelect={(item) => void executeToolExecution(item)}
+                    renderItem={(item, selected) => (
+                        <text fg={selected ? "black" : undefined}>{item.label}</text>
+                    )}
+                    placeholder="Tool execution setting"
+                />
+            )}
         </box>
     );
 }

@@ -49,7 +49,7 @@ describe("Interaction Router", () => {
     expect(resolveInteractionAction("follow-up", { ...command, dialog: true })).toBeNull();
   });
 
-  test("base Composer owns Tab/follow-up while Escape can remain a Session action", () => {
+  test("base Composer maps Enter by runtime state and reserves steering for an active Run", () => {
     const base = {
       dialog: false,
       overlay: null,
@@ -58,6 +58,12 @@ describe("Interaction Router", () => {
       runInterruptible: true,
     };
     expect(resolveInteractionAction("tab", base)).toEqual({ target: "composer", action: "toggle-mode" });
-    expect(resolveInteractionAction("follow-up", base)).toEqual({ target: "composer", action: "follow-up" });
+    expect(resolveInteractionAction("enter", base)).toEqual({ target: "composer", action: "submit" });
+    expect(resolveInteractionAction("steering", base)).toBeNull();
+
+    const active = { ...base, runActive: true };
+    expect(resolveInteractionAction("enter", active)).toEqual({ target: "composer", action: "follow-up" });
+    expect(resolveInteractionAction("follow-up", active)).toEqual({ target: "composer", action: "follow-up" });
+    expect(resolveInteractionAction("steering", active)).toEqual({ target: "composer", action: "steering" });
   });
 });

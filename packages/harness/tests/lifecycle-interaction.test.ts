@@ -407,6 +407,180 @@ describe("Turn-safe interactions", () => {
     expect(loop.followUp({ text: "late follow-up" })).toBe(false);
   });
 
+  test("queued follow-up can be cancelled before consumption without creating a Turn", async () => {
+    const loop = createLoop();
+    let releaseModel!: () => void;
+    let modelStarted!: () => void;
+    const started = new Promise<void>((resolve) => { modelStarted = resolve; });
+    const barrier = new Promise<void>((resolve) => { releaseModel = resolve; });
+
+    const runPromise = loop.run({
+      sessionId: "session-cancel-follow-up",
+      adapter: {
+        async runModelStep() {
+          modelStarted();
+          await barrier;
+          return { toolCalls: [] };
+        },
+        async runToolStep() {},
+      },
+    });
+
+    await started;
+    const queued = loop.enqueueFollowUp({ text: "do not consume me" });
+    expect(queued?.kind).toBe("follow-up");
+    expect(loop.pendingInteractions).toHaveLength(1);
+    expect(loop.cancelPendingInteraction(queued!.id)).toBe(true);
+    expect(loop.pendingInteractions).toHaveLength(0);
+    releaseModel();
+
+    const run = await runPromise;
+    expect(run.status).toBe("completed");
+    expect(run.turns).toHaveLength(1);
+  });
+
+  test("promotes an exact follow-up to steering atomically", async () => {
+    const loop = createLoop();
+    const causes: AgentTurnCause[] = [];
+    let invocation = 0;
+
+    const run = await loop.run({
+      sessionId: "session-promote-follow-up",
+      adapter: {
+        async runModelStep(context) {
+          causes.push(context.cause);
+          invocation += 1;
+          if (invocation === 1) {
+            const queued = loop.enqueueFollowUp({ text: "promote this" });
+            expect(queued).not.toBeNull();
+            expect(loop.promoteFollowUpToSteering(queued!.id)).toBe(true);
+            expect(loop.pendingInteractions).toEqual([
+              expect.objectContaining({ id: queued!.id, kind: "steering" }),
+            ]);
+          }
+          return { toolCalls: [] };
+        },
+        async runToolStep() {},
+      },
+    });
+
+    expect(run.status).toBe("completed");
+    expect(causes).toEqual(["initial", "steering"]);
+  });
+
+  test("commits a consumed interaction exactly once before the next Provider call", async () => {
+    const loop = createLoop();
+    const trace: string[] = [];
+    let invocation = 0;
+
+    const run = await loop.run({
+      sessionId: "session-durable-on-consume",
+      adapter: {
+        async commitInteraction(interaction) {
+          trace.push(`commit:${interaction.id}`);
+          return { ...interaction, inputMessageId: `durable-${interaction.id}` };
+        },
+        async runModelStep(context) {
+          invocation += 1;
+          trace.push(`model:${context.cause}:${context.interaction?.inputMessageId ?? "initial"}`);
+          if (invocation === 1) {
+            expect(loop.enqueueFollowUp({ text: "committed later" })).not.toBeNull();
+          }
+          return { toolCalls: [] };
+        },
+        async runToolStep() {},
+      },
+    });
+
+    expect(run.status).toBe("completed");
+    expect(trace).toHaveLength(3);
+    expect(trace[0]).toBe("model:initial:initial");
+    expect(trace[1]?.startsWith("commit:")).toBe(true);
+    expect(trace[2]).toContain("model:follow-up:durable-");
+  });
+
+  test("failed interaction commit prevents the follow-up Provider side effect", async () => {
+    const loop = createLoop();
+    let modelCalls = 0;
+    let commitCalls = 0;
+    const outcomes: string[] = [];
+
+    const run = await loop.run({
+      sessionId: "session-commit-failure",
+      onPendingInteractionOutcome(outcome) {
+        outcomes.push(`${outcome.reason}:${outcome.interaction.text}`);
+      },
+      adapter: {
+        async commitInteraction() {
+          commitCalls += 1;
+          throw new Error("session commit rejected");
+        },
+        async runModelStep() {
+          modelCalls += 1;
+          if (modelCalls === 1) {
+            expect(loop.enqueueFollowUp({ text: "must not reach provider" })).not.toBeNull();
+          }
+          return { toolCalls: [] };
+        },
+        async runToolStep() {},
+      },
+    });
+
+    expect(commitCalls).toBe(1);
+    expect(modelCalls).toBe(1);
+    expect(run.status).toBe("failed");
+    expect(run.error).toContain("session commit rejected");
+    expect(outcomes).toEqual(["run-failed:must not reach provider"]);
+  });
+
+  test("closes interaction acceptance before run settlement to avoid stranded queue entries", async () => {
+    const loop = createLoop();
+    const acceptedDuringRunEnd: boolean[] = [];
+    loop.subscribe((event) => {
+      if (event.type === "run_end") {
+        acceptedDuringRunEnd.push(loop.followUp({ text: "too late for old run" }));
+      }
+    });
+
+    const run = await loop.run({
+      sessionId: "session-close-gate",
+      adapter: {
+        async runModelStep() {
+          return { toolCalls: [] };
+        },
+        async runToolStep() {},
+      },
+    });
+
+    expect(run.status).toBe("completed");
+    expect(acceptedDuringRunEnd).toEqual([false]);
+    expect(loop.pendingInteractions).toHaveLength(0);
+  });
+
+  test("reports pending queue outcomes when an interrupted Run cannot consume them", async () => {
+    const loop = createLoop();
+    const outcomes: string[] = [];
+
+    const run = await loop.run({
+      sessionId: "session-interrupt-queue-outcome",
+      onPendingInteractionOutcome(outcome) {
+        outcomes.push(`${outcome.reason}:${outcome.interaction.text}`);
+      },
+      adapter: {
+        async runModelStep() {
+          expect(loop.enqueueFollowUp({ text: "queued while active" })).not.toBeNull();
+          loop.interrupt();
+          throw new Error("aborted");
+        },
+        async runToolStep() {},
+      },
+    });
+
+    expect(run.status).toBe("interrupted");
+    expect(outcomes).toEqual(["run-interrupted:queued while active"]);
+    expect(loop.pendingInteractions).toHaveLength(0);
+  });
+
   test("enforces the Turn budget within an interaction epoch", async () => {
     const loop = createLoop({ maxTurns: 1 });
 

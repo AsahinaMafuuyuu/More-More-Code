@@ -1,4 +1,4 @@
-import { getToolName, isToolUIPart } from "ai";
+import { getToolName, isToolUIPart } from "./chat-types";
 import {
   ToolResultWorkingSetManager,
   type ModelContextProfile,
@@ -51,9 +51,10 @@ function serialize(value: unknown) {
 }
 
 function getSourceReference(candidate: ToolResultProjectionCandidate<unknown>) {
-  return candidate.sourceEntryId
-    ? `session-entry:${candidate.sourceEntryId}`
-    : `tool-call:${candidate.toolCallId}`;
+  // A Session Entry lookup may become available after this result has already
+  // crossed the provider boundary. Keep the model-visible source handle stable
+  // so warming that lookup cannot rewrite a cached conversation prefix.
+  return `tool-call:${candidate.toolCallId}`;
 }
 
 function createEnvelope(

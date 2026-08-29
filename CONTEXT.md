@@ -26,7 +26,7 @@ The conversational message history derived from a Session branch. It replays leg
 
 ## Finalized Assistant Model Step
 
-One immutable durable `assistant_message` representing a completed AgentLoop Model Step. Vercel AI SDK may keep one aggregate assistant `UIMessage` and reuse its `UIMessage.id` across Tool continuation, so that runtime/UI identity is not the durable Session identity. The CLI derives the durable assistant id from `stepId` and, when AI SDK `step-start` markers are present, persists only the parts after the latest marker. A later Tool-continuation Model Step therefore appends a new assistant Entry instead of revising the earlier Tool-calling Entry.
+One immutable durable `assistant_message` representing a completed AgentLoop Model Step. The process-local Chat Runtime may keep an aggregate assistant message across Tool continuation, so runtime/UI identity is not the durable Session identity. The CLI derives the durable assistant id from `stepId` and, when `step-start` markers are present, persists only the parts after the latest marker. A later Tool-continuation Model Step therefore appends a new assistant Entry instead of revising the earlier Tool-calling Entry.
 
 ## Navigation Tree Projection
 
@@ -34,7 +34,7 @@ The human-facing semantic navigation view derived from the canonical Session Ent
 
 ## ToolUse Projection
 
-A CLI presentation projection for one Tool call. Canonical active-branch `tool_call` / `tool_result` facts remain the terminal authority, while the current AI SDK Tool part, process-local Approval request and Agent Activity Tool Step may supply transient pre-terminal state. Canonical terminal status always wins; historical `approval_required`, missing terminals and integrity mismatches fail closed as explicit incomplete diagnostics. `ToolUse` is never persisted as a Session Entry or Runtime Event. Session Navigation uses the same canonical call/result identity to expose one semantic ToolUse row whose terminal navigation target is the `tool_result` Entry.
+A CLI presentation projection for one Tool call. Canonical active-branch `tool_call` / `tool_result` facts remain the terminal authority, while the current process-local Chat Runtime Tool part, Approval request and Agent Activity Tool Step may supply transient pre-terminal state. Canonical terminal status always wins; historical `approval_required`, missing terminals and integrity mismatches fail closed as explicit incomplete diagnostics. `ToolUse` is never persisted as a Session Entry or Runtime Event. Session Navigation uses the same canonical call/result identity to expose one semantic ToolUse row whose terminal navigation target is the `tool_result` Entry.
 
 ## Agent Activity Projection
 
@@ -42,7 +42,7 @@ The CLI-owned, presentation-ready view over the current Harness `AgentRun -> Age
 
 ## Durable Message Normalization
 
-The CLI-owned semantic boundary between Vercel AI SDK/UI runtime `Message` objects and durable Session history. Runtime object properties whose value is `undefined` are omitted, array `undefined` values and sparse holes become explicit `null`, and valid JSON-safe Provider metadata is preserved. Unsupported values such as non-finite numbers, bigint, functions, symbols/symbol-keyed properties, cycles, and non-plain objects remain fail-closed. Durable user turns and finalized assistant Model Steps share this policy before Harness constructs Session Entries; Tool terminal output is sourced from canonical `tool_result` through Message Projection rather than a new message revision. Harness stays provider-independent and `LocalSessionStore` remains the strict final JSON integrity validator.
+The CLI-owned semantic boundary between project-owned runtime/UI `Message` objects and durable Session history. Runtime object properties whose value is `undefined` are omitted, array `undefined` values and sparse holes become explicit `null`, and valid JSON-safe Provider metadata is preserved. Unsupported values such as non-finite numbers, bigint, functions, symbols/symbol-keyed properties, cycles, and non-plain objects remain fail-closed. Durable user turns and finalized assistant Model Steps share this policy before Harness constructs Session Entries; Tool terminal output is sourced from canonical `tool_result` through Message Projection rather than a new message revision. Harness stays provider-independent and `LocalSessionStore` remains the strict final JSON integrity validator.
 
 ## Runtime State Projection
 
@@ -58,15 +58,23 @@ A provider-independent classification of Context Records as stable, checkpoint, 
 
 ## Tool Result Working Set
 
-The bounded model-facing projection of Tool Results created before historical Context Compaction. Complete Tool Result payloads remain durable Session facts; only cloned model input may use `full`, `truncated`, `summary`, or `reference` representations. The default budget is derived from the effective model input budget, with fresh/current results protected for immediate continuation and warm/cold results becoming progressively more eligible for pruning.
+The bounded model-facing projection of Tool Results created before historical Context Compaction. Complete Tool Result payloads remain durable Session facts; only cloned model input may use `full`, `truncated`, `summary`, or `reference` representations. The individual full-result threshold and aggregate working-set signal are derived from the effective model input budget. To preserve provider prompt-cache prefixes, an individually oversized Tool Result receives its deterministic bounded representation on first model exposure and that representation does not change merely because the result becomes warm/cold or newer Tool Results arrive. Aggregate pressure is reported and handed to normal Context/Compaction policy instead of dynamically rewriting older Tool payloads.
 
 ## Tool Result Projection
 
-A bounded representation of one Tool Result for model input. It retains Tool Call identity/status, a pruning reason, original/projected token estimates, and a durable Session Entry reference when available. Shell, test/build, search/grep, file-read, and generic outputs use deterministic strategy-aware projections rather than one universal slice.
+A bounded representation of one Tool Result for model input. It retains Tool Call identity/status, a pruning reason, original/projected token estimates, and internal durable-source metadata when available. Model-visible bounded envelopes use the stable Tool Call identity so a later Session-entry lookup cannot mutate an already-sent prefix. Shell, test/build, search/grep, file-read, and generic outputs use deterministic strategy-aware projections rather than one universal slice.
 
 ## Compaction Entry
 
-A durable record that a context compaction occurred, including the replacement snapshot, trigger reason, token-budget diagnostics, and the history range it represented. The latest Compaction Entry on the active branch acts as the persisted Context checkpoint for later Model Steps. A newer checkpoint reduces the previous effective checkpoint plus newly compacted history into one complete replacement snapshot; older checkpoints remain Session history but are superseded for model Context Projection.
+A durable record that a context compaction occurred, including the replacement snapshot, trigger reason, token-budget diagnostics, represented history range, content-addressed Compaction Plan identity, and optional structured Checkpoint V2. The latest Compaction Entry on the active branch acts as the persisted Context checkpoint for later Model Steps. A newer checkpoint reduces the previous effective checkpoint plus newly compacted history into one complete replacement snapshot; older checkpoints remain Session history but are superseded for model Context Projection. Provider execution after a new checkpoint is transactional: reduce/validate first, commit through Local Session authority, re-read and verify the accepted checkpoint/digest/membership, then compile the Provider request from rehydrated durable state.
+
+## Compaction Checkpoint V2
+
+The machine-verifiable replacement state stored by new Compaction Entries. V2 contains structured goal/state/decision/constraint/artifact/failure/pending-work facts, source/provenance identities, Required Context Anchor coverage, content-addressed checkpoint identity, validation quality and deterministic rendered summary. Semantic reducer output cannot become durable solely because it fits the token budget: provenance and anchors are validated, P0 state must survive, and invalid output enters priority-aware deterministic fallback or aborts explicitly. Arbitrary `[summary truncated]` text is not a valid durable V2 fallback.
+
+## Required Context Anchor
+
+A source-derived state item that compaction is required to preserve according to priority (`P0` through `P3`). P0 covers state such as hard constraints and critical pending work that cannot be silently dropped. A V2 candidate records required/covered anchor IDs; missing P0 coverage prevents acceptance. Repeated compaction carries still-valid anchored checkpoint state forward rather than treating the previous summary as unverifiable prose.
 
 ## Semantic Context Snapshot
 
@@ -74,7 +82,7 @@ The state-oriented payload stored by a Compaction Entry. It represents current g
 
 ## Compaction Policy
 
-The provider-independent Context policy that decides when and how much history to compact. The default application policy uses an 80% soft limit, 92% hard limit, and 70% post-compaction target over the effective input budget. Only optional historical Context groups are eligible; retained recent Turns and other required groups remain atomic and uncut. Automatic triggers are `soft-limit`, `hard-limit`, or `overflow`; `/compact` uses `manual`, which bypasses automatic utilization thresholds but first passes a deterministic eligibility gate. V1 requires compactable history of at least `max(2048, 3% of input budget)`, at least 2 newly completed Turns after an existing checkpoint, estimated savings of at least `max(1024, 2% of input budget)`, and at least 30% estimated replacement-source savings. The repeat gate is checkpoint-progress based rather than time based; checkpoint-retained message IDs are excluded from the new-Turn count. Rejections return typed `nothing-compactable`, `insufficient-history`, `recent-compaction`, or `insufficient-gain` no-ops without invoking the reducer.
+The provider-independent Context policy that decides when and how much history to compact. The default application policy uses an 80% soft limit, 92% hard limit, and 70% post-compaction target over the effective input budget, plus profile-owned recent-raw-tail and checkpoint budgets. Automatic source selection works backward over complete Model Cycle semantic groups, first preserves the configured recent raw token floor/ratio when feasible, then keeps additional newest complete groups while still reaching the post-compaction target. Tool-pressure is a distinct trigger and compacts only enough oldest complete history to relieve its measured excess; one pathological oversized semantic group may use the guarded split-group escape hatch, but a Tool Call/Result interaction is never intentionally split. Automatic triggers are `soft-limit`, `hard-limit`, `overflow`, or `tool-pressure`; `/compact` uses `manual`, which bypasses automatic utilization thresholds but still preserves the recent raw tail and first passes deterministic eligibility gates. Repeat eligibility is checkpoint-progress based rather than time based.
 
 ## Branch Summary
 
@@ -88,9 +96,21 @@ A deterministic identity of the model-visible Tool contracts for one mode, deriv
 
 A deterministic identity of the stable model prefix, derived from provider/model/mode, system prompt version, global/project instruction hashes, Skill catalog hash, and ToolSet fingerprint. Provider adapters may derive provider-specific cache keys from it.
 
+## Cache Family ID
+
+The permanent logical identity of Provider-visible stable cache inputs such as provider/model/mode, system/instruction/skill prefix and Tool Set. It answers whether two requests are eligible to belong to the same prompt-cache family; it does not claim that their rendered conversation bytes are identical.
+
+## Context Epoch ID
+
+The branch/checkpoint-local cache epoch identity. Inside one epoch, already Provider-visible history must grow append-only. Accepting a new compaction checkpoint intentionally creates a new epoch/rebase; that expected transition is distinguished from an unexplained mutation inside the same epoch.
+
+## Rendered Prefix Digest
+
+A bounded SHA-256-style identity computed at the actual Provider wire-serialization boundary over the rendered cache-relevant prefix. It is diagnostic metadata rather than Session authority. Combined with Cache Family ID and Context Epoch ID it classifies cache hits, family changes, expected epoch rebases, unexpected same-epoch prefix mutation, Provider cache misses and insufficient telemetry without persisting the full prompt.
+
 ## Provider Runtime
 
-The boundary that translates canonical model input and prefix identity into provider-specific execution configuration and diagnostics. OpenAI-specific Responses/cache behavior belongs here rather than in Session or Context semantics.
+The project-owned boundary that translates canonical model input and prefix identity into provider-specific wire requests, stream events, cache controls and diagnostics. Model execution uses native `fetch()` plus project-owned SSE parsing rather than Vercel AI SDK. Built-in protocols are OpenAI Responses, Anthropic Messages, DeepSeek Chat Completions and native Google Generative AI; Custom V1 remains OpenAI-compatible Chat Completions. Provider-specific behavior belongs here rather than in Session or Context semantics. A bounded credential-free stable-prefix compilation cache is keyed by provider/model/protocol plus `PromptPrefixFingerprint` and `ToolSetFingerprint`; it stores only immutable system/tool material and never dynamic conversation history or credentials.
 
 ## Provider Registry
 

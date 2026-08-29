@@ -53,6 +53,17 @@ describe("StatusBar observability formatting", () => {
     });
   });
 
+  test("shows the latest Provider request cache hit instead of hiding it behind the session average", () => {
+    expect(formatStatusBarObservability({
+      context,
+      usage: usage({ cache: { hitRate: 0.595, coverage: "complete" } }),
+      usagePersistenceIncomplete: false,
+      latestProviderCacheHitRate: 15_872 / 18_326,
+    })).toMatchObject({
+      cache: "Cache 87%",
+    });
+  });
+
   test("preserves exact zero cache and unknown data distinctly", () => {
     expect(formatStatusBarObservability({
       context: { ...context, tokenCountQuality: "exact" },

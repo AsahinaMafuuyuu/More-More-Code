@@ -38,6 +38,7 @@ function createManualTimers() {
 function conversation(label: string): SessionUiState["conversation"] {
   return {
     messages: [{ id: label, role: "assistant", parts: [{ type: "text", text: label }] } as never],
+    hiddenMessageCount: 0,
     toolUses: {},
     currentRun: null,
     errorMessage: null,
@@ -122,7 +123,6 @@ describe("Session UI commit scheduler", () => {
         disabled: true,
         runActive: true,
         canInterrupt: true,
-        submitMode: "steer",
         followUpAvailable: true,
       },
     });
@@ -146,7 +146,6 @@ describe("Session UI commit scheduler", () => {
         disabled: false,
         runActive: false,
         canInterrupt: false,
-        submitMode: "submit",
         followUpAvailable: false,
       },
     });

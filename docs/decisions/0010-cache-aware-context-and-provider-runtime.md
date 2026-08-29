@@ -1,5 +1,7 @@
 # ADR-0010: Cache-Aware Context Ordering and Provider Runtime Boundary
 
+> **Execution-layer note (2026-08-28):** ADR-0031 supersedes the Vercel AI SDK execution/streaming portion of this ADR. The provider-independent Context ordering, prompt-prefix identity, cache-family separation, checkpoint reuse and Provider Runtime boundary defined here remain active.
+
 ## Status
 
 Accepted
@@ -69,6 +71,22 @@ A compaction checkpoint is part of the canonical projected history after it has 
 
 The runtime does not regenerate an equivalent summary on every projection. A new checkpoint is produced only when another real compaction threshold is reached. Original Session Entries remain unchanged.
 
+### Aggregate Tool pressure creates a checkpoint instead of rewriting cached history
+
+Individual oversized Tool Results receive deterministic bounded model-facing projections. However, many individually reasonable Tool Results can still grow into a large aggregate working set. Retroactively truncating those already-sent results when later Tool Results arrive would change historical Provider message bytes and destroy an otherwise reusable prefix.
+
+The runtime therefore treats aggregate Tool working-set pressure as an explicit `tool-pressure` compaction trigger. When the active Tool Result working set exceeds its configured share of the effective input budget:
+
+1. already-persisted Session Entries remain untouched;
+2. old model-facing Tool Results are not rewritten in place;
+3. compactable historical Turns are absorbed into one persisted Context checkpoint;
+4. the Provider prefix is intentionally rebased once at that checkpoint;
+5. later Model Steps reuse that checkpoint and only account active post-checkpoint Tool Results toward Tool working-set pressure.
+
+This chooses one explicit cache-boundary change over continuous historical prompt mutation.
+
+When automatic semantic compaction performs an auxiliary Provider request before the primary Model request, its Provider-reported token usage is aggregated with the primary request into the Model Step's single durable Usage/Cost fact. Missing usage buckets remain missing rather than being inferred across requests. Provider cache telemetry shown for the latest request continues to describe the primary request rather than the auxiliary reducer request.
+
 ### Provider-specific execution is isolated behind adapters
 
 Provider execution is compiled through a dedicated boundary:
@@ -84,7 +102,7 @@ Provider Runtime
 
 Canonical Context remains provider-independent. Provider adapters translate canonical model input into provider-specific request configuration and collect provider-specific response metadata without redefining Session semantics.
 
-For OpenAI, Stage 5 uses an `OpenAIResponsesAdapter` while retaining Vercel AI SDK for streaming and unified message/tool integration. OpenAI Responses API is the provider execution protocol, but OpenAI server-side conversation state is not the canonical MORE-MORE-CODE Session authority.
+For historical Stage 5, OpenAI used an `OpenAIResponsesAdapter` while retaining Vercel AI SDK for streaming and unified message/tool integration. ADR-0031 later replaced that execution surface with native provider transports. OpenAI Responses API remains the provider execution protocol, and OpenAI server-side conversation state is not the canonical MORE-MORE-CODE Session authority.
 
 `previous_response_id` may be considered later as an optimization or provider-local continuation mechanism, but it does not replace the Session Entry Tree in this stage.
 
@@ -139,6 +157,8 @@ Implemented on 2026-08-13.
 - Persisted `compaction` Session Entries are reused as Context checkpoints across later Model Steps and restored sessions; replacement occurs only after a new real compaction.
 - OpenAI model resolution explicitly selects `openai.responses(...)`; `OpenAIResponsesAdapter` derives `promptCacheKey` from the prompt-prefix fingerprint and does not set `previousResponseId`.
 - Provider cache usage is normalized into runtime telemetry (`cacheReadTokens` / `cacheWriteTokens`) without becoming Session semantic history.
+- Aggregate Tool Result pressure can now create a durable `tool-pressure` checkpoint without retroactively changing old Tool Result bytes; already-compacted Tool Results are removed from the active working-set pressure calculation.
+- Automatic semantic-compaction Provider usage is included in the owning Model Step Usage/Cost aggregation so Context maintenance cannot become hidden Provider spend.
 - Harness + CLI tests, Harness/Shared/CLI/Server typechecks, and CLI/Server builds pass.
 
 ## Consequences
@@ -148,6 +168,6 @@ Implemented on 2026-08-13.
 - PLAN and BUILD use distinct cache identities when their exposed tools differ.
 - Persisted compaction checkpoints remain stable across later Model Steps.
 - Provider-specific Responses/cache/reasoning options do not contaminate canonical Context or Session records.
-- Vercel AI SDK remains the common streaming/tool integration surface for the OpenAI adapter in Stage 5.
+- Historical Stage 5 used Vercel AI SDK as the common streaming/tool integration surface; ADR-0031 supersedes this implementation choice.
 - Cache usage can be diagnosed through explicit fingerprints and provider telemetry.
 - MCP Runtime, Permission Engine, Sandbox, tool cancellation, WAL/crash recovery, cloud revision/conflict sync, Subagent Runtime, and provider-owned Session authority remain deferred.

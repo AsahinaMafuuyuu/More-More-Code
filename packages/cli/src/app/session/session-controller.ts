@@ -1,4 +1,4 @@
-import { getToolName, isToolUIPart } from "ai";
+import { getToolName, isToolUIPart } from "../../lib/chat-types";
 import {
   AgentLoop,
   RUNTIME_APPROVAL_EVENT_SCHEMA_VERSION,
@@ -40,6 +40,7 @@ import {
   type ContextProjectionLifecycleEvent,
   type CurrentContextUsage,
   type ManualContextCompactionOutcome,
+  type PersistedContextCheckpoint,
 } from "../../lib/local-model-transport";
 import { executeNativeTool, resolveNativeToolTimeoutMs } from "../../lib/local-tools";
 import { ToolRuntime, type ToolExecutionResult } from "../../lib/tool-runtime";
@@ -54,6 +55,7 @@ import {
 } from "../../lib/branch-navigation";
 import type { BranchSummaryReductionOutcome } from "../../lib/branch-summary-reducer";
 import { runDurableSessionTurn } from "../../lib/durable-session-turn";
+import { buildDurableSessionTurnState } from "../../lib/durable-session-turn";
 import {
   inspectDurableToolCall,
   persistThenExposeToolTerminal,
@@ -114,6 +116,20 @@ export type SessionChatBridge = {
   stop(): void;
 };
 
+type ContextCompactionLifecycleEvent = Extract<
+  ContextProjectionLifecycleEvent,
+  { compactionPlanId: string }
+>;
+
+export type ContextCompactionActivityState = Readonly<{
+  operationId: string;
+  compactionPlanId: string;
+  phase: ContextCompactionLifecycleEvent["phase"];
+  startedAt: number;
+  inputTokensBefore?: number;
+  inputTokensAfter?: number;
+}>;
+
 export type SessionControllerSnapshot = Readonly<{
   run: AgentRun | null;
   activityProgressByStep: AgentActivityProgressState;
@@ -121,15 +137,33 @@ export type SessionControllerSnapshot = Readonly<{
   runtimeRecovery: RuntimeSessionRecoveryReport | null;
   runtimeError: Error | null;
   sessionUsage: SessionUsageSummary;
+  latestProviderCacheHitRate: number | null;
   contextUsage: CurrentContextUsage | null;
+  contextCompactionActivity: ContextCompactionActivityState | null;
   usagePersistenceIncomplete: boolean;
   pendingApprovals: readonly ApprovalRequest[];
+  pendingInteractions: readonly AgentInteraction[];
+  pendingInteractionOutcomes: readonly Readonly<{
+    interaction: AgentInteraction;
+    reason: "run-interrupted" | "run-failed";
+  }>[];
   sessionTree: SessionTreeState<Message>;
 }>;
 
 type AgentLoopLike = Pick<
   AgentLoop,
-  "isBusy" | "isRunning" | "interrupt" | "waitForIdle" | "subscribe" | "run" | "steer" | "followUp"
+  | "isBusy"
+  | "isRunning"
+  | "pendingInteractions"
+  | "interrupt"
+  | "waitForIdle"
+  | "subscribe"
+  | "subscribePendingInteractions"
+  | "run"
+  | "enqueueSteering"
+  | "enqueueFollowUp"
+  | "cancelPendingInteraction"
+  | "promoteFollowUpToSteering"
 >;
 
 type RuntimeSessionLike = Pick<RuntimeSession, "ready" | "record" | "getUsageSummary">;
@@ -182,9 +216,13 @@ export class SessionController {
       runtimeRecovery: null,
       runtimeError: null,
       sessionUsage: this.services.runtimeSession.getUsageSummary(),
+      latestProviderCacheHitRate: null,
       contextUsage: null,
+      contextCompactionActivity: null,
       usagePersistenceIncomplete: false,
       pendingApprovals: this.services.approvalBroker.getPending(),
+      pendingInteractions: this.services.agentLoop.pendingInteractions,
+      pendingInteractionOutcomes: [],
       sessionTree,
     });
 
@@ -215,11 +253,23 @@ export class SessionController {
       onModelUsageError: () => {
         this.update({ usagePersistenceIncomplete: true });
       },
+      onProviderTelemetry: (telemetry) => {
+        const hitRate = telemetry.inputTokens !== undefined
+          && telemetry.inputTokens > 0
+          && telemetry.cachedPromptTokens !== undefined
+          ? telemetry.cachedPromptTokens / telemetry.inputTokens
+          : null;
+        this.update({ latestProviderCacheHitRate: hitRate });
+      },
       getContextCheckpoint: () => {
         const checkpoint = projectLatestSessionCompaction(this.snapshot.sessionTree);
         if (!checkpoint) return null;
         return {
           summary: structuredClone(checkpoint.summary) as Message,
+          ...(checkpoint.checkpointV2
+            ? { checkpointV2: structuredClone(checkpoint.checkpointV2) }
+            : {}),
+          ...(checkpoint.compactionPlanId ? { compactionPlanId: checkpoint.compactionPlanId } : {}),
           compactedMessageIds: checkpoint.compactedMessageIds,
           retainedTailMessageIds: checkpoint.retainedTailMessageIds,
           compactedRecordIds: checkpoint.compactedRecordIds,
@@ -288,6 +338,11 @@ export class SessionController {
           this.snapshot.activityProgressByStep,
           event,
         ),
+      });
+    }));
+    this.unsubscribeTasks.push(this.services.agentLoop.subscribePendingInteractions(() => {
+      this.update({
+        pendingInteractions: this.services.agentLoop.pendingInteractions,
       });
     }));
     this.unsubscribeTasks.push(this.services.runLifecycle.register({
@@ -536,7 +591,7 @@ export class SessionController {
 
   submit = (params: PromptSelection & { userText: string }) => this.trackInFlightWork((async () => {
     this.services.runLifecycle.assertCanStartWork();
-    this.update({ busy: true });
+    this.update({ busy: true, pendingInteractionOutcomes: [] });
     try {
       await this.treeWriteTail;
       return await runDurableSessionTurn({
@@ -570,6 +625,14 @@ export class SessionController {
     kind: "follow-up",
     ...params,
   });
+
+  cancelPendingInteraction = (interactionId: string): boolean => (
+    this.services.agentLoop.cancelPendingInteraction(interactionId)
+  );
+
+  promoteFollowUpToSteering = (interactionId: string): boolean => (
+    this.services.agentLoop.promoteFollowUpToSteering(interactionId)
+  );
 
   getEntry = (entryId: string) => getSessionEntry(this.snapshot.sessionTree, entryId);
   getNode = this.getEntry;
@@ -670,31 +733,54 @@ export class SessionController {
     }));
   }
 
-  private async persistContextCompaction(event: ContextCompactionEvent): Promise<void> {
+  private async persistContextCompaction(event: ContextCompactionEvent): Promise<PersistedContextCheckpoint> {
     const metadata = this.activeModelStepMetadata;
     try {
-      await this.transitionTree((state) => appendSessionEntry(state, {
-        type: "compaction",
-        summary: event.summary,
-        tokensBefore: event.tokensBefore,
-        trigger: event.trigger,
-        inputTokensBefore: event.inputTokensBefore,
-        inputTokensAfter: event.inputTokensAfter,
-        inputBudgetTokens: event.inputBudgetTokens,
-        targetInputTokens: event.targetInputTokens,
-        targetSummaryTokens: event.targetSummaryTokens,
-        ...(event.compactedThroughRecordId
-          ? { compactedThroughRecordId: event.compactedThroughRecordId }
-          : {}),
-        ...(event.compactedThroughMessageId
-          ? { compactedThroughMessageId: event.compactedThroughMessageId }
-          : {}),
-        compactedMessageIds: event.compactedMessageIds,
-        retainedTailMessageIds: event.retainedTailMessageIds,
-        compactedRecordIds: event.compactedRecordIds,
-        retainedTailRecordIds: event.retainedTailRecordIds,
-        ...metadata,
-      }));
+      await this.transitionTree((state) => {
+        const alreadyCommitted = projectSessionEntryPath(state).some((entry) => (
+          entry.type === "compaction" && entry.compactionPlanId === event.compactionPlanId
+        ));
+        if (alreadyCommitted) return state;
+        return appendSessionEntry(state, {
+          type: "compaction",
+          summary: event.summary,
+          checkpointV2: structuredClone(event.checkpointV2),
+          compactionPlanId: event.compactionPlanId,
+          tokensBefore: event.tokensBefore,
+          trigger: event.trigger,
+          inputTokensBefore: event.inputTokensBefore,
+          inputTokensAfter: event.inputTokensAfter,
+          inputBudgetTokens: event.inputBudgetTokens,
+          targetInputTokens: event.targetInputTokens,
+          targetSummaryTokens: event.targetSummaryTokens,
+          ...(event.compactedThroughRecordId
+            ? { compactedThroughRecordId: event.compactedThroughRecordId }
+            : {}),
+          ...(event.compactedThroughMessageId
+            ? { compactedThroughMessageId: event.compactedThroughMessageId }
+            : {}),
+          compactedMessageIds: event.compactedMessageIds,
+          retainedTailMessageIds: event.retainedTailMessageIds,
+          compactedRecordIds: event.compactedRecordIds,
+          retainedTailRecordIds: event.retainedTailRecordIds,
+          ...metadata,
+        });
+      });
+      const committed = projectSessionEntryPath(this.snapshot.sessionTree).findLast((entry) => (
+        entry.type === "compaction" && entry.compactionPlanId === event.compactionPlanId
+      ));
+      if (!committed || committed.type !== "compaction" || !committed.checkpointV2) {
+        throw new Error("Committed Session authority did not rehydrate Checkpoint V2");
+      }
+      return {
+        summary: structuredClone(committed.summary) as Message,
+        checkpointV2: structuredClone(committed.checkpointV2),
+        compactionPlanId: committed.compactionPlanId,
+        compactedMessageIds: committed.compactedMessageIds,
+        retainedTailMessageIds: committed.retainedTailMessageIds,
+        compactedRecordIds: committed.compactedRecordIds,
+        retainedTailRecordIds: committed.retainedTailRecordIds,
+      };
     } catch (error) {
       this.update({ runtimeError: toError(error) });
       throw error;
@@ -703,6 +789,7 @@ export class SessionController {
 
   private async persistContextEvent(event: ContextProjectionLifecycleEvent): Promise<void> {
     const metadata = event.operation === "model-step" ? this.activeModelStepMetadata : {};
+    const compactionEvent = "compactionPlanId" in event ? event : null;
     await this.services.runtimeSession.record({
       type: "context",
       payload: {
@@ -713,7 +800,16 @@ export class SessionController {
         operation: event.operation,
         mode: event.mode,
         model: `${event.model.providerId}/${event.model.modelId}`,
-        ...(event.phase === "completed" ? {
+        ...(compactionEvent ? {
+          compactionPlanId: compactionEvent.compactionPlanId,
+          compactionTrigger: compactionEvent.compactionTrigger,
+          ...(compactionEvent.inputTokensBefore !== undefined
+            ? { inputTokensBefore: compactionEvent.inputTokensBefore }
+            : {}),
+          ...(compactionEvent.inputTokensAfter !== undefined
+            ? { inputTokensAfter: compactionEvent.inputTokensAfter }
+            : {}),
+        } : event.phase === "completed" ? {
           inputTokensBefore: event.inputTokensBefore,
           inputTokensAfter: event.inputTokensAfter,
           inputBudgetTokens: event.inputBudgetTokens,
@@ -728,6 +824,30 @@ export class SessionController {
         ...(metadata.stepId ? { stepId: metadata.stepId } : {}),
       },
     });
+    if (compactionEvent) {
+      const current = this.snapshot.contextCompactionActivity;
+      this.update({
+        contextCompactionActivity: {
+          operationId: compactionEvent.operationId,
+          compactionPlanId: compactionEvent.compactionPlanId,
+          phase: compactionEvent.phase,
+          startedAt:
+            current?.operationId === compactionEvent.operationId
+              ? current.startedAt
+              : Date.now(),
+          ...(compactionEvent.inputTokensBefore !== undefined
+            ? { inputTokensBefore: compactionEvent.inputTokensBefore }
+            : current?.inputTokensBefore !== undefined
+              ? { inputTokensBefore: current.inputTokensBefore }
+              : {}),
+          ...(compactionEvent.inputTokensAfter !== undefined
+            ? { inputTokensAfter: compactionEvent.inputTokensAfter }
+            : {}),
+        },
+      });
+    } else if (event.phase === "started" && this.snapshot.contextCompactionActivity !== null) {
+      this.update({ contextCompactionActivity: null });
+    }
   }
 
   private recomputeContextUsage(): void {
@@ -797,6 +917,7 @@ export class SessionController {
     inputMessageId: string;
   }) {
     this.services.runLifecycle.assertCanStartWork();
+    const runEnvironment = this.services.getAgentEnvironment();
     let activeExecutionSelection: PromptSelection = {
       mode: input.params.mode,
       model: input.params.model,
@@ -806,8 +927,35 @@ export class SessionController {
     const completedRun = await this.services.agentLoop.run({
       sessionId: this.sessionId,
       inputMessageId: input.inputMessageId,
+      toolExecution: runEnvironment.config.resolved.tools.execution,
       onStateChange: (run) => this.update({ run }),
+      onPendingInteractionOutcome: (outcome) => {
+        const next = [
+          ...this.snapshot.pendingInteractionOutcomes,
+          {
+            interaction: structuredClone(outcome.interaction),
+            reason: outcome.reason,
+          },
+        ].slice(-4);
+        this.update({ pendingInteractionOutcomes: next });
+      },
       adapter: {
+        commitInteraction: async (interaction) => {
+          const prompt = getInteractionPrompt(interaction, activeExecutionSelection);
+          const next = buildDurableSessionTurnState({
+            sessionId: this.sessionId,
+            state: this.snapshot.sessionTree,
+            userText: prompt.text,
+            selection: { mode: prompt.mode, model: prompt.model },
+          });
+          const committedTree = await this.commitTree(next.state);
+          this.latestMessages = cloneMessages(projectDurableSessionMessages(committedTree));
+          this.requireChatBridge().setMessages(this.latestMessages);
+          return {
+            ...interaction,
+            inputMessageId: next.inputMessageId,
+          };
+        },
         runModelStep: async ({ continuation, interaction, run, turn, step }) => {
           this.services.runLifecycle.assertCanStartWork();
           const prompt = interaction
@@ -994,6 +1142,12 @@ export class SessionController {
             throw resolved;
           }
         },
+        getToolExecutionSafety: (toolCall) => (
+          runEnvironment.tools.getToolDefinition(
+            toolCall.toolName,
+            activeExecutionSelection.mode,
+          )?.executionSafety ?? { parallelSafe: false, effect: "unknown" }
+        ),
         abortModelStep: () => this.stopModelStep(),
       },
     });
@@ -1018,31 +1172,32 @@ export class SessionController {
   }) {
     return this.trackInFlightWork((async () => {
       this.services.runLifecycle.assertCanStartWork();
-      if (!this.services.agentLoop.isRunning) return false;
-      const inputMessageId = crypto.randomUUID();
-      return this.queueTreeWrite(() => runDurableSessionTurn({
-        authority: this.services.localSessionAuthority,
-        sessionId: this.sessionId,
-        state: this.snapshot.sessionTree,
+      const metadata = { mode: input.mode, model: input.model };
+      const queued = input.kind === "steering"
+        ? this.services.agentLoop.enqueueSteering({
+            text: input.userText,
+            metadata,
+          })
+        : this.services.agentLoop.enqueueFollowUp({
+            text: input.userText,
+            metadata,
+          });
+      if (queued) {
+        if (this.snapshot.pendingInteractionOutcomes.length > 0) {
+          this.update({ pendingInteractionOutcomes: [] });
+        }
+        return queued;
+      }
+
+      // The old Run may have closed its acceptance gate between the UI read
+      // and this authoritative submission. Wait for settlement, then route
+      // the exact same text through the normal durable new-Round path.
+      await this.services.agentLoop.waitForIdle();
+      return this.submit({
         userText: input.userText,
-        selection: { mode: input.mode, model: input.model },
-        inputMessageId,
-        runAgent: async ({ state, inputMessageId: durableInputMessageId }) => {
-          this.applyTreeState(state);
-          const metadata = { mode: input.mode, model: input.model };
-          return input.kind === "steering"
-            ? this.services.agentLoop.steer({
-                text: input.userText,
-                inputMessageId: durableInputMessageId,
-                metadata,
-              })
-            : this.services.agentLoop.followUp({
-                text: input.userText,
-                inputMessageId: durableInputMessageId,
-                metadata,
-              });
-        },
-      }));
+        mode: input.mode,
+        model: input.model,
+      });
     })());
   }
 
