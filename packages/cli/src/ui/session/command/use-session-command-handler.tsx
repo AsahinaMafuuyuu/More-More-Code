@@ -27,6 +27,9 @@ import {
 import type { ComposerIntent } from "../composer/composer-intent";
 import { commitPromptModeChange, commitPromptModelChange } from "../composer/composer-actions";
 import { formatManualCompactionOutcome } from "./manual-compaction-presentation";
+import { useOptionalSessionUiStore } from "../store/react-session-ui";
+import { projectSessionNavigationTree } from "../../../lib/session-navigation-projection";
+import { projectInspectorTreeView } from "../inspector/inspector-projections";
 
 export function useSessionCommandHandler(input: {
   controller?: SessionController;
@@ -36,6 +39,7 @@ export function useSessionCommandHandler(input: {
   const navigate = useNavigate();
   const toast = useToast();
   const dialog = useDialog();
+  const store = useOptionalSessionUiStore();
   const { mode, model, setMode, setModel } = usePromptConfig();
 
   const showError = useCallback((message: string) => {
@@ -87,14 +91,13 @@ export function useSessionCommandHandler(input: {
       case "sessions":
         dialog.open({ title: "Sessions", children: <SessionsDialogContent /> });
         return;
-      case "tree":
       case "jump":
         if (!input.sessionTree) {
           showError("Session tree is not available here");
           return;
         }
         dialog.open({
-          title: kind === "tree" ? "Session Tree" : "Jump to Session Node",
+          title: "Jump to Session Node",
           children: <SessionTreeDialogContent tree={input.sessionTree} />,
         });
         return;
@@ -105,6 +108,22 @@ export function useSessionCommandHandler(input: {
         dialog.open({ title: "Select Theme", children: <ThemeDialogContent /> });
     }
   }, [changeMode, changeModel, dialog, input.sessionTree, mode, model, showError]);
+
+  const openInspector = useCallback((section: "tree" | "context" | "usage" | "runtime" | "security") => {
+    if (!store || !input.controller) {
+      showError("Session Inspector is not available here");
+      return;
+    }
+    if (section === "tree") {
+      store.setSlice(
+        "inspectorTree",
+        projectInspectorTreeView(
+          projectSessionNavigationTree(input.controller.getSnapshot().sessionTree),
+        ),
+      );
+    }
+    store.setSlice("inspector", { open: true, section });
+  }, [input.controller, showError, store]);
 
   const navigateTree = useCallback(async (target: "parent" | "root") => {
     const tree = input.sessionTree;
@@ -150,6 +169,7 @@ export function useSessionCommandHandler(input: {
     const router = createSessionCommandRouter({
       navigate,
       openDialog: openSemanticDialog,
+      openInspector,
       changeMode,
       compact,
       navigateTree,
@@ -158,5 +178,5 @@ export function useSessionCommandHandler(input: {
       destroyRenderer: () => renderer.destroy(),
     });
     return router.execute(resolveSessionCommandIntent(composerIntent));
-  }, [changeMode, compact, navigate, navigateTree, openSemanticDialog, renderer, showError]);
+  }, [changeMode, compact, navigate, navigateTree, openInspector, openSemanticDialog, renderer, showError]);
 }

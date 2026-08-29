@@ -7,6 +7,9 @@ import {
   selectActivity,
   selectConversation,
   selectInspector,
+  selectInspectorContext,
+  selectInspectorTree,
+  selectInspectorUsage,
   selectStatus,
 } from "../src/ui/session/store/session-ui-selectors";
 
@@ -82,5 +85,50 @@ describe("Session UI Store", () => {
     expect(firstInspectorNotifications).toBe(1);
     expect(first.getSnapshot()).toBe(snapshotBeforeDestroy);
     expect(Object.isFrozen(first.getSnapshot())).toBe(true);
+  });
+
+  test("isolates Inspector data slices from shell and unrelated Session surfaces", () => {
+    const store = createSessionUiStore(createInitialSessionUiState());
+    const notifications = {
+      shell: 0,
+      context: 0,
+      usage: 0,
+      tree: 0,
+      conversation: 0,
+      status: 0,
+    };
+
+    store.subscribeSelector(selectInspector, () => notifications.shell += 1);
+    store.subscribeSelector(selectInspectorContext, () => notifications.context += 1);
+    store.subscribeSelector(selectInspectorUsage, () => notifications.usage += 1);
+    store.subscribeSelector(selectInspectorTree, () => notifications.tree += 1);
+    store.subscribeSelector(selectConversation, () => notifications.conversation += 1);
+    store.subscribeSelector(selectStatus, () => notifications.status += 1);
+
+    store.setSlice("inspectorContext", {
+      available: true,
+      currentInput: "1k",
+      contextWindow: "128k",
+      utilization: "0.8%",
+      utilizationRatio: 1 / 128,
+      inputBudget: "112k",
+      reservedOutput: "12k",
+      safetyMargin: "4k",
+      counterId: "heuristic",
+      quality: "estimated",
+    });
+    expect(notifications).toEqual({
+      shell: 0,
+      context: 1,
+      usage: 0,
+      tree: 0,
+      conversation: 0,
+      status: 0,
+    });
+
+    store.setSlice("inspector", { open: true, section: "usage" });
+    expect(notifications.shell).toBe(1);
+    expect(notifications.conversation).toBe(0);
+    expect(notifications.status).toBe(0);
   });
 });

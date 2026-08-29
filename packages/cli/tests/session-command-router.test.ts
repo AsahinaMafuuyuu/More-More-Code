@@ -25,6 +25,21 @@ describe("Session command router", () => {
       commandName: "settings",
       commandValue: "/settings",
     })).toEqual({ type: "open-dialog", dialog: "settings" });
+    expect(resolveSessionCommandIntent({
+      type: "command",
+      commandName: "tree",
+      commandValue: "/tree",
+    })).toEqual({ type: "open-inspector", section: "tree" });
+    expect(resolveSessionCommandIntent({
+      type: "command",
+      commandName: "inspect",
+      commandValue: "/inspect",
+    })).toEqual({ type: "open-inspector", section: "tree" });
+    expect(resolveSessionCommandIntent({
+      type: "command",
+      commandName: "jump",
+      commandValue: "/jump",
+    })).toEqual({ type: "open-dialog", dialog: "jump" });
   });
 
   test("executes exactly one application action per intent", async () => {
@@ -32,6 +47,7 @@ describe("Session command router", () => {
     const router = createSessionCommandRouter({
       navigate: (path) => calls.push(`navigate:${path}`),
       openDialog: (dialog) => calls.push(`dialog:${dialog}`),
+      openInspector: (section) => calls.push(`inspector:${section}`),
       changeMode: async (mode) => { calls.push(`mode:${mode}`); },
       compact: async () => { calls.push("compact"); },
       navigateTree: async (target) => { calls.push(`tree:${target}`); },
@@ -49,6 +65,7 @@ describe("Session command router", () => {
     const router = createSessionCommandRouter({
       navigate: () => {},
       openDialog: () => {},
+      openInspector: () => {},
       changeMode: async () => {},
       compact: async () => {},
       navigateTree: async () => {},
@@ -65,6 +82,7 @@ describe("Session command router", () => {
     const router = createSessionCommandRouter({
       navigate: () => {},
       openDialog: () => {},
+      openInspector: () => {},
       changeMode: async () => {},
       compact: async () => {},
       navigateTree: async () => {},

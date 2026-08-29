@@ -2,8 +2,10 @@
 
 **Status:** Active — UI Slice 1 / P0 Runtime Activity Foundation and UI Slice
 1.5 / UI Architecture Foundation were delivered on 2026-08-27. UI Slice 1.6 /
-OpenTUI Framework Stability was delivered on 2026-08-28 with the normal
-Windows native pressure gate Green. P1 Inspector work is now unblocked.
+OpenTUI Framework Stability was delivered on 2026-08-28. UI Slice 2 / P1-A
+Session Inspector + Context/Usage/Tree was delivered on 2026-08-29 with the
+normal Windows native pressure matrix Green. P1-B Runtime/Recovery + Security
+Audit is now the next UI slice.
 
 **Target:** Local CLI / OpenTUI presentation layer after the Stage 6.5 local
 Session, Runtime, Provider, Context, Usage and Cost foundations.
@@ -513,6 +515,8 @@ stage, not a Harness redesign and not a renderer replacement project.
 
 ### UI Slice 2 — Inspector Foundation + Context/Usage/Tree (P1-A)
 
+**Status:** Delivered / verified — 2026-08-29.
+
 Scope:
 
 - Inspector shell;
@@ -522,8 +526,9 @@ Scope:
 - entry commands/keyboard navigation.
 
 These areas are grouped because their data seams already exist and are mostly
-read-only projections. **Dependency: UI Slice 1.5 is delivered, but UI Slice
-1.6 must also be fully delivered before Inspector implementation begins.**
+read-only projections. Delivery reuses the selector-based UI store/controller
+architecture, keeps semantic Tree projection lazy while the Inspector is closed,
+and preserves existing Session navigation / Branch Summary authority.
 
 ### UI Slice 3 — Runtime Recovery + Security Audit (P1-B)
 

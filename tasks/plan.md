@@ -2942,17 +2942,20 @@ optimization rather than part of this stage.
 
 ## Priority P1-A — Inspector Foundation, Context, Usage and Tree
 
+**Status:** Delivered / verified — 2026-08-29. UI-5 through UI-8 are complete;
+P1-B Runtime/Recovery + Security Audit is now the next UI slice.
+
 ### Task UI-5: Design and implement one Session Inspector shell
 
 **Description:** Introduce one reusable Inspector architecture instead of one
 independent diagnostics dialog per subsystem.
 
 **Acceptance criteria:**
-- [ ] Tree / Context / Usage / Runtime / Security sections have one navigation
+- [x] Tree / Context / Usage / Runtime / Security sections have one navigation
   model.
-- [ ] Keyboard/search/close behavior is consistent.
-- [ ] Narrow-terminal behavior is specified.
-- [ ] Existing `/tree` can route into the Inspector Tree section without
+- [x] Keyboard/search/close behavior is consistent.
+- [x] Narrow-terminal behavior is specified and regression-tested at 60 columns.
+- [x] Existing `/tree` routes into the Inspector Tree section without
   changing Session navigation semantics.
 
 **Dependencies:** P0 complete, **UI-A1 through UI-A7 delivered, and UI-S1 through
@@ -2961,36 +2964,36 @@ UI-S7 / OpenTUI Framework Stability delivered**.
 ### Task UI-6: Add Context Inspector
 
 **Acceptance criteria:**
-- [ ] Shows current Context occupancy/window/budget/reserved output/safety
+- [x] Shows current Context occupancy/window/budget/reserved output/safety
   margin and counter quality from the existing Context observability seam.
-- [ ] Estimated vs exact remains explicit.
-- [ ] Any compaction/pruning detail shown comes only from already-approved
+- [x] Estimated vs exact remains explicit.
+- [x] Any compaction/pruning detail shown comes only from already-approved
   state; missing data is not fabricated.
-- [ ] Inspector reads are side-effect free.
+- [x] Inspector reads are side-effect free.
 
 **Dependencies:** UI-5.
 
 ### Task UI-7: Add Usage / Cost Inspector
 
 **Acceptance criteria:**
-- [ ] Shows Provider-reported input/output/cache buckets when present.
-- [ ] Shows Session cache hit, API Cost, completed Model Steps, coverage and
+- [x] Shows Provider-reported input/output/cache buckets when present.
+- [x] Shows Session cache hit, API Cost, completed Model Steps, coverage and
   integrity.
-- [ ] `unknown != zero` and partial Cost remains visibly partial.
-- [ ] Current Context estimates are never presented as billable API Usage.
-- [ ] No day/week/project analytics are introduced in this slice.
+- [x] `unknown != zero` and partial Cost remains visibly partial.
+- [x] Current Context estimates are never presented as billable API Usage.
+- [x] No day/week/project analytics are introduced in this slice.
 
 **Dependencies:** UI-5.
 
 ### Task UI-8: Upgrade Session Tree presentation
 
 **Acceptance criteria:**
-- [ ] Existing Navigation Projection remains the semantic source.
-- [ ] Real branch points and active/sibling paths are visually easier to scan.
-- [ ] ToolUse rows avoid leaking raw persistence vocabulary where a semantic
+- [x] Existing Navigation Projection remains the semantic source.
+- [x] Real branch points and active/sibling paths are visually easier to scan.
+- [x] ToolUse rows avoid leaking raw persistence vocabulary where a semantic
   label exists.
-- [ ] Branch Summary Carry / No Carry / Cancel behavior remains unchanged.
-- [ ] Hidden bookkeeping Entries remain hidden.
+- [x] Branch Summary Carry / No Carry / Cancel behavior remains unchanged.
+- [x] Hidden bookkeeping Entries remain hidden.
 
 **Dependencies:** UI-5.
 

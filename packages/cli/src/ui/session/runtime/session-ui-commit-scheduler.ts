@@ -5,7 +5,12 @@ import type {
 
 export type PresentationPatch = Partial<Pick<
   SessionUiState,
-  "conversation" | "activity" | "status"
+  | "conversation"
+  | "activity"
+  | "status"
+  | "inspectorContext"
+  | "inspectorUsage"
+  | "inspectorTree"
 >>;
 
 export type ImmediatePatch = Partial<Pick<
