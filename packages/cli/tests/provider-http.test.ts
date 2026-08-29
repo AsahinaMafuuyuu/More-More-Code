@@ -37,6 +37,37 @@ describe("native provider HTTP/SSE", () => {
         }
     });
 
+    test("surfaces only bounded structured provider diagnostics from a JSON error envelope", async () => {
+        const fetch = async () => new Response(JSON.stringify({
+            error: {
+                message: "Missing reasoning_content for assistant message when tools are enabled",
+                type: "invalid_request_error",
+                param: "messages[3].reasoning_content",
+                code: "invalid_request_error",
+                secret: "must-not-leak",
+            },
+            echoed_prompt: "must-not-leak",
+        }), {
+            status: 400,
+            headers: { "content-type": "application/json" },
+        });
+
+        try {
+            await fetchProvider({
+                url: "https://provider.invalid",
+                init: { method: "POST" },
+                fetch: fetch as unknown as typeof globalThis.fetch,
+            });
+            throw new Error("expected fetchProvider to fail");
+        } catch (error) {
+            expect(error).toBeInstanceOf(NativeProviderHttpError);
+            expect(String(error)).toContain("invalid_request_error");
+            expect(String(error)).toContain("messages[3].reasoning_content");
+            expect(String(error)).toContain("Missing reasoning_content");
+            expect(String(error)).not.toContain("must-not-leak");
+        }
+    });
+
     test("retries retryable status and honors x-should-retry=false", async () => {
         let calls = 0;
         const fetch = async () => {

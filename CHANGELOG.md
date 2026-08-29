@@ -163,6 +163,15 @@ All notable changes to MORE MORE CODE are recorded here.
 
 ### Fixed
 
+- DeepSeek V4 thinking-mode Chat Completions now serialize `reasoning_content`
+  on every assistant history message whenever DeepSeek Tool definitions are
+  present. Existing reasoning is replayed verbatim and assistant records with
+  no reasoning block emit `reasoning_content: ""`, covering Tool continuations
+  and synthetic compaction-checkpoint assistant history that otherwise caused
+  Provider HTTP 400 responses.
+- Native Provider HTTP failures now expose only bounded allowlisted fields from
+  standard JSON error envelopes (`type`, `code`, `param`, `message`) while
+  continuing to withhold arbitrary response bodies and unrelated payload fields.
 - OpenTUI terminal dimensions now use one application-level resize subscription
   shared through `TerminalDimensionsProvider`; persistent historical ToolUse
   rows no longer add one `CliRenderer` `resize` listener each, preventing

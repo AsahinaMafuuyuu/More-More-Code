@@ -327,6 +327,104 @@ describe("native provider adapters", () => {
         });
     });
 
+    test("DeepSeek replays reasoning from prior assistant turns whenever tools are present", async () => {
+        const deepseek = model({
+            provider: "deepseek",
+            providerId: "deepseek",
+            protocol: "openai-chat-completions",
+            endpoint: "https://provider.invalid/chat/completions",
+            modelOptions: { reasoningEffort: "medium" },
+        });
+        const response = new Response([
+            `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`,
+            "data: [DONE]\n\n",
+        ].join(""));
+        const nativeRequest = request();
+        nativeRequest.messages = [
+            { role: "user", content: [{ type: "text", text: "summarize the repo" }] },
+            {
+                role: "assistant",
+                content: [
+                    { type: "reasoning", text: "I should first understand the repository structure." },
+                    { type: "text", text: "I will inspect the repository." },
+                ],
+            },
+            { role: "user", content: [{ type: "text", text: "continue" }] },
+        ];
+
+        const result = await collect(deepseek, nativeRequest, response);
+        const body = JSON.parse(String(result.captured.init?.body));
+
+        expect(body.tools.length).toBeGreaterThan(0);
+        expect(body.messages).toContainEqual({
+            role: "assistant",
+            content: "I will inspect the repository.",
+            reasoning_content: "I should first understand the repository structure.",
+        });
+    });
+
+    test("DeepSeek emits empty reasoning_content for assistant history without a reasoning block", async () => {
+        const deepseek = model({
+            provider: "deepseek",
+            providerId: "deepseek",
+            protocol: "openai-chat-completions",
+            endpoint: "https://provider.invalid/chat/completions",
+            modelOptions: { reasoningEffort: "medium" },
+        });
+        const response = new Response([
+            `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`,
+            "data: [DONE]\n\n",
+        ].join(""));
+        const nativeRequest = request();
+        nativeRequest.messages = [
+            {
+                role: "assistant",
+                content: [{ type: "text", text: "Compacted checkpoint state" }],
+            },
+            { role: "user", content: [{ type: "text", text: "continue" }] },
+            {
+                role: "assistant",
+                content: [{
+                    type: "tool-call",
+                    toolCallId: "call-without-reasoning",
+                    toolName: "readFile",
+                    input: { path: "packages/harness/src/context.ts" },
+                }],
+            },
+            {
+                role: "tool",
+                content: [{
+                    type: "tool-result",
+                    toolCallId: "call-without-reasoning",
+                    toolName: "readFile",
+                    output: "contents",
+                }],
+            },
+        ];
+
+        const result = await collect(deepseek, nativeRequest, response);
+        const body = JSON.parse(String(result.captured.init?.body));
+
+        expect(body.messages).toContainEqual({
+            role: "assistant",
+            content: "Compacted checkpoint state",
+            reasoning_content: "",
+        });
+        expect(body.messages).toContainEqual({
+            role: "assistant",
+            content: null,
+            reasoning_content: "",
+            tool_calls: [{
+                id: "call-without-reasoning",
+                type: "function",
+                function: {
+                    name: "readFile",
+                    arguments: JSON.stringify({ path: "packages/harness/src/context.ts" }),
+                },
+            }],
+        });
+    });
+
     test("DeepSeek fails closed on internally inconsistent cache usage", async () => {
         const deepseek = model({
             provider: "deepseek",
