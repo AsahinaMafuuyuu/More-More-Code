@@ -1,244 +1,149 @@
-// 主要用于已经创建的会话，显示会话的消息列表，并提供输入框用于发送新消息
-import { useState, useEffect, useMemo, useRef } from "react";
-import { useParams, useLocation, useNavigate } from "react-router";
+// Local Session route + workspace composition. Runtime/UI subscriptions live
+// below this screen so one changing projection does not invalidate the route root.
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate, useParams } from "react-router";
 import { z } from "zod";
-import type { InferResponseType } from "hono/client";
-import { SessionShell } from "../components/session-shell";
-import { useKeyboard } from "@opentui/react";
-import {
-  UserMessage,
-  BotMessage,
-  ErrorMessage,
-} from "../components/messages";
+import type { ModelRef, ModeType } from "@more-more-code/shared";
+import type { LocalSessionSnapshot } from "@more-more-code/session-store";
+import { getLocalSessionAuthority } from "../lib/session-environment";
+import type { Message } from "../lib/chat-types";
 import { useToast } from "../providers/toast";
-import { apiClient } from "../lib/api-client";
-import { getErrorMessage } from "../lib/http-errors";
-import { type ModeType, type SupportedChatModelId } from "@more-more-code/shared";
-import { useChat } from "../hooks/use-chat";
-import { usePromptConfig } from "../providers/prompt-config";
-import type { Message } from "../hooks/use-chat";
-import type { SessionTreeCommandApi } from "../components/command-menu/types";
-import { useKeyboardLayer } from "../providers/keyboard-layer";
+import { SessionController } from "../app/session/session-controller";
+import {
+  createInitialSessionUiState,
+  createSessionUiStore,
+} from "../ui/session/store/session-ui-store";
+import { SessionUiStoreProvider } from "../ui/session/store/react-session-ui";
+import { SessionRuntimeBridge } from "../ui/session/runtime/session-runtime-bridge";
+import { ConversationSurface } from "../ui/session/surfaces/conversation-surface";
+import { ComposerSurface } from "../ui/session/surfaces/composer-surface";
+import { InteractionHintsSurface } from "../ui/session/surfaces/interaction-hints-surface";
+import { StatusSurface } from "../ui/session/surfaces/status-surface";
+import { SessionWorkspace } from "../ui/session/workspace/session-workspace";
+import { InspectorSurface } from "../ui/session/workspace/inspector-surface";
+import { SessionLoadingWorkspace } from "../ui/session/workspace/session-loading-workspace";
+import { ApprovalPresentation } from "../ui/session/presentation/approval-presentation";
+import { RecoveryPresentation } from "../ui/session/presentation/recovery-presentation";
+import { SessionRuntimeInteraction } from "../ui/session/interaction/session-runtime-interaction";
 
-type SessionData = InferResponseType<(typeof apiClient.sessions)[":id"]["$get"], 200>; // 获取SessionData的类型
+type SessionData = LocalSessionSnapshot<Message>;
 
 const sessionLocationSchema = z.object({
-  session: z.custom<SessionData>((val) => {
-    return val !== null && typeof val === "object" && "id" in val; //  验证session对象是否包含id属性
-  }),
+  snapshot: z.custom<SessionData>((value) => Boolean(
+    value
+    && typeof value === "object"
+    && "session" in value
+    && "state" in value
+  )),
   initialPrompt: z.object({
     message: z.string(),
     mode: z.custom<ModeType>(),
-    model: z.custom<SupportedChatModelId>(),
-  })
-})
-
-
-
-function getMessageText(msg: Message) {
-  return msg.parts
-    .filter((part) => part.type === "text")
-    .map((part) => part.text)
-    .join("");
-}
-
-function ChatMessage({ msg }: { msg: Message }) {
-  if (msg.role === "user") { // 如果是用户消息
-    return <UserMessage message={getMessageText(msg)} mode={msg.metadata?.mode ?? "BUILD"} />;
-  }
-
-  return (
-    <BotMessage
-      parts={msg.parts}
-      model={msg.metadata?.model ?? "unknown"}
-      mode={msg.metadata?.mode ?? "BUILD"}
-      durationMs={msg.metadata?.durationMs}
-      streaming={false}
-    />
-  );
-}
+    model: z.object({
+      providerId: z.string().min(1),
+      modelId: z.string().min(1),
+    }).strict(),
+  }),
+});
 
 function SessionChat({
   session,
-  initialPrompt
+  initialPrompt,
 }: {
-  session: SessionData,
+  session: SessionData;
   initialPrompt?: {
     message: string;
     mode: ModeType;
-    model: SupportedChatModelId;
-  }
+    model: ModelRef;
+  };
 }) {
-  const { mode, model } = usePromptConfig(); // 获取当前的模式和模型
-  const { isTopLayer } = useKeyboardLayer(); // 获取键盘层状态
-  const {
-    messages,
-    status,
-    submit,
-    abort,
-    interrupt,
-    error,
-    run,
-    sessionTree,
-    jumpToNode,
-    jumpToParent,
-    jumpToRoot,
-  } = useChat(session.id, session.messages); // 使用自定义hook管理消息状态与会话树
-  const runActive = run?.status === "running";
-
-  const sessionTreeCommands = useMemo<SessionTreeCommandApi>(() => {
-    const childrenByParent = new Map<string | null, typeof sessionTree.nodes>();
-    for (const node of sessionTree.nodes) {
-      const children = childrenByParent.get(node.parentId) ?? [];
-      children.push(node);
-      childrenByParent.set(node.parentId, children);
-    }
-
-    const ordered: Array<{ node: (typeof sessionTree.nodes)[number]; depth: number }> = [];
-    const visit = (nodeId: string, depth: number) => {
-      const node = sessionTree.nodes.find((candidate) => candidate.id === nodeId);
-      if (!node) return;
-      ordered.push({ node, depth });
-      for (const child of childrenByParent.get(node.id) ?? []) {
-        visit(child.id, depth + 1);
-      }
-    };
-    visit(sessionTree.rootNodeId, 0);
-
-    return {
-      rootNodeId: sessionTree.rootNodeId,
-      activeNodeId: sessionTree.activeNodeId,
-      nodes: ordered.map(({ node, depth }) => {
-        const lastUserMessage = node.messages.findLast((message) => message.role === "user");
-        const preview = lastUserMessage ? getMessageText(lastUserMessage).trim() : "Session root";
-        return {
-          id: node.id,
-          parentId: node.parentId,
-          depth,
-          createdAt: node.createdAt,
-          messageCount: node.messages.length,
-          preview: preview || "Untitled turn",
-          active: node.id === sessionTree.activeNodeId,
-        };
-      }),
-      jump: jumpToNode,
-      jumpParent: jumpToParent,
-      jumpRoot: jumpToRoot,
-    };
-  }, [sessionTree, jumpToNode, jumpToParent, jumpToRoot]);
-
-  const hasSubmittedInitialPromptRef = useRef(false); // 用于标记是否已经提交了初始提示
+  const toast = useToast();
+  const controller = useMemo(() => new SessionController({
+    sessionId: session.session.id,
+    persistedSessionState: session.state,
+  }), [session.session.id, session.state]);
+  const store = useMemo(
+    () => createSessionUiStore(createInitialSessionUiState()),
+    [session.session.id],
+  );
+  const submittedInitialPrompt = useRef(false);
 
   useEffect(() => {
-    return () => { // 组件卸载时取消订阅
-      void abort();
-    }
-  }, [abort]);
-
-  useKeyboard((key) => {
-    if (
-      key.name === "escape" &&
-      isTopLayer("base") &&
-      (runActive || status === "streaming" || status === "submitted")
-    ) {
-      key.preventDefault();
-      interrupt();
-    }
-  })
-
-  useEffect(() => {
-    if (!initialPrompt || hasSubmittedInitialPromptRef.current) return;
-
-    hasSubmittedInitialPromptRef.current = true;
-
-    void submit({
-        userText: initialPrompt.message,
-        mode: initialPrompt.mode,
-        model: initialPrompt.model,
+    if (!initialPrompt || submittedInitialPrompt.current) return;
+    submittedInitialPrompt.current = true;
+    void controller.submit({
+      userText: initialPrompt.message,
+      mode: initialPrompt.mode,
+      model: initialPrompt.model,
+    }).catch((error) => {
+      toast.show({
+        variant: "error",
+        message: error instanceof Error ? error.message : String(error),
+      });
     });
-}, [initialPrompt, submit]);
+  }, [controller, initialPrompt, toast]);
 
   return (
-    <SessionShell
-      onSubmit={(text) => {
-        void submit({
-          userText: text,
-          mode,
-          model,
-        })
-      }}
-      inputDisabled={runActive}
-      loading={runActive || status === "submitted" || status === "streaming"}
-      interruptible={runActive || status === "streaming" || status === "submitted"}
-      sessionTree={sessionTreeCommands}
-    >
-      {/* 渲染消息 */}
-      {messages.map((msg) => (
-        <ChatMessage key={msg.id} msg={msg} />
-      ))}
-
-      {/*  */}
-      {error && <ErrorMessage message={error.message} />}
-      {!error && run?.status === "failed" && run.error && (
-        <ErrorMessage message={run.error} />
-      )}
-    </SessionShell>
-  )
+    <SessionUiStoreProvider store={store}>
+      <SessionRuntimeBridge controller={controller} store={store} />
+      <ApprovalPresentation controller={controller} />
+      <RecoveryPresentation />
+      <SessionRuntimeInteraction controller={controller} />
+      <SessionWorkspace
+        conversation={<ConversationSurface />}
+        composer={<ComposerSurface controller={controller} />}
+        status={<StatusSurface />}
+        hints={<InteractionHintsSurface />}
+        inspector={<InspectorSurface />}
+      />
+    </SessionUiStoreProvider>
+  );
 }
+
 export function Session() {
   const { id } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
   const toast = useToast();
 
-  // 预取session数据，如果location.state中有session数据，则使用它，否则为null
   const prefetched = useMemo(() => {
-    const parsed = sessionLocationSchema.safeParse(location.state); // 验证location.state是否符合sessionLocationSchema的结构
-    return parsed.success ? parsed.data : null; // 如果验证成功，返回session数据，否则返回null
-  }, [location.state])
+    const parsed = sessionLocationSchema.safeParse(location.state);
+    return parsed.success ? parsed.data : null;
+  }, [location.state]);
+  const [session, setSession] = useState<SessionData | null>(prefetched?.snapshot ?? null);
 
-  const [session, setSession] = useState<SessionData | null>(prefetched?.session ?? null); // 创建session状态
   useEffect(() => {
-    if (prefetched?.session) return;
-    setSession(null); // 如果没有预取数据，设置session为null
-    if (!id) return; // 如果没有id，返回
+    if (prefetched?.snapshot) return;
+    setSession(null);
+    if (!id) return;
     let ignore = false;
-    const fetchSession = async () => {
-      try {
-        const res = await apiClient.sessions[':id'].$get({
-          param: { id },
-        });
-        if (ignore) return;
-        if (!res.ok) throw new Error(await getErrorMessage(res));
-        const resolvedSession = await res.json()
-        setSession(resolvedSession); // 如果响应ok，则设置session为响应数据
-      } catch (error) {
-        if (ignore) return;
-        toast.show({
-          variant: "error",
-          message: error instanceof Error ? error.message : "Failed to fetch session",
-        });
 
-        navigate("/", { replace: true }); // 如果获取会话失败，导航回主页
-      }
-    }
+    void getLocalSessionAuthority().open(id).then((resolvedSession) => {
+      if (ignore) return;
+      if (!resolvedSession) throw new Error(`Local session ${id} was not found`);
+      setSession(resolvedSession);
+    }).catch((error) => {
+      if (ignore) return;
+      toast.show({
+        variant: "error",
+        message: error instanceof Error
+          ? `Unable to open local session: ${error.message}`
+          : "Unable to open local session",
+      });
+      navigate("/", { replace: true });
+    });
 
-    fetchSession(); // 获取会话数据
-    return () => { ignore = true };
-  }, [id, navigate, toast, prefetched]);
+    return () => {
+      ignore = true;
+    };
+  }, [id, navigate, prefetched, toast]);
 
   if (!session) {
-    return (
-      <SessionShell
-        onSubmit={() => { }}
-        inputDisabled
-      />
-    );
+    return <SessionLoadingWorkspace />;
   }
 
   return (
     <SessionChat
-      key={session.id}
+      key={session.session.id}
       session={session}
       initialPrompt={prefetched?.initialPrompt}
     />

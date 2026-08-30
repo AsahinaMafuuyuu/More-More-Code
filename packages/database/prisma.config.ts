@@ -2,7 +2,6 @@
 import { defineConfig, env } from "prisma/config";
 import dotenv from "dotenv";
 import path from "path";
-
 dotenv.config({ path: path.resolve(import.meta.dirname, "../../.env") }); // 从项目根目录加载 .env 文件
 
 export default defineConfig({

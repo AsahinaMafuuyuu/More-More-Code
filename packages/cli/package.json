@@ -7,11 +7,11 @@
     "more-more-code": "./bin/more-more-code"
   },
   "scripts": {
-    "dev": "bun run --watch src/index.tsx",
+    "dev": "bun run src/index.tsx",
+    "dev:watch": "bun run --watch src/index.tsx",
     "build": "bun build src/index.tsx --outdir dist --target bun --external @opentui/core --external @opentui/react"
   },
   "devDependencies": {
-    "@more-more-code/server": "workspace:*",
     "@types/bun": "latest",
     "@types/react": "^19.2.17"
   },
@@ -19,19 +19,13 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^4.0.12",
-    "@ai-sdk/deepseek": "^3.0.7",
-    "@ai-sdk/openai": "^4.0.11",
-    "@ai-sdk/provider-utils": "^5.0.7",
-    "@ai-sdk/react": "^4.0.40",
     "@more-more-code/harness": "workspace:*",
+    "@more-more-code/runtime-store": "workspace:*",
+    "@more-more-code/session-store": "workspace:*",
     "@more-more-code/shared": "workspace:*",
-    "@opentui/core": "^0.4.2",
-    "@opentui/react": "^0.4.2",
-    "ai": "^7.0.37",
-    "hono": "^4.12.28",
+    "@opentui/core": "0.5.9",
+    "@opentui/react": "0.5.9",
     "open": "^11.0.0",
-    "opentui-spinner": "^0.0.7",
     "pretty-ms": "^9.3.0",
     "react": "^19.2.6",
     "react-router": "^8.1.0",

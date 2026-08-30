@@ -11,6 +11,15 @@ export type ThemeColors = {
     dialogSurface: string;
     thinkingBorder: string;
     dimSeparator: string;
+    sessionMessage: string;
+    sessionTool: string;
+    sessionCompaction: string;
+    sessionStateChange: string;
+    sessionBranch: string;
+    sessionError: string;
+    sessionCustom: string;
+    sessionTimestamp: string;
+    sessionTimestampMuted: string;
 };
 
 export type Theme = {
@@ -34,6 +43,15 @@ export const THEMES: Theme[] = [
       dialogSurface: "#0A0A10",
       thinkingBorder: "#34344A",
       dimSeparator: "#4E4E66",
+      sessionMessage: "#56D6C2",
+      sessionTool: "#89B4FA",
+      sessionCompaction: "#CF8EF4",
+      sessionStateChange: "#CF8EF4",
+      sessionBranch: "#89B4FA",
+      sessionError: "#E74C5E",
+      sessionCustom: "#56D6C2",
+      sessionTimestamp: "#4E4E66",
+      sessionTimestampMuted: "#34344A",
     },
   },
 
@@ -53,6 +71,15 @@ export const THEMES: Theme[] = [
       dialogSurface: "#050B14",
       thinkingBorder: "#27364F",
       dimSeparator: "#3B4A60",
+      sessionMessage: "#7DD3FC",
+      sessionTool: "#67E8F9",
+      sessionCompaction: "#C084FC",
+      sessionStateChange: "#A78BFA",
+      sessionBranch: "#38BDF8",
+      sessionError: "#FB7185",
+      sessionCustom: "#67E8F9",
+      sessionTimestamp: "#3B4A60",
+      sessionTimestampMuted: "#27364F",
     },
   },
 
@@ -72,6 +99,15 @@ export const THEMES: Theme[] = [
       dialogSurface: "#0B0617",
       thinkingBorder: "#3A2A5A",
       dimSeparator: "#5B4A75",
+      sessionMessage: "#C084FC",
+      sessionTool: "#A5B4FC",
+      sessionCompaction: "#E879F9",
+      sessionStateChange: "#F0ABFC",
+      sessionBranch: "#A78BFA",
+      sessionError: "#F87171",
+      sessionCustom: "#A5B4FC",
+      sessionTimestamp: "#5B4A75",
+      sessionTimestampMuted: "#3A2A5A",
     },
   },
 
@@ -91,6 +127,15 @@ export const THEMES: Theme[] = [
       dialogSurface: "#0C0305",
       thinkingBorder: "#4A1F2A",
       dimSeparator: "#6B2F3D",
+      sessionMessage: "#FB7185",
+      sessionTool: "#FCA5A5",
+      sessionCompaction: "#FDA4AF",
+      sessionStateChange: "#F472B6",
+      sessionBranch: "#F43F5E",
+      sessionError: "#EF4444",
+      sessionCustom: "#FCA5A5",
+      sessionTimestamp: "#6B2F3D",
+      sessionTimestampMuted: "#4A1F2A",
     },
   },
 
@@ -110,6 +155,15 @@ export const THEMES: Theme[] = [
       dialogSurface: "#0B0603",
       thinkingBorder: "#4A3518",
       dimSeparator: "#6B4B24",
+      sessionMessage: "#FDBA74",
+      sessionTool: "#FDE68A",
+      sessionCompaction: "#FCD34D",
+      sessionStateChange: "#FACC15",
+      sessionBranch: "#FB923C",
+      sessionError: "#F87171",
+      sessionCustom: "#FDE68A",
+      sessionTimestamp: "#6B4B24",
+      sessionTimestampMuted: "#4A3518",
     },
   },
 
@@ -129,6 +183,15 @@ export const THEMES: Theme[] = [
       dialogSurface: "#030B07",
       thinkingBorder: "#244A38",
       dimSeparator: "#3F6655",
+      sessionMessage: "#34D399",
+      sessionTool: "#5EEAD4",
+      sessionCompaction: "#86EFAC",
+      sessionStateChange: "#A3E635",
+      sessionBranch: "#10B981",
+      sessionError: "#F87171",
+      sessionCustom: "#5EEAD4",
+      sessionTimestamp: "#3F6655",
+      sessionTimestampMuted: "#244A38",
     },
   },
 
@@ -148,6 +211,15 @@ export const THEMES: Theme[] = [
       dialogSurface: "#020A0D",
       thinkingBorder: "#1E3A4A",
       dimSeparator: "#315B6B",
+      sessionMessage: "#22D3EE",
+      sessionTool: "#67E8F9",
+      sessionCompaction: "#A78BFA",
+      sessionStateChange: "#818CF8",
+      sessionBranch: "#06B6D4",
+      sessionError: "#FB7185",
+      sessionCustom: "#67E8F9",
+      sessionTimestamp: "#315B6B",
+      sessionTimestampMuted: "#1E3A4A",
     },
   },
 
@@ -167,6 +239,15 @@ export const THEMES: Theme[] = [
       dialogSurface: "#0D050D",
       thinkingBorder: "#4A2A4F",
       dimSeparator: "#6B486D",
+      sessionMessage: "#F9A8D4",
+      sessionTool: "#F0ABFC",
+      sessionCompaction: "#E879F9",
+      sessionStateChange: "#D8B4FE",
+      sessionBranch: "#F472B6",
+      sessionError: "#FB7185",
+      sessionCustom: "#F0ABFC",
+      sessionTimestamp: "#6B486D",
+      sessionTimestampMuted: "#4A2A4F",
     },
   },
 
@@ -186,6 +267,15 @@ export const THEMES: Theme[] = [
       dialogSurface: "#06090D",
       thinkingBorder: "#2E3A4A",
       dimSeparator: "#475569",
+      sessionMessage: "#CBD5E1",
+      sessionTool: "#BAE6FD",
+      sessionCompaction: "#A5B4FC",
+      sessionStateChange: "#93C5FD",
+      sessionBranch: "#64748B",
+      sessionError: "#F87171",
+      sessionCustom: "#BAE6FD",
+      sessionTimestamp: "#475569",
+      sessionTimestampMuted: "#2E3A4A",
     },
   },
 ];

@@ -45,10 +45,6 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 tasks/*-plan.md
 tasks/*-todo.md
 
-# Cloudflare Workers local state
-.wrangler/
-workers/*/.wrangler/
-
 # editor-local state / temporary files
 .idea/
 .history/
@@ -68,5 +64,10 @@ Desktop.ini
 
 # Prisma generated client
 packages/database/generated/prisma/
+packages/runtime-store/generated/prisma/
+
+# Local Runtime Store data and SQLite sidecars
+packages/runtime-store/prisma/*.db
+packages/runtime-store/prisma/*.db-*
 
 .vscode/

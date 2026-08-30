@@ -1,6 +1,10 @@
 {
   "name": "more-more-code",
-  "version": "1.0.0",
+  "version": "2.0.1",
+  "packageManager": "bun@1.4.0",
+  "engines": {
+    "bun": ">=1.4.0"
+  },
   "description": "",
   "workspaces": [
     "packages/*"
@@ -9,18 +13,16 @@
   "author": "",
   "license": "ISC",
   "scripts": {
-    "dev:cli": "bun run --watch packages/cli/src/index.tsx",
+    "dev:cli": "bun run packages/cli/src/index.tsx",
+    "dev:cli:record-context": "bun run scripts/dev-cli-record-provider-context.ts",
+    "dev:cli:watch": "bun run --watch packages/cli/src/index.tsx",
+    "tui:soak": "bun run packages/cli/src/dev/tui-stability-soak.tsx",
+    "tui:stress": "bun run packages/cli/src/dev/tui-stability-stress-suite.ts",
     "dev:server": "bun run --hot packages/server/src/index.ts",
     "start": "bun run packages/server/src/index.ts",
     "build:cli": "bun run --filter @more-more-code/cli build",
     "test:harness": "bun run --filter @more-more-code/harness test",
-    "link:cli": "bun run build:cli && cd packages/cli && bun link",
-    "cf:dev": "bunx wrangler dev --config workers/api-proxy/wrangler.jsonc",
-    "cf:deploy": "bunx wrangler deploy --config workers/api-proxy/wrangler.jsonc",
-    "cf:typecheck": "bunx tsc --noEmit -p workers/api-proxy/tsconfig.json"
-  },
-  "devDependencies": {
-    "wrangler": "^4.114.0"
+    "link:cli": "bun run build:cli && cd packages/cli && bun link"
   },
   "dependencies": {
     "dotenv": "^17.4.2"

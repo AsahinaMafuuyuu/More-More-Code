@@ -1,77 +1,164 @@
-import { anthropic } from "@ai-sdk/anthropic";
-import { deepSeek, type DeepSeekLanguageModelChatOptions } from "@ai-sdk/deepseek";
-import { openai } from "@ai-sdk/openai";
-import type { ProviderOptions } from "@ai-sdk/provider-utils";
-import type { LanguageModel } from "ai";
 import {
     findSupportedChatModel,
-    type SupportedChatModel,
-    type SupportedChatModelId,
-    type SupportedProvider,
+    inferModelRefFromLegacyModelId,
+    type ModelRef,
+    type ProviderId,
+    type ProviderKind,
 } from "@more-more-code/shared";
+import type { AgentEnvironment } from "./agent-environment";
+import { getAgentEnvironment } from "./agent-environment";
+import { resolveProviderAuth, type ResolvedProviderAuth } from "./provider-auth";
+import type { ProviderConfig } from "./provider-registry";
+import { BUILT_IN_PROVIDER_BASE_URLS } from "./provider-endpoints";
+import type { ProviderRequestProtocol } from "./provider-runtime";
 
-type AnthropicModelId = Extract<SupportedChatModel, { provider: "anthropic" }>["id"];
-type OpenAIModelId = Extract<SupportedChatModel, { provider: "openai" }>["id"];
-type DeepSeekModelId = Extract<SupportedChatModel, { provider: "deepseek" }>["id"];
+export type ProviderModelOptions = {
+    reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+};
 
 export type ResolvedModel = {
-    model: LanguageModel;
-    provider: SupportedProvider;
-    modelId: SupportedChatModelId;
-    providerOptions?: ProviderOptions;
+    provider: ProviderKind;
+    providerId: ProviderId;
+    modelId: string;
+    protocol: ProviderRequestProtocol;
+    endpoint: string;
+    auth: ResolvedProviderAuth;
+    modelOptions?: ProviderModelOptions;
 };
 
-const DEEPSEEK_PROVIDER_OPTIONS: Partial<Record<DeepSeekModelId, ProviderOptions>> = {
-    "deepseek-v4-flash": {
-        deepseek: {
-            thinking: { type: "enabled" },
-            reasoningEffort: "medium",
-        } satisfies DeepSeekLanguageModelChatOptions,
-    },
-    "deepseek-v4-pro": {
-        deepseek: {
-            thinking: { type: "enabled" },
-            reasoningEffort: "medium",
-        } satisfies DeepSeekLanguageModelChatOptions,
-    },
+const DEEPSEEK_PROVIDER_OPTIONS: Record<string, ProviderModelOptions | undefined> = {
+    "deepseek-v4-flash": { reasoningEffort: "medium" },
+    "deepseek-v4-pro": { reasoningEffort: "medium" },
 };
 
-function assertUnsupportedProvider(provider: string): never {
-    throw new Error(`Unsupported provider: ${provider}`);
+function providerModelOptions(providerKind: ProviderKind, modelId: string): ProviderModelOptions | undefined {
+    if (providerKind === "deepseek") return DEEPSEEK_PROVIDER_OPTIONS[modelId];
+    return undefined;
 }
 
-function resolveSupportedChatModel(model: SupportedChatModel): ResolvedModel {
-    switch (model.provider) {
-        case "anthropic":
-            return {
-                model: anthropic(model.id as AnthropicModelId),
-                provider: model.provider,
-                modelId: model.id,
-            };
-        case "openai":
-            return {
-                model: openai(model.id as OpenAIModelId),
-                provider: model.provider,
-                modelId: model.id,
-            };
-        case "deepseek":
-            return {
-                model: deepSeek(model.id as DeepSeekModelId),
-                provider: model.provider,
-                modelId: model.id,
-                providerOptions: DEEPSEEK_PROVIDER_OPTIONS[model.id as DeepSeekModelId],
-            };
-        default:
-            return assertUnsupportedProvider(model.provider);
+export function normalizeModelRef(input: ModelRef | string, providerId?: string): ModelRef {
+    if (typeof input !== "string") {
+        if (!input.providerId.trim() || !input.modelId.trim()) {
+            throw new Error("ModelRef requires providerId and modelId");
+        }
+        return { providerId: input.providerId, modelId: input.modelId };
+    }
+    if (providerId) return { providerId, modelId: input };
+    const migrated = inferModelRefFromLegacyModelId(input);
+    if (!migrated) {
+        throw new Error(
+            `Legacy model '${input}' has no provider metadata and cannot be migrated deterministically`,
+        );
+    }
+    return migrated;
+}
+
+function assertConfiguredModel(provider: ProviderConfig, ref: ModelRef) {
+    if (!provider.enabled) throw new Error(`Provider '${provider.id}' is disabled`);
+    if (!provider.models.includes(ref.modelId)) {
+        throw new Error(`Model '${ref.modelId}' is not configured for provider '${provider.id}'`);
     }
 }
 
-export function isSupportedChatModel(modelId: string): modelId is SupportedChatModelId {
+export function resolveConfiguredProvider(
+    modelRef: ModelRef,
+    environment: AgentEnvironment = getAgentEnvironment(),
+) {
+    const provider = environment.providers.get(modelRef.providerId);
+    if (!provider) throw new Error(`Unknown provider: ${modelRef.providerId}`);
+    assertConfiguredModel(provider, modelRef);
+    return provider;
+}
+
+/** Resolve non-secret execution options for presentation and request compilation. */
+export function getConfiguredModelOptions(
+    modelRef: ModelRef,
+    environment: AgentEnvironment = getAgentEnvironment(),
+): ProviderModelOptions | undefined {
+    const provider = resolveConfiguredProvider(modelRef, environment);
+    const options = providerModelOptions(provider.kind, modelRef.modelId);
+    return options ? structuredClone(options) : undefined;
+}
+
+function customEndpoint(baseURL: string) {
+    return `${baseURL.replace(/\/+$/, "")}/chat/completions`;
+}
+
+/** Resolve Provider Registry + Credential Store into a native execution descriptor. */
+export async function resolveChatModel(
+    modelRef: ModelRef,
+    environment: AgentEnvironment = getAgentEnvironment(),
+): Promise<ResolvedModel> {
+    const provider = resolveConfiguredProvider(modelRef, environment);
+    const auth = await resolveProviderAuth({
+        provider,
+        credentialStore: environment.credentials,
+        codexOAuthBroker: environment.codexOAuth,
+    });
+
+    switch (provider.kind) {
+        case "openai":
+            if (auth.type !== "api-key" && auth.type !== "codex-oauth") {
+                throw new Error(`Unsupported OpenAI auth strategy: ${auth.type}`);
+            }
+            return {
+                provider: provider.kind,
+                providerId: provider.id,
+                modelId: modelRef.modelId,
+                protocol: "openai-responses",
+                endpoint: `${BUILT_IN_PROVIDER_BASE_URLS.openai}/responses`,
+                auth,
+            };
+        case "anthropic":
+            if (auth.type !== "api-key") throw new Error(`Unsupported Anthropic auth strategy: ${auth.type}`);
+            return {
+                provider: provider.kind,
+                providerId: provider.id,
+                modelId: modelRef.modelId,
+                protocol: "anthropic-messages",
+                endpoint: `${BUILT_IN_PROVIDER_BASE_URLS.anthropic}/messages`,
+                auth,
+            };
+        case "deepseek":
+            if (auth.type !== "api-key") throw new Error(`Unsupported DeepSeek auth strategy: ${auth.type}`);
+            const modelOptions = providerModelOptions(provider.kind, modelRef.modelId);
+            return {
+                provider: provider.kind,
+                providerId: provider.id,
+                modelId: modelRef.modelId,
+                protocol: "openai-chat-completions",
+                endpoint: `${BUILT_IN_PROVIDER_BASE_URLS.deepseek}/chat/completions`,
+                auth,
+                ...(modelOptions ? { modelOptions } : {}),
+            };
+        case "google":
+            if (auth.type !== "api-key") throw new Error(`Unsupported Google auth strategy: ${auth.type}`);
+            return {
+                provider: provider.kind,
+                providerId: provider.id,
+                modelId: modelRef.modelId,
+                protocol: "google-generative-ai",
+                endpoint: `${BUILT_IN_PROVIDER_BASE_URLS.google}/models/${encodeURIComponent(modelRef.modelId)}:streamGenerateContent?alt=sse`,
+                auth,
+            };
+        case "custom":
+            if (auth.type !== "api-key" && auth.type !== "bearer" && auth.type !== "none") {
+                throw new Error(`Unsupported custom provider auth strategy: ${auth.type}`);
+            }
+            return {
+                provider: provider.kind,
+                providerId: provider.id,
+                modelId: modelRef.modelId,
+                protocol: "openai-chat-completions",
+                endpoint: customEndpoint(provider.baseURL),
+                auth,
+            };
+    }
+}
+
+export function isRecommendedChatModel(modelId: string) {
     return findSupportedChatModel(modelId) != null;
 }
 
-export function resolveChatModel(modelId: string): ResolvedModel {
-    const model = findSupportedChatModel(modelId);
-    if (!model) throw new Error(`Unsupported model: ${modelId}`);
-    return resolveSupportedChatModel(model);
-}
+/** @deprecated Use Provider Registry + ModelRef. */
+export const isSupportedChatModel = isRecommendedChatModel;

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted for client-owned Agent/model execution. The Cloud Session authority portion is superseded by ADR-0023.
 
 ## Date
 
@@ -62,6 +62,8 @@ AI SDK `useChat` remains a UI-state primitive. A custom local `ChatTransport` pe
 Cloud message persistence is best-effort from the runtime's perspective. A temporary sync failure must not redefine the local Agent Runtime as a remote-server-dependent system.
 
 Context management, compaction, event-sourced Run/Turn/Step persistence, offline-first local session storage, permissions, and sandboxing remain separate future layers.
+
+> **2026-08-23 update:** ADR-0023 keeps this ADR's local Agent/model/tool execution decision, but supersedes the long-term Cloud Session authority described here. The accepted target is a locally authoritative Session Store with the Server reduced to optional multi-device Session Sync/Backup plus account/subscription entitlements.
 
 ## Alternatives Considered
 

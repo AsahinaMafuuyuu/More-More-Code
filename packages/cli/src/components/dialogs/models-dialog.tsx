@@ -1,49 +1,70 @@
 
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { useDialog } from "../../providers/dialog";
+import { useToast } from "../../providers/toast";
 import { DialogSearchList } from "../dialog-search-list";
-import type { SupportedChatModelId } from "@more-more-code/shared";
+import type { ModelRef } from "@more-more-code/shared";
+import { persistAgentEnvironmentModel } from "../../lib/agent-environment";
 
 type ModelsDialogContentProps = {
-    // 添加其他属性
-    models: SupportedChatModelId[],
-    onSelectModel: (model: SupportedChatModelId) => void, // 选择模型
-}
+    models: ModelRef[];
+    onSelectModel: (model: ModelRef) => void | Promise<void>;
+};
+
 export const ModelsDialogContent = ({
     models,
-    onSelectModel
+    onSelectModel,
 }: ModelsDialogContentProps) => {
     const dialog = useDialog();
+    const toast = useToast();
+    const [saving, setSaving] = useState(false);
 
-    // 处理选择模型的回调函数
-    const handleSelect = useCallback((model: SupportedChatModelId) => {
-        onSelectModel(model);
-        dialog.close();
-    }, [onSelectModel, dialog]);
+    const handleSelect = useCallback(async (model: ModelRef) => {
+        if (saving) return;
+        setSaving(true);
+        try {
+            // A session may persist this selection asynchronously. Do not
+            // report success or close the dialog until that commit settles.
+            await onSelectModel(model);
+            await persistAgentEnvironmentModel(model);
+            toast.show({
+                variant: "success",
+                message: `Selected ${model.providerId}/${model.modelId} as the local default`,
+            });
+            dialog.close();
+        } catch (error) {
+            toast.show({
+                variant: "error",
+                message: error instanceof Error ? error.message : String(error),
+            });
+        } finally {
+            setSaving(false);
+        }
+    }, [dialog, onSelectModel, saving, toast]);
 
 
     return (
-        <DialogSearchList
-            items={models}
-            onSelect={handleSelect}
-            filterFn={(modelId, query) =>
-                modelId.
-                    toLowerCase().
-                    includes(query.toLowerCase())}
-            // 渲染每个模式的列表项
-            renderItem={(modelId, isSelected) => {
-                return (
+        <box flexDirection="column" gap={1}>
+            <DialogSearchList
+                items={models}
+                onSelect={(model) => void handleSelect(model)}
+                filterFn={(modelRef, query) =>
+                    `${modelRef.providerId}/${modelRef.modelId}`
+                        .toLowerCase()
+                        .includes(query.toLowerCase())}
+                renderItem={(modelRef, isSelected) => (
                     <text
                         selectable={false}
                         fg={isSelected ? "black" : "white"}
                     >
-                        {modelId}
+                        {modelRef.providerId}/{modelRef.modelId}
                     </text>
-                )
-            }}
-            getKey={(modelId) => modelId} // 
-            placeholder="Search models"
-            emptyText="No matching models"
-        />
-    )
+                )}
+                getKey={(modelRef) => `${modelRef.providerId}:${modelRef.modelId}`}
+                placeholder={saving ? "Saving local default…" : "Search models"}
+                emptyText="No matching models"
+            />
+            <text>Selection is stored in this workspace&apos;s local Agent Config.</text>
+        </box>
+    );
 };

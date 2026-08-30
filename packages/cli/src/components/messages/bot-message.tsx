@@ -1,59 +1,45 @@
 // 展示智能体的相关消息 
-import prettyMs from "pretty-ms";
 import { TextAttributes } from "@opentui/core";
+import { useMemo, useState } from "react";
 import { useTheme } from "../../providers/theme";
-import type { Message } from "../../hooks/use-chat";
-import { Mode, type ModeType } from "@more-more-code/shared";
+import type { Message } from "../../lib/chat-types";
 import { EmptyBorder } from "../border";
+import type { ToolUseView } from "../../lib/tool-use-projection";
+import { ToolUse } from "./tool-use";
+import { MessageTextDisclosure } from "./message-text-disclosure";
 
 type ClientMessagePart = Message["parts"][number];
 type ToolPart = Extract<ClientMessagePart, { type: `tool-${string}` | "dynamic-tool" }>;
 
 type Props = {
     parts: ClientMessagePart[];
-    model: string;
-    mode: ModeType;
-    durationMs?: number;
-    streaming?: boolean;
-    interrupted?: boolean;
-}
-
-// 格式化工具名称，将驼峰命名转换为带空格的格式
-// 例如：myToolName -> My Tool Name
-function formatToolName(name: string): string {
-    return name
-        .replace(/^([a-z0-9])([A-Z])/g, "$1 $2")
-        .replace(/^./, (c) => c.toUpperCase());
+    toolUses: Readonly<Record<string, ToolUseView>>;
 }
 
 function isToolPart(part: ClientMessagePart): part is ToolPart {
     return part.type === "dynamic-tool" || part.type.startsWith("tool-");
 }
 
-// 格式化工具参数，将对象参数转换为字符串表示
-// 例如：{ arg1: "value1", arg2: "value2" } -> "value1 value2"
-function formatToolArgs(tc: ToolPart): string {
-    if (!("input" in tc) || tc.input == null) return "";
-    if (typeof tc.input !== "object") return String(tc.input);
-
-    return Object.values(tc.input).map(String).join(" ");
-}
-
 type PartGroup = {
-    type: ClientMessagePart["type"];
+    kind: ClientMessagePart["type"] | "tool";
     parts: ClientMessagePart[];
     key: string;
 }
 
-// 组合连续的相同类型的消息
+function presentationKind(part: ClientMessagePart): PartGroup["kind"] {
+    return isToolPart(part) ? "tool" : part.type;
+}
+
+// Group adjacent semantic presentation kinds without reordering history.
 function groupConsecutiveParts(parts: ClientMessagePart[]): PartGroup[] {
     const groups: PartGroup[] = [];
 
     for (let i = 0; i < parts.length; i++) {
         const part = parts[i]!;
         const lastGroup = groups[groups.length - 1];
+        const kind = presentationKind(part);
 
-        if (lastGroup && lastGroup.type === part.type) {
+        if (lastGroup && lastGroup.kind === kind) {
             lastGroup.parts.push(part); // 添加到当前组
         } else {
             // 创建一个新的组
@@ -66,7 +52,7 @@ function groupConsecutiveParts(parts: ClientMessagePart[]): PartGroup[] {
                     `group-${part.type}-${i}`;
 
             groups.push({
-                type: part.type,
+                kind,
                 parts: [part],
                 key
             })
@@ -76,78 +62,179 @@ function groupConsecutiveParts(parts: ClientMessagePart[]): PartGroup[] {
     return groups;
 }
 
+const COLLAPSED_REASONING_PREVIEW_CHARS = 768;
+
+export function createCollapsedReasoningPreview(text: string) {
+    if (text.length <= COLLAPSED_REASONING_PREVIEW_CHARS) return text;
+    return `${text.slice(0, COLLAPSED_REASONING_PREVIEW_CHARS - 1)}…`;
+}
+
+function ReasoningDisclosure({ text, active = false }: { text: string; active?: boolean }) {
+    const { colors } = useTheme();
+    const [expanded, setExpanded] = useState(false);
+    const renderedText = expanded ? text : createCollapsedReasoningPreview(text);
+
+    return (
+        <box
+            border={['left']}
+            borderColor={colors.thinkingBorder}
+            customBorderChars={{
+                ...EmptyBorder,
+                vertical: '│',
+            }}
+            width="100%"
+            paddingX={2}
+        >
+            <box
+                width="100%"
+                flexDirection="column"
+                onMouseDown={() => setExpanded((current) => !current)}
+                height={expanded ? "auto" : 2}
+                overflow={expanded ? "visible" : "hidden"}
+            >
+                <box width="100%" height={1} flexDirection="row" gap={1}>
+                    <text fg={colors.thinking}>{expanded ? "▾" : "▸"}</text>
+                    <text attributes={TextAttributes.DIM}>
+                        <em fg={colors.thinking}>Thinking:</em>
+                    </text>
+                    {active && <text fg={colors.info}>· ● active</text>}
+                </box>
+                <box width="100%" paddingLeft={2} height={expanded ? "auto" : 1} overflow={expanded ? "visible" : "hidden"}>
+                    <text attributes={TextAttributes.DIM}>{renderedText}</text>
+                </box>
+            </box>
+        </box>
+    );
+}
+
+type ToolStatusCounts = {
+    total: number;
+    completed: number;
+    failed: number;
+    active: number;
+    cancelled: number;
+};
+
+function countToolStatuses(views: readonly ToolUseView[]): ToolStatusCounts {
+    return views.reduce<ToolStatusCounts>((counts, view) => {
+        counts.total += 1;
+        if (view.status === "completed") counts.completed += 1;
+        else if (["failed", "denied", "timed_out", "incomplete"].includes(view.status)) counts.failed += 1;
+        else if (view.status === "cancelled") counts.cancelled += 1;
+        else counts.active += 1;
+        return counts;
+    }, { total: 0, completed: 0, failed: 0, active: 0, cancelled: 0 });
+}
+
+function resolveToolUse(
+    part: ToolPart,
+    toolUses: Readonly<Record<string, ToolUseView>>,
+): ToolUseView {
+    const toolName = part.type === "dynamic-tool" ? part.toolName : part.type.slice("tool-".length);
+    return toolUses[part.toolCallId] ?? {
+        toolCallId: part.toolCallId,
+        toolName,
+        status: "incomplete" as const,
+        diagnostic: "integrity_error" as const,
+    };
+}
+
+function ToolUseGroup({
+    parts,
+    toolUses,
+}: {
+    parts: ToolPart[];
+    toolUses: Readonly<Record<string, ToolUseView>>;
+}) {
+    const { colors } = useTheme();
+    const [expanded, setExpanded] = useState(false);
+    const views = useMemo(
+        () => parts.map((part) => resolveToolUse(part, toolUses)),
+        [parts, toolUses],
+    );
+    const counts = useMemo(() => countToolStatuses(views), [views]);
+
+    return (
+        <box
+            width="100%"
+            border={["left"]}
+            borderColor={colors.sessionTool}
+            customBorderChars={{ ...EmptyBorder, vertical: "│" }}
+            paddingX={2}
+        >
+            <box
+                width="100%"
+                flexDirection="row"
+                gap={1}
+                onMouseDown={() => setExpanded((current) => !current)}
+            >
+                <text fg={colors.sessionTool}>{expanded ? "▾" : "▸"}</text>
+                <text attributes={TextAttributes.BOLD} fg={colors.sessionTool}>Tools {counts.total}</text>
+                <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>·</text>
+                <text fg={colors.success}>✓ {counts.completed} completed</text>
+                <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>·</text>
+                <text fg={colors.error}>× {counts.failed} failed</text>
+                {counts.active > 0 && (
+                    <>
+                        <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>·</text>
+                        <text fg={colors.info}>● {counts.active} active</text>
+                    </>
+                )}
+                {counts.cancelled > 0 && (
+                    <>
+                        <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>·</text>
+                        <text fg={colors.thinking}>■ {counts.cancelled} cancelled</text>
+                    </>
+                )}
+            </box>
+            {expanded && (
+                <box width="100%" paddingLeft={1}>
+                    {views.map((view) => (
+                        <ToolUse key={view.toolCallId} view={view} />
+                    ))}
+                </box>
+            )}
+        </box>
+    );
+}
+
+function ToolDisclosure({
+    parts,
+    toolUses,
+}: {
+    parts: ToolPart[];
+    toolUses: Readonly<Record<string, ToolUseView>>;
+}) {
+    if (parts.length === 1) {
+        return <ToolUse view={resolveToolUse(parts[0]!, toolUses)} />;
+    }
+    return <ToolUseGroup parts={parts} toolUses={toolUses} />;
+}
+
 // 
 export function BotMessage({
     parts,
-    model,
-    mode,
-    durationMs,
-    streaming = false,
+    toolUses,
 }: Props) {
-    const { colors } = useTheme();
-
     return (
         <box width="100%" alignItems="center">
             {
                 groupConsecutiveParts(parts).map((group, i) => (
                     <box key={group.key} width="100%" paddingTop={i === 0 ? 0 : 1}>
-                        {/* 每一个group也有很多个part */}
-                        {group.parts.map((part, j) => {
+                        {group.kind === "tool" ? (
+                            <ToolDisclosure
+                                parts={group.parts.filter(isToolPart)}
+                                toolUses={toolUses}
+                            />
+                        ) : group.parts.map((part, j) => {
                             if (part.type === "reasoning") {
                                 return (
-                                    <box
+                                    <ReasoningDisclosure
                                         key={`reasoning-${j}`}
-                                        border={['left']}
-                                        borderColor={colors.thinkingBorder}
-                                        customBorderChars={{
-                                            ...EmptyBorder,
-                                            vertical: '│',
-                                        }}
-                                        width="100%"
-                                        paddingX={2}
-                                    >
-                                        <text attributes={TextAttributes.DIM}>
-                                            <em fg={colors.thinking}>
-                                                Thinking:
-                                            </em>
-                                            {part.text}
-                                        </text>
-                                    </box>
-                                )
-                            }
-
-                            if (isToolPart(part)) {
-
-                                const toolName =
-                                    part.type === "dynamic-tool" ? part.toolName : part.type.slice("tool-".length);
-
-                                return (
-                                    <box
-                                        key={part.toolCallId}
-                                        border={['left']}
-                                        borderColor={colors.thinkingBorder}
-                                        customBorderChars={{
-                                            ...EmptyBorder,
-                                            vertical: '│',
-                                        }}
-                                        width="100%"
-                                        paddingX={2}
-                                    >
-                                        <text attributes={TextAttributes.DIM}>
-                                            <em fg={colors.info}>
-                                                {/* 格式化工具名称 */}
-                                                {formatToolName(toolName)}
-                                            </em>
-                                            {formatToolArgs(part)}
-                                            {
-                                                part.state !== "output-available" && part.state !== "output-error"
-                                                    ? '...'
-                                                    : ''
-                                            }
-                                            {part.state === "output-error" ? `${part.errorText}` : ""}
-                                        </text>
-                                    </box>
-                                )
+                                        text={part.text}
+                                        active={part.state === "streaming"}
+                                    />
+                                );
                             }
 
                             if (part.type === 'text') {
@@ -157,51 +244,16 @@ export function BotMessage({
                                         paddingX={3}
                                         width="100%"
                                     >
-                                        <text>
-                                            {part.text}
-                                        </text>
+                                        <MessageTextDisclosure text={part.text} />
                                     </box>
                                 )
                             }
 
                             return null;
                         })}
-
-
                     </box>
                 ))
             }
-            <box paddingX={3} paddingY={1} gap={1} width="100%">
-                <box flexDirection="row" gap={2}>
-
-                    <text fg={mode === Mode.PLAN ? colors.planMode : colors.primary}>◎</text>
-                    <box flexDirection="row" gap={1}>
-                        <text>
-                            {mode === Mode.PLAN ? "Plan" : "Build"}
-                        </text>
-
-                        {/* 标识箭头> */}
-                        <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>
-                            &gt;
-                        </text>
-
-                        <text attributes={TextAttributes.DIM}>{model}</text>
-
-                        {(durationMs != null) && (
-                            <>
-                                {/* 标识箭头> */}
-                                <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>
-                                    &gt;
-                                </text>
-
-                                <text attributes={TextAttributes.DIM}>
-                                    { prettyMs(durationMs) }
-                                </text>
-                            </>
-                        )}
-                    </box>
-                </box>
-            </box>
         </box >
     );
 };

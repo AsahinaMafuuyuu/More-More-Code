@@ -8,4 +8,3 @@ dotenv.config({
 });
 
 await import("../src/index.tsx");
-wcv3btCl0NEijKocONDdQArT

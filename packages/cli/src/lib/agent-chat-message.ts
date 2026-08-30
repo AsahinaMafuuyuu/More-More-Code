@@ -1,10 +1,10 @@
-import type { ModeType, SupportedChatModelId } from "@more-more-code/shared";
+import type { ModeType, ModelRef } from "@more-more-code/shared";
 
 export function createAgentUserMessage(params: {
     id: string;
     text: string;
     mode: ModeType;
-    model: SupportedChatModelId;
+    model: ModelRef;
 }) {
     return {
         id: params.id,

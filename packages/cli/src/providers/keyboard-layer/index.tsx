@@ -13,6 +13,8 @@ import React, {
     use
 } from 'react';
 import { useKeyboard, useRenderer } from '@opentui/react'; // 导入useKeyboard和useRenderer钩子函数
+import { resolveCtrlCExit } from '../../lib/ctrl-c-exit-guard';
+import { shutdownCliEnvironment } from '../../lib/cli-environment';
 
 type Responder = () => boolean;
 
@@ -32,6 +34,7 @@ export function KeyboardLayerProvider({ children }: { children: React.ReactNode 
     stackRef.current = stack;
 
     const responders = useRef<Map<string, Responder>>(new Map()); // 定义一个ref，用于存储键盘事件处理函数的映射
+    const lastUnhandledCtrlCAt = useRef<number | null>(null);
     const renderer = useRenderer(); // 获取渲染器对象
 
     const push = useCallback((id: string, responder?: Responder) => {
@@ -69,7 +72,8 @@ export function KeyboardLayerProvider({ children }: { children: React.ReactNode 
 
     useKeyboard((key) => {
         if (!key.ctrl || key.name !== 'c') {
-            // 如果ctrl键没有按下，或者按键名称不是c，则返回false
+            // 中间出现其他键时不再视为“连续两次 Ctrl+C”。
+            lastUnhandledCtrlCAt.current = null;
             return;
         }
         const currentStack = stackRef.current; // 获取当前栈
@@ -78,12 +82,35 @@ export function KeyboardLayerProvider({ children }: { children: React.ReactNode 
             const id = currentStack[i]!;
             const responder = responders.current.get(id); // 获取当前id的键盘事件处理函数
             if (responder && responder()) {
+                lastUnhandledCtrlCAt.current = null;
                 return;
             }
         }
 
-        // 如果没有任何键盘事件处理函数返回true，则退出程序
-        renderer.destroy();
+        const decision = resolveCtrlCExit(lastUnhandledCtrlCAt.current, Date.now());
+        lastUnhandledCtrlCAt.current = decision.nextPressedAt;
+
+        if (decision.shouldExit) {
+            void shutdownCliEnvironment().then(
+                () => renderer.destroy(),
+                (error) => {
+                    // Fail closed: a timed-out/incomplete Tool must keep the
+                    // terminal alive rather than destroying its only control
+                    // surface while local Stores remain intentionally open.
+                    console.error(
+                        "Exit cancelled safely; active Run/Tool state is still being preserved:",
+                        error instanceof Error ? error.message : String(error),
+                    );
+                },
+            );
+            return;
+        }
+
+        // 第一次未被 UI 层消费的 Ctrl+C 保留为复制动作；第二次在窗口内才退出。
+        const selectedText = renderer.getSelection()?.getSelectedText();
+        if (selectedText) {
+            renderer.copyToClipboardOSC52(selectedText);
+        }
     });
 
     return (

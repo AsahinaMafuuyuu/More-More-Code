@@ -73,20 +73,173 @@ const persistMessagesValidator = zValidator(
     },
 );
 
-const persistStateSchema = z.object({
-    state: z.object({
-        version: z.literal(1),
-        rootNodeId: z.string(),
-        activeNodeId: z.string(),
-        nodes: z.array(z.object({
-            id: z.string(),
-            parentId: z.string().nullable(),
-            createdAt: z.number(),
-            messages: z.array(z.unknown()),
-            runId: z.string().optional(),
-            inputMessageId: z.string().optional(),
-        })),
+const legacySessionStateSchema = z.object({
+    version: z.literal(1),
+    rootNodeId: z.string(),
+    activeNodeId: z.string(),
+    nodes: z.array(z.object({
+        id: z.string(),
+        parentId: z.string().nullable(),
+        createdAt: z.number(),
+        messages: z.array(z.unknown()),
+        runId: z.string().optional(),
+        inputMessageId: z.string().optional(),
+    })),
+});
+
+const eventBackedSessionStateSchema = z.object({
+    version: z.literal(2),
+    rootNodeId: z.string(),
+    activeNodeId: z.string(),
+    nodes: z.array(z.object({
+        id: z.string(),
+        parentId: z.string().nullable(),
+        createdAt: z.number(),
+        eventIds: z.array(z.string()),
+        runId: z.string().optional(),
+        inputMessageId: z.string().optional(),
+    })),
+    events: z.array(z.object({
+        id: z.string(),
+        nodeId: z.string(),
+        kind: z.literal("message-upsert"),
+        messageId: z.string(),
+        createdAt: z.number(),
+        message: z.unknown(),
+    })),
+});
+
+const sessionEntryMetadataSchema = {
+    runId: z.string().optional(),
+    turnId: z.string().optional(),
+    stepId: z.string().optional(),
+    inputMessageId: z.string().optional(),
+};
+
+const sessionEntryBaseSchema = {
+    id: z.string(),
+    parentId: z.string().nullable(),
+    createdAt: z.number(),
+    ...sessionEntryMetadataSchema,
+};
+
+const sessionEntrySchema = z.discriminatedUnion("type", [
+    z.object({ ...sessionEntryBaseSchema, type: z.literal("session_start") }),
+    z.object({
+        ...sessionEntryBaseSchema,
+        type: z.literal("user_message"),
+        messageId: z.string(),
+        message: z.unknown(),
     }),
+    z.object({
+        ...sessionEntryBaseSchema,
+        type: z.literal("assistant_message"),
+        messageId: z.string(),
+        message: z.unknown(),
+    }),
+    z.object({
+        ...sessionEntryBaseSchema,
+        type: z.literal("custom_message"),
+        messageId: z.string(),
+        message: z.unknown(),
+    }),
+    z.object({
+        ...sessionEntryBaseSchema,
+        type: z.literal("message_update"),
+        messageId: z.string(),
+        message: z.unknown(),
+    }),
+    z.object({
+        ...sessionEntryBaseSchema,
+        type: z.literal("tool_call"),
+        toolCallId: z.string(),
+        toolName: z.string(),
+        input: z.unknown(),
+    }),
+    z.object({
+        ...sessionEntryBaseSchema,
+        type: z.literal("tool_result"),
+        toolCallId: z.string(),
+        toolName: z.string().optional(),
+        output: z.unknown().optional(),
+        error: z.string().optional(),
+    }),
+    z.object({
+        ...sessionEntryBaseSchema,
+        type: z.literal("error"),
+        message: z.string(),
+        code: z.string().optional(),
+        details: z.unknown().optional(),
+    }),
+    z.object({
+        ...sessionEntryBaseSchema,
+        type: z.literal("model_change"),
+        model: z.string(),
+        provider: z.string().optional(),
+    }),
+    z.object({
+        ...sessionEntryBaseSchema,
+        type: z.literal("mode_change"),
+        mode: z.string(),
+    }),
+    z.object({
+        ...sessionEntryBaseSchema,
+        type: z.literal("config_change"),
+        key: z.string(),
+        value: z.unknown(),
+        previousValue: z.unknown().optional(),
+    }),
+    z.object({
+        ...sessionEntryBaseSchema,
+        type: z.literal("compaction"),
+        summary: z.unknown(),
+        tokensBefore: z.number().optional(),
+        trigger: z.enum(["soft-limit", "hard-limit", "overflow", "manual"]).optional(),
+        inputTokensBefore: z.number().optional(),
+        inputTokensAfter: z.number().optional(),
+        inputBudgetTokens: z.number().optional(),
+        targetInputTokens: z.number().optional(),
+        targetSummaryTokens: z.number().optional(),
+        compactedThroughRecordId: z.string().optional(),
+        compactedThroughMessageId: z.string().optional(),
+        compactedMessageIds: z.array(z.string()).optional(),
+        retainedTailMessageIds: z.array(z.string()).optional(),
+        compactedRecordIds: z.array(z.string()).optional(),
+        retainedTailRecordIds: z.array(z.string()).optional(),
+    }),
+    z.object({
+        ...sessionEntryBaseSchema,
+        type: z.literal("branch_summary"),
+        summary: z.unknown(),
+        transfer: z.object({
+            sourceTipEntryId: z.string(),
+            targetEntryId: z.string(),
+            commonAncestorEntryId: z.string(),
+            coveredEntryIds: z.array(z.string()),
+            previousTransferEntryIds: z.array(z.string()).optional(),
+        }).optional(),
+    }),
+    z.object({
+        ...sessionEntryBaseSchema,
+        type: z.literal("custom"),
+        customType: z.string(),
+        data: z.unknown(),
+    }),
+]);
+
+const sessionEntryTreeStateSchema = z.object({
+    version: z.literal(3),
+    rootEntryId: z.string(),
+    activeEntryId: z.string(),
+    entries: z.array(sessionEntrySchema),
+});
+
+const persistStateSchema = z.object({
+    state: z.union([
+        legacySessionStateSchema,
+        eventBackedSessionStateSchema,
+        sessionEntryTreeStateSchema,
+    ]),
 });
 
 const persistStateValidator = zValidator(

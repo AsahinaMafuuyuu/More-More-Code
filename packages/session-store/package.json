@@ -1,0 +1,17 @@
+{
+  "name": "@more-more-code/session-store",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.17.0",
+    "@more-more-code/harness": "workspace:*"
+  },
+  "scripts": {
+    "build": "bunx tsc -p tsconfig.json",
+    "test": "bun run scripts/run-bun-integration-tests.ts",
+    "typecheck": "bunx tsc --noEmit -p tsconfig.json"
+  }
+}

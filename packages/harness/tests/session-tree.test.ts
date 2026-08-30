@@ -1,53 +1,415 @@
 import { describe, expect, test } from "bun:test";
 import {
-  appendSessionTreeNode,
+  appendSessionEntry,
+  appendSessionTreeMessages,
   createSessionTree,
-  getActiveSessionTreeNode,
-  getParentSessionTreeNode,
-  jumpToSessionTreeNode,
+  getActiveSessionEntry,
+  getParentSessionEntry,
+  jumpToSessionEntry,
+  projectLatestSessionCompaction,
+  projectSessionEntryPath,
+  projectSessionRuntimeState,
+  projectSessionTreeMessages,
   restoreSessionTree,
 } from "../src";
+
+type TestMessage = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+};
+
+function message(
+  id: string,
+  role: TestMessage["role"] = id.startsWith("a") ? "assistant" : "user",
+  text = id,
+): TestMessage {
+  return { id, role, text };
+}
 
 function deterministicOptions() {
   let id = 0;
   let now = 100;
   return {
-    createId: () => `node-${++id}`,
+    createId: () => `id-${++id}`,
     now: () => ++now,
   };
 }
 
-describe("session tree", () => {
-  test("creates a root and appends resumable turn nodes", () => {
+describe("session entry tree v3", () => {
+  test("stores each durable semantic event as one branchable entry", () => {
     const options = deterministicOptions();
-    const root = createSessionTree<string>([], options);
-    const next = appendSessionTreeNode(root, ["u1", "a1"], { runId: "run-1" }, options);
+    let state = createSessionTree<TestMessage>([
+      message("u0"),
+      message("a0"),
+    ], options);
 
-    expect(root.rootNodeId).toBe("node-1");
-    expect(next.nodes).toHaveLength(2);
-    expect(getActiveSessionTreeNode(next).messages).toEqual(["u1", "a1"]);
-    expect(getActiveSessionTreeNode(next).parentId).toBe(root.rootNodeId);
+    state = appendSessionEntry(state, {
+      type: "tool_call",
+      toolCallId: "call-1",
+      toolName: "read_file",
+      input: { path: "README.md" },
+    }, options);
+    state = appendSessionEntry(state, {
+      type: "tool_result",
+      toolCallId: "call-1",
+      toolName: "read_file",
+      output: "contents",
+    }, options);
+    state = appendSessionEntry(state, {
+      type: "compaction",
+      summary: "Earlier context summary",
+      tokensBefore: 9_000,
+      trigger: "soft-limit",
+      inputTokensBefore: 12_000,
+      inputTokensAfter: 7_000,
+      inputBudgetTokens: 14_000,
+      targetInputTokens: 9_800,
+      targetSummaryTokens: 2_000,
+      compactedThroughMessageId: "a0",
+      retainedTailMessageIds: ["u0", "a0"],
+    }, options);
+
+    expect(state.version).toBe(3);
+    expect(state.entries.map((entry) => entry.type)).toEqual([
+      "session_start",
+      "user_message",
+      "assistant_message",
+      "tool_call",
+      "tool_result",
+      "compaction",
+    ]);
+    expect(projectSessionTreeMessages(state)).toEqual([
+      message("u0"),
+      message("a0"),
+    ]);
+    expect(projectSessionEntryPath(state).at(-1)?.type).toBe("compaction");
+    expect(projectLatestSessionCompaction(state)).toMatchObject({
+      trigger: "soft-limit",
+      inputTokensBefore: 12_000,
+      inputTokensAfter: 7_000,
+      compactedThroughMessageId: "a0",
+    });
   });
 
-  test("jumping to an ancestor and appending creates a sibling branch", () => {
+  test("jumping to an ancestor and appending creates an independent sibling branch", () => {
     const options = deterministicOptions();
-    const root = createSessionTree<string>([], options);
-    const first = appendSessionTreeNode(root, ["u1", "a1"], {}, options);
-    const second = appendSessionTreeNode(first, ["u1", "a1", "u2", "a2"], {}, options);
+    let state = createSessionTree<TestMessage>([], options);
+    state = appendSessionTreeMessages(state, [message("u1"), message("a1")], {}, options);
+    const branchPoint = state.activeEntryId;
 
-    const back = jumpToSessionTreeNode(second, first.activeNodeId);
-    const branch = appendSessionTreeNode(back, ["u1", "a1", "u2b", "a2b"], {}, options);
-    const active = getActiveSessionTreeNode(branch);
+    state = appendSessionTreeMessages(
+      state,
+      [message("u1"), message("a1"), message("u2"), message("a2")],
+      {},
+      options,
+    );
+    const leftLeaf = state.activeEntryId;
 
-    expect(active.parentId).toBe(first.activeNodeId);
-    expect(branch.nodes.filter((node) => node.parentId === first.activeNodeId)).toHaveLength(2);
-    expect(getParentSessionTreeNode(branch)?.id).toBe(first.activeNodeId);
+    state = jumpToSessionEntry(state, branchPoint);
+    state = appendSessionTreeMessages(
+      state,
+      [message("u1"), message("a1"), message("u2b"), message("a2b")],
+      {},
+      options,
+    );
+    const rightLeaf = state.activeEntryId;
+
+    expect(state.entries.filter((entry) => entry.parentId === branchPoint)).toHaveLength(2);
+    expect(getParentSessionEntry(state)?.id).not.toBe(branchPoint);
+    expect(projectSessionTreeMessages(state, rightLeaf).map((entry) => entry.id)).toEqual([
+      "u1", "a1", "u2b", "a2b",
+    ]);
+    expect(projectSessionTreeMessages(state, leftLeaf).map((entry) => entry.id)).toEqual([
+      "u1", "a1", "u2", "a2",
+    ]);
   });
 
-  test("restores legacy message arrays as a root snapshot", () => {
-    const restored = restoreSessionTree<string>(["legacy-1", "legacy-2"], deterministicOptions());
+  test("keeps manual compaction branch-local without altering sibling history", () => {
+    const options = deterministicOptions();
+    let state = createSessionTree<TestMessage>([], options);
+    state = appendSessionTreeMessages(state, [message("u1"), message("a1")], {}, options);
+    const branchPoint = state.activeEntryId;
 
-    expect(restored.nodes).toHaveLength(1);
-    expect(getActiveSessionTreeNode(restored).messages).toEqual(["legacy-1", "legacy-2"]);
+    state = appendSessionTreeMessages(
+      state,
+      [message("u1"), message("a1"), message("u-left"), message("a-left")],
+      {},
+      options,
+    );
+    state = appendSessionEntry(state, {
+      type: "compaction",
+      summary: "left checkpoint",
+      tokensBefore: 4_000,
+      trigger: "manual",
+      inputTokensBefore: 5_000,
+      inputTokensAfter: 2_000,
+      inputBudgetTokens: 10_000,
+      targetInputTokens: 7_000,
+      targetSummaryTokens: 1_000,
+      compactedMessageIds: ["u1", "a1"],
+      retainedTailMessageIds: ["u-left", "a-left"],
+    }, options);
+    const leftLeaf = state.activeEntryId;
+
+    state = jumpToSessionEntry(state, branchPoint);
+    state = appendSessionTreeMessages(
+      state,
+      [message("u1"), message("a1"), message("u-right"), message("a-right")],
+      {},
+      options,
+    );
+    const rightLeaf = state.activeEntryId;
+
+    expect(projectLatestSessionCompaction(state, leftLeaf)).toMatchObject({
+      trigger: "manual",
+      summary: "left checkpoint",
+    });
+    expect(projectLatestSessionCompaction(state, rightLeaf)).toBeNull();
+    expect(projectSessionTreeMessages(state, rightLeaf).map((entry) => entry.id)).toEqual([
+      "u1", "a1", "u-right", "a-right",
+    ]);
+  });
+
+  test("records immutable message_update entries instead of mutating a prior message", () => {
+    const options = deterministicOptions();
+    let state = createSessionTree<TestMessage>([
+      message("u1"),
+      message("a1", "assistant", "draft"),
+    ], options);
+    const assistantEntry = getActiveSessionEntry(state);
+
+    state = appendSessionTreeMessages(
+      state,
+      [
+        message("u1"),
+        message("a1", "assistant", "final"),
+        message("u2"),
+      ],
+      {},
+      options,
+    );
+
+    expect(assistantEntry.type).toBe("assistant_message");
+    expect(state.entries.map((entry) => entry.type)).toEqual([
+      "session_start",
+      "user_message",
+      "assistant_message",
+      "message_update",
+      "user_message",
+    ]);
+    expect(projectSessionTreeMessages(state)).toEqual([
+      message("u1"),
+      message("a1", "assistant", "final"),
+      message("u2"),
+    ]);
+  });
+
+  test("projects model, mode, and config state independently from chat messages", () => {
+    const options = deterministicOptions();
+    let state = createSessionTree<TestMessage>([message("u1")], options);
+    state = appendSessionEntry(state, {
+      type: "model_change",
+      model: "gpt-5.6-sol",
+      provider: "openai",
+    }, options);
+    state = appendSessionEntry(state, {
+      type: "mode_change",
+      mode: "BUILD",
+    }, options);
+    state = appendSessionEntry(state, {
+      type: "config_change",
+      key: "reasoningEffort",
+      value: "xhigh",
+    }, options);
+
+    expect(projectSessionRuntimeState(state)).toEqual({
+      model: "gpt-5.6-sol",
+      provider: "openai",
+      mode: "BUILD",
+      config: { reasoningEffort: "xhigh" },
+    });
+    expect(projectSessionTreeMessages(state)).toEqual([message("u1")]);
+  });
+
+  test("state changes are branch-local and restored by the active entry", () => {
+    const options = deterministicOptions();
+    let state = createSessionTree<TestMessage>([], options);
+    state = appendSessionEntry(state, { type: "model_change", model: "model-a" }, options);
+    const modelAEntry = state.activeEntryId;
+    state = appendSessionEntry(state, { type: "mode_change", mode: "BUILD" }, options);
+    const buildLeaf = state.activeEntryId;
+
+    state = jumpToSessionEntry(state, modelAEntry);
+    state = appendSessionEntry(state, { type: "model_change", model: "model-b" }, options);
+    const modelBLeaf = state.activeEntryId;
+
+    expect(projectSessionRuntimeState(state, buildLeaf)).toEqual({
+      model: "model-a",
+      provider: undefined,
+      mode: "BUILD",
+      config: {},
+    });
+    expect(projectSessionRuntimeState(state, modelBLeaf)).toEqual({
+      model: "model-b",
+      provider: undefined,
+      mode: undefined,
+      config: {},
+    });
+  });
+
+  test("restores Branch Summary provenance and later compaction without rewriting source entries", () => {
+    const options = deterministicOptions();
+    let state = createSessionTree<TestMessage>([], options);
+    state = appendSessionTreeMessages(state, [message("u1"), message("a1")], {}, options);
+    const sourceTip = state.activeEntryId;
+    const targetEntryId = state.rootEntryId;
+    state = jumpToSessionEntry(state, targetEntryId);
+    state = appendSessionEntry(state, {
+      type: "branch_summary",
+      summary: "Transferred branch knowledge",
+      transfer: {
+        sourceTipEntryId: sourceTip,
+        targetEntryId,
+        commonAncestorEntryId: targetEntryId,
+        coveredEntryIds: [sourceTip],
+      },
+    }, options);
+    const branchSummaryId = state.activeEntryId;
+    state = appendSessionEntry(state, {
+      type: "compaction",
+      summary: "Checkpoint containing transferred branch knowledge",
+      compactedRecordIds: [branchSummaryId],
+      retainedTailRecordIds: [],
+    }, options);
+
+    const restored = restoreSessionTree<TestMessage>(structuredClone(state), options);
+    const branchSummary = restored.entries.find((entry) => entry.id === branchSummaryId);
+    expect(branchSummary).toMatchObject({
+      type: "branch_summary",
+      summary: "Transferred branch knowledge",
+      transfer: {
+        sourceTipEntryId: sourceTip,
+        coveredEntryIds: [sourceTip],
+      },
+    });
+    expect(projectLatestSessionCompaction(restored)).toMatchObject({
+      compactedRecordIds: [branchSummaryId],
+    });
+  });
+
+  test("keeps older summary-only Branch Summary entries backward compatible", () => {
+    const state = createSessionTree<TestMessage>([], deterministicOptions());
+    const persisted = {
+      ...state,
+      activeEntryId: "legacy-branch-summary",
+      entries: [
+        ...state.entries,
+        {
+          id: "legacy-branch-summary",
+          parentId: state.rootEntryId,
+          createdAt: 123,
+          type: "branch_summary",
+          summary: "legacy summary",
+        },
+      ],
+    };
+
+    const restored = restoreSessionTree<TestMessage>(persisted, deterministicOptions());
+    expect(getActiveSessionEntry(restored)).toMatchObject({
+      type: "branch_summary",
+      summary: "legacy summary",
+    });
+  });
+
+  test("restores legacy linear message arrays as v3 message entries", () => {
+    const restored = restoreSessionTree<TestMessage>(
+      [message("u1"), message("a1")],
+      deterministicOptions(),
+    );
+
+    expect(restored.version).toBe(3);
+    expect(restored.entries.map((entry) => entry.type)).toEqual([
+      "session_start", "user_message", "assistant_message",
+    ]);
+    expect(projectSessionTreeMessages(restored)).toEqual([
+      message("u1"), message("a1"),
+    ]);
+  });
+
+  test("upgrades v1 per-node snapshots without losing branches", () => {
+    const legacy = {
+      version: 1,
+      rootNodeId: "root",
+      activeNodeId: "left",
+      nodes: [
+        { id: "root", parentId: null, createdAt: 1, messages: [message("u1"), message("a1")] },
+        {
+          id: "left",
+          parentId: "root",
+          createdAt: 2,
+          messages: [message("u1"), message("a1"), message("u2"), message("a2")],
+        },
+        {
+          id: "right",
+          parentId: "root",
+          createdAt: 3,
+          messages: [message("u1"), message("a1"), message("u2b"), message("a2b")],
+        },
+      ],
+    };
+
+    const restored = restoreSessionTree<TestMessage>(legacy, deterministicOptions());
+    expect(restored.version).toBe(3);
+    expect(projectSessionTreeMessages(restored).map((entry) => entry.id)).toEqual([
+      "u1", "a1", "u2", "a2",
+    ]);
+
+    const branchPoint = restored.entries.find(
+      (entry) => entry.type === "assistant_message" && entry.messageId === "a1",
+    );
+    expect(branchPoint).toBeDefined();
+    const branchChildren = restored.entries.filter((entry) => entry.parentId === branchPoint!.id);
+    expect(branchChildren).toHaveLength(2);
+  });
+
+  test("upgrades v2 event-backed checkpoints and preserves branch-local message revisions", () => {
+    const v2 = {
+      version: 2,
+      rootNodeId: "root",
+      activeNodeId: "right",
+      nodes: [
+        { id: "root", parentId: null, createdAt: 1, eventIds: ["e1", "e2"] },
+        { id: "left", parentId: "root", createdAt: 2, eventIds: ["e3", "e4"] },
+        { id: "right", parentId: "root", createdAt: 3, eventIds: ["e5", "e6"] },
+      ],
+      events: [
+        { id: "e1", nodeId: "root", kind: "message-upsert", messageId: "u1", createdAt: 1, message: message("u1") },
+        { id: "e2", nodeId: "root", kind: "message-upsert", messageId: "a1", createdAt: 1, message: message("a1", "assistant", "draft") },
+        { id: "e3", nodeId: "left", kind: "message-upsert", messageId: "a1", createdAt: 2, message: message("a1", "assistant", "left-final") },
+        { id: "e4", nodeId: "left", kind: "message-upsert", messageId: "u2", createdAt: 2, message: message("u2") },
+        { id: "e5", nodeId: "right", kind: "message-upsert", messageId: "a1", createdAt: 3, message: message("a1", "assistant", "right-final") },
+        { id: "e6", nodeId: "right", kind: "message-upsert", messageId: "u2b", createdAt: 3, message: message("u2b") },
+      ],
+    };
+
+    const restored = restoreSessionTree<TestMessage>(v2, deterministicOptions());
+    expect(restored.version).toBe(3);
+    expect(projectSessionTreeMessages(restored)).toEqual([
+      message("u1"),
+      message("a1", "assistant", "right-final"),
+      message("u2b"),
+    ]);
+
+    const leftRevision = restored.entries.find(
+      (entry) => entry.type === "message_update"
+        && entry.messageId === "a1"
+        && entry.message.text === "left-final",
+    );
+    expect(leftRevision).toBeDefined();
+    expect(projectSessionTreeMessages(restored, leftRevision!.id)).toEqual([
+      message("u1"),
+      message("a1", "assistant", "left-final"),
+    ]);
   });
 });

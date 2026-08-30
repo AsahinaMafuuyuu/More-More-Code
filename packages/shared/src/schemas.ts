@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { tool } from "ai"
 
 export const Mode = {
     BUILD: "BUILD",
@@ -36,6 +35,10 @@ export const toolInputSchemas = {
             .optional()
             .describe("Optional glob for files to include."),
     }),
+    loadSkill: z.object({
+        name: z.string()
+            .describe("Name of an available skill to load on demand."),
+    }),
     writeFile: z.object({
         path: z.string()
             .describe("Relative path to the file to write."),
@@ -63,49 +66,54 @@ export const toolInputSchemas = {
 } as const;
 
 export const readOnlyToolContracts = {
-    readFile: tool({
+    readFile: {
         description: "Read a file from the current project directory.",
         inputSchema: toolInputSchemas.readFile,
         outputSchema: z.unknown(),
-    }),
+    },
 
-    listDirectory: tool({
+    listDirectory: {
         description: "List entries in a directory under the current project directory.",
         inputSchema: toolInputSchemas.listDirectory,
         outputSchema: z.unknown(),
-    }),
-    glob: tool({
+    },
+    glob: {
         description: "Find files matching a glob pattern under the current project directory.",
         inputSchema: toolInputSchemas.glob,
         outputSchema: z.unknown(),
-    }),
+    },
 
-    grep: tool({
+    grep: {
         description:
             "Search file contents with a regular expression under the current project directory.",
         inputSchema: toolInputSchemas.grep,
         outputSchema: z.unknown(),
-    }),
+    },
+    loadSkill: {
+        description: "Load the full instructions for an available agent skill by name when that workflow is relevant.",
+        inputSchema: toolInputSchemas.loadSkill,
+        outputSchema: z.unknown(),
+    },
 } as const;
 
 export const buildToolContracts = {
     ...readOnlyToolContracts,
-    writeFile: tool({
+    writeFile: {
         description: "Create or overwrite a file under the current project directory.",
         inputSchema: toolInputSchemas.writeFile,
         outputSchema: z.unknown(),
-    }),
+    },
 
-    editFile: tool({
+    editFile: {
         description: "Replace exact text in a file under the current project directory.",
         inputSchema: toolInputSchemas.editFile,
         outputSchema: z.unknown(),
-    }),
-    bash: tool({
+    },
+    bash: {
         description: "Execute a bash command in the current project directory.",
         inputSchema: toolInputSchemas.bash,
         outputSchema: z.unknown(),
-    })
+    }
 } as const;
 
 export type ToolContracts = typeof buildToolContracts;

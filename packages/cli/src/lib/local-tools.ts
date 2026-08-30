@@ -1,6 +1,11 @@
-import { mkdir, readFile, readdir, stat, writeFile } from "fs/promises";
-import { dirname, isAbsolute, join, relative, resolve } from "path";
-import { toolInputSchemas, Mode, type ModeType } from "@more-more-code/shared";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, relative, resolve } from "path";
+import { toolInputSchemas } from "@more-more-code/shared";
+import { getAgentEnvironment } from "./agent-environment";
+import type { ProcessSandbox, SandboxedProcess } from "./process-sandbox";
+import { resolveWorkspacePath } from "./workspace-path";
 
 const MAX_FILE_SIZE = 10_000;
 const MAX_RESULTS = 200;
@@ -8,16 +13,15 @@ const MAX_MATCHES = 50;
 const MAX_OUTPUT = 20_000;
 const DEFAULT_TIMEOUT = 30_000;
 
-function resolveInsideCwd(path: string) {
-    const cwd = process.cwd();
-    const resolved = resolve(cwd, path); // 转换成绝对路径
-    const rel = relative(cwd, resolved); // 转换成相对路径
-
-    if (rel.startsWith("..") || isAbsolute(rel)) {
+async function resolveInsideWorkspace(workspaceRoot: string, path: string) {
+    const resolution = await resolveWorkspacePath(workspaceRoot, path);
+    if (resolution.scope === "outside-workspace") {
         throw new Error("Path is outside the project directory");
     }
-
-    return { cwd, resolved };
+    return {
+        cwd: resolution.workspaceRoot,
+        resolved: resolution.resolvedPath,
+    };
 }
 
 function truncate(value: string, limit: number) {
@@ -26,24 +30,81 @@ function truncate(value: string, limit: number) {
         : value;
 }
 
-// 用于通过大模型返回的工具调用结果进行本地执行
-export async function executeLocalTool(
-    toolName: string, // 工具名称
-    input: unknown, // 输入参数
-    mode: ModeType, // 当前模式
-) {
-    if (
-        mode === Mode.PLAN &&
-        !["readFile", "listDirectory", "glob", "grep"].includes(toolName)
-    ) {
-        throw new Error(`Tool ${toolName} is not available in PLAN mode`);
+function resolveNativeExecutable(command: "bash" | "grep") {
+    const direct = Bun.which(command);
+    if (direct) return direct;
+
+    // Git for Windows places GNU utilities such as grep in usr/bin while
+    // exposing bash from bin. That usr/bin directory is not necessarily on
+    // the Windows PATH used by Bun.spawn, even though the same executable is
+    // visible after entering Git Bash.
+    if (process.platform === "win32" && command === "grep") {
+        const bash = Bun.which("bash");
+        if (bash) {
+            const gitRoot = dirname(dirname(bash));
+            const gitGrep = join(gitRoot, "usr", "bin", "grep.exe");
+            if (existsSync(gitGrep)) return gitGrep;
+        }
     }
+
+    return command;
+}
+
+type NativeToolExecutionContext = {
+    workspaceRoot: string;
+    signal: AbortSignal;
+    processSandbox: ProcessSandbox;
+};
+
+function throwIfAborted(signal: AbortSignal) {
+    if (!signal.aborted) return;
+    throw signal.reason instanceof Error ? signal.reason : new Error("Tool execution was cancelled");
+}
+
+async function readProcessOutput(stream: ReadableStream<Uint8Array>, signal: AbortSignal) {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let output = "";
+    const cancelRead = () => {
+        void reader.cancel(signal.reason);
+    };
+
+    signal.addEventListener("abort", cancelRead, { once: true });
+    if (signal.aborted) cancelRead();
+
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            output += decoder.decode(value, { stream: true });
+        }
+        output += decoder.decode();
+        return output;
+    } finally {
+        signal.removeEventListener("abort", cancelRead);
+        reader.releaseLock();
+    }
+}
+
+export function resolveNativeToolTimeoutMs(toolName: string, input: unknown) {
+    if (toolName !== "bash") return undefined;
+    const parsed = toolInputSchemas.bash.safeParse(input);
+    return parsed.success ? parsed.data.timeout ?? DEFAULT_TIMEOUT : DEFAULT_TIMEOUT;
+}
+
+// Concrete native implementations. Visibility and policy belong to ToolRuntime.
+export async function executeNativeTool(
+    toolName: string,
+    input: unknown,
+    context: NativeToolExecutionContext,
+) {
+    throwIfAborted(context.signal);
 
     switch (toolName) {
         case "readFile": {
             const { path } = toolInputSchemas.readFile.parse(input);
-            const { resolved } = resolveInsideCwd(path);
-            const content = await readFile(resolved, "utf-8");
+            const { resolved } = await resolveInsideWorkspace(context.workspaceRoot, path);
+            const content = await readFile(resolved, { encoding: "utf-8", signal: context.signal });
 
             return content.length > MAX_FILE_SIZE
                 ? {
@@ -55,7 +116,7 @@ export async function executeLocalTool(
         }
         case "listDirectory": {
             const { path } = toolInputSchemas.listDirectory.parse(input);
-            const { cwd, resolved } = resolveInsideCwd(path);
+            const { cwd, resolved } = await resolveInsideWorkspace(context.workspaceRoot, path);
             const entries = await readdir(resolved); // 读取目录内容
             const results: {
                 name: string;
@@ -93,7 +154,7 @@ export async function executeLocalTool(
 
         case "glob": {
             const { pattern, path } = toolInputSchemas.glob.parse(input);
-            const { cwd, resolved } = resolveInsideCwd(path);
+            const { cwd, resolved } = await resolveInsideWorkspace(context.workspaceRoot, path);
             const glob = new Bun.Glob(pattern);
             const files: string[] = [];
             let truncated = false; // 未截断
@@ -124,7 +185,7 @@ export async function executeLocalTool(
 
         case "grep": {
             const { pattern, path, includes } = toolInputSchemas.grep.parse(input);
-            const { cwd, resolved } = resolveInsideCwd(path);
+            const { cwd, resolved } = await resolveInsideWorkspace(context.workspaceRoot, path);
 
             const args = [
                 "-rn",
@@ -137,11 +198,14 @@ export async function executeLocalTool(
             if (includes) args.push(`--include=${includes}`);
             args.push(pattern, resolved);
 
-            const proc = Bun.spawn(["grep", ...args], {
+            const proc = context.processSandbox.spawn({
+                command: [resolveNativeExecutable("grep"), ...args],
+                workspaceRoot: cwd,
                 cwd,
-                stdout: "pipe",
-                stderr: "pipe",
+                env: process.env,
             });
+            const cancel = () => proc.kill();
+            context.signal.addEventListener("abort", cancel, { once: true });
 
             const [stdout, stderr] = await Promise.all([
                 new Response(proc.stdout).text(),
@@ -149,6 +213,8 @@ export async function executeLocalTool(
             ]);
 
             const exitCode = await proc.exited;
+            context.signal.removeEventListener("abort", cancel);
+            throwIfAborted(context.signal);
 
             if (exitCode !== 0 && exitCode !== 1) {
                 throw new Error(`grep failed: ${stderr.trim()}`);
@@ -191,12 +257,25 @@ export async function executeLocalTool(
             }
         }
 
+        case "loadSkill": {
+            const { name } = toolInputSchemas.loadSkill.parse(input);
+            const skill = await getAgentEnvironment().skills.load(name);
+            return {
+                name: skill.name,
+                description: skill.description,
+                scope: skill.scope,
+                source: skill.path,
+                content: skill.content,
+            };
+        }
+
         case "writeFile": {
             const { path, content } = toolInputSchemas.writeFile.parse(input);
-            const { cwd, resolved } = resolveInsideCwd(path);
+            const { cwd, resolved } = await resolveInsideWorkspace(context.workspaceRoot, path);
 
             await mkdir(dirname(resolved), { recursive: true });
-            await writeFile(resolved, content, "utf-8");
+            throwIfAborted(context.signal);
+            await writeFile(resolved, content, { encoding: "utf-8", signal: context.signal });
 
             return {
                 success: true as const,
@@ -207,8 +286,8 @@ export async function executeLocalTool(
 
         case "editFile": {
             const { path, oldString, newString } = toolInputSchemas.editFile.parse(input);
-            const { cwd, resolved } = resolveInsideCwd(path);
-            const content = await readFile(resolved, "utf-8");
+            const { cwd, resolved } = await resolveInsideWorkspace(context.workspaceRoot, path);
+            const content = await readFile(resolved, { encoding: "utf-8", signal: context.signal });
             const occurrences = content.split(oldString).length - 1;
 
             if (occurrences === 0) throw new Error("oldString not found in file");
@@ -216,28 +295,92 @@ export async function executeLocalTool(
                 throw new Error(`oldString is ambiguous; found ${occurrences} matches`);
             }
 
-            await writeFile(resolved, content.replace(oldString, newString), "utf-8");
+            throwIfAborted(context.signal);
+            await writeFile(resolved, content.replace(oldString, newString), { encoding: "utf-8", signal: context.signal });
             return { success: true as const, path: relative(cwd, resolved) };
         }
 
         case "bash": {
-            const { command, timeout = DEFAULT_TIMEOUT } = toolInputSchemas.bash.parse(input);
-            const proc = Bun.spawn(["bash", "-c", command], {
-                cwd: resolveInsideCwd(".").resolved,
-                stdout: "pipe",
-                stderr: "pipe",
-                env: { ...process.env, TERM: "dumb" },
-            });
-
-            const timer = setTimeout(() => proc.kill(), timeout);
-
-            const [stdout, stderr] = await Promise.all([
-                new Response(proc.stdout).text(),
-                new Response(proc.stderr).text(),
-            ]);
-
-            const exitCode = await proc.exited;
-            clearTimeout(timer);
+            const { command } = toolInputSchemas.bash.parse(input);
+            const workspaceRoot = (await resolveInsideWorkspace(context.workspaceRoot, ".")).resolved;
+            const sandboxProvider = context.processSandbox.getStatus().provider;
+            const shellStateDirectory = sandboxProvider === "bubblewrap"
+                ? null
+                : await mkdtemp(join(tmpdir(), "more-more-code-shell-"));
+            const cancellationFile = shellStateDirectory
+                ? join(shellStateDirectory, "cancel")
+                : "/tmp/.more-more-code-unused-cancel";
+            const cancellationFileExpression = process.platform === "win32"
+                ? '"$(cygpath -u "$1")"'
+                : '"$1"';
+            const shellWrapper = [
+                "set -m",
+                `cancel_file=${cancellationFileExpression}`,
+                'eval "$2" &',
+                "child=$!",
+                'while kill -0 "$child" 2>/dev/null; do',
+                '  if [ -f "$cancel_file" ]; then',
+                '    kill -TERM -- -"$child" 2>/dev/null || true',
+                "    sleep 0.05",
+                '    kill -KILL -- -"$child" 2>/dev/null || true',
+                '    wait "$child" 2>/dev/null || true',
+                "    exit 130",
+                "  fi",
+                "  sleep 0.02",
+                "done",
+                'wait "$child"',
+            ].join("\n");
+            let proc: SandboxedProcess | null = null;
+            let cancellation: Promise<void> | null = null;
+            const cancel = () => {
+                if (!proc) return;
+                if (sandboxProvider === "bubblewrap") {
+                    // Bubblewrap owns a private PID namespace. Killing the
+                    // sandbox supervisor tears down the isolated process tree;
+                    // the host-side cancellation-file bridge is only needed
+                    // for direct/MSYS execution where grandchildren can outlive
+                    // the visible bash.exe process.
+                    proc.kill();
+                    return;
+                }
+                // The Bash wrapper owns the POSIX process group. Signalling it
+                // through a file works on Windows/MSYS too, where killing only
+                // the visible bash.exe process can leave grandchildren alive.
+                cancellation ??= writeFile(cancellationFile, "cancel", "utf8")
+                    .then(async () => { await proc!.exited; });
+            };
+            let stdout: string;
+            let stderr: string;
+            let exitCode: number;
+            try {
+                proc = context.processSandbox.spawn({
+                    command: [
+                        resolveNativeExecutable("bash"),
+                        "-c",
+                        shellWrapper,
+                        "more-more-code-shell",
+                        cancellationFile,
+                        command,
+                    ],
+                    workspaceRoot,
+                    cwd: workspaceRoot,
+                    env: { ...process.env, TERM: "dumb" },
+                });
+                context.signal.addEventListener("abort", cancel, { once: true });
+                if (context.signal.aborted) cancel();
+                [stdout, stderr, exitCode] = await Promise.all([
+                    readProcessOutput(proc.stdout, context.signal),
+                    readProcessOutput(proc.stderr, context.signal),
+                    proc.exited,
+                ]);
+            } finally {
+                context.signal.removeEventListener("abort", cancel);
+                if (cancellation) await cancellation;
+                if (shellStateDirectory) {
+                    await rm(shellStateDirectory, { recursive: true, force: true });
+                }
+            }
+            throwIfAborted(context.signal);
 
             return {
                 stdout: truncate(stdout, MAX_OUTPUT),
