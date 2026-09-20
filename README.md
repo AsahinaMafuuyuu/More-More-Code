@@ -2,9 +2,9 @@
 
 > **终端里的 AI 编程助手** — 在终端中与 AI 对话，让 AI 直接操作你的代码。
 >
-> 当前版本：**v1.1.0**
+> 当前发布版本：**v2.0.1**；当前开发分支还包含 `Unreleased` 的 UI Slice 2 / Session Inspector 交付。
 
-一款基于 **Bun + TypeScript Monorepo** 构建的终端 TUI（Text-based UI）应用。它让你在终端中与 GPT / Claude / DeepSeek 等 AI 模型交互，AI 可以读取、编辑你的项目文件，执行 shell 命令，真正辅助你写代码。
+一款基于 **Bun + TypeScript Monorepo** 构建的终端 TUI（Text-based UI）应用。它让你在终端中通过 OpenAI、Anthropic、Google、DeepSeek 或自定义 OpenAI-compatible Provider 与 AI 模型交互，AI 可以读取、编辑项目文件并执行 shell 命令。
 
 ---
 
@@ -18,10 +18,11 @@
 - 📜 **本地会话持久化** — Session Entry Tree、分支、Context checkpoint 和元数据存储在本地 SQLite，重启后可继续
 - 📊 **会话资源可观测性** — StatusBar 展示当前 Context 占用、累计 API 估算费用和可信 Cache 命中率；Usage 由本地 Runtime Store 持久化并在重启后恢复
 - 🧭 **Agent Runtime Activity** — 会话主界面直接展示当前 Run/Turn/Model Step/Tool Step 活动；ToolUse 使用语义状态区分运行、失败、拒绝、超时、取消、审批等待与历史不完整状态
+- 🔎 **统一 Session Inspector** — `/inspect` 打开 Tree / Context / Usage / Runtime / Security 五段式检查器；当前已交付 Tree、Context、Usage，Runtime 与 Security 保留为明确的后续入口
 - ⚡ **流式响应** — 本地 Provider streaming，支持思维链（reasoning）展示
 - ⌨️ **命令菜单** — 输入 `/` 快速切换模型、模式、主题、浏览历史会话
 
-> **当前架构（ADR-0023、ADR-0024、ADR-0026、ADR-0027）：** Stage 6.4 Provider Runtime、Stage 6.5 Local Session Authority、semantic navigation/finalized-message follow-up、Usage/Cost/Context Observability，以及 UI Runtime Activity Foundation 均已交付。CLI 的 Session、Provider 配置/凭证、Harness Context、cache/checkpoint、Model/Tool Runtime 与 Session Usage telemetry 均在本地运行；React/OpenTUI 通过 CLI-owned `AgentActivityProjection` / ToolUse projection 消费 Run/Turn/Step 和 Tool 状态，不直接解释 Harness 或持久化细节。StatusBar 的 `Ctx` 来自 canonical Context 投影，`API` 来自 Provider Usage + 持久化 pricing basis 的计算费用，`Cache` 来自 Provider-reported cache-read/input 汇总。创建、列出、打开、继续和重启恢复不需要 Server、账户、`API_URL`、Cloudflare Worker 或 Railway。Stage 6.6 云同步/商业账户暂时暂停，Server/database 仅保留为 dormant future-cloud 代码。
+> **当前架构（ADR-0023、ADR-0024、ADR-0026、ADR-0027 + UI Slice 2）：** Stage 6.4 Provider Runtime、Stage 6.5 Local Session Authority、semantic navigation/finalized-message follow-up、Usage/Cost/Context Observability、UI Runtime Activity Foundation 与 Session Inspector P1-A 均已交付。CLI 的 Session、Provider 配置/凭证、Harness Context、cache/checkpoint、Model/Tool Runtime 与 Session Usage telemetry 均在本地运行；React/OpenTUI 只消费 CLI-owned projection/store slice，不直接解释 Harness 或持久化细节。StatusBar 的 `Ctx` 来自 canonical Context 投影，`API` 来自 Provider Usage + 持久化 pricing basis 的计算费用，`Cache` 来自 Provider-reported cache-read/input 汇总；Inspector 则复用同一 authority 投影 Tree / Context / Usage。创建、列出、打开、继续和重启恢复不需要 Server、账户、`API_URL`、Cloudflare Worker 或 Railway。Stage 6.6 云同步/商业账户暂时暂停，Server/database 仅保留为 dormant future-cloud 代码。
 
 ---
 
@@ -104,6 +105,7 @@ MORE-MORE-CODE/
 │   │       ├── layouts/        # 布局组件
 │   │       ├── hooks/          # 自定义 hooks（useChat 等）
 │   │       ├── lib/            # Agent bootstrap / config / skills / tools / model runtime
+│   │       ├── ui/session/     # Session UI store / runtime bridge / inspector / surfaces
 │   │       ├── index.tsx       # 入口文件；先 bootstrap agent environment
 │   │       └── theme.ts        # 9 种配色主题定义
 │   │
@@ -158,7 +160,7 @@ MORE-MORE-CODE/
 
 ### 前置要求
 
-- [Bun](https://bun.sh/) >= 1.2.0
+- [Bun](https://bun.sh/) >= 1.4.0
 
 ### 1. 克隆并安装依赖
 
@@ -215,7 +217,8 @@ bun dev:cli
 | `/agents` | 切换工作模式（PLAN / BUILD） |
 | `/models` | 选择 AI 模型 |
 | `/sessions` | 浏览历史会话 |
-| `/tree` | 浏览当前 Session 的 semantic Navigation Tree Projection；隐藏 legacy update/bookkeeping，Tool Call/Result 合并为 ToolUse，跨分支时复用 Carry 策略 |
+| `/inspect` | 打开统一 Session Inspector，默认进入 Tree；可切换 Tree / Context / Usage / Runtime / Security |
+| `/tree` | 直接打开 Session Inspector 的 Tree 段；隐藏 legacy update/bookkeeping，Tool Call/Result 合并为 ToolUse，跨分支时复用 Carry 策略 |
 | `/jump` | 打开 Session Entry 跳转器，复用与 `/tree` 相同的 Branch Summary 决策 |
 | `/parent` | 跳转到父 Entry；需要时执行同一套 Carry / No Carry / Cancel 流程 |
 | `/root` | 跳转到 `session_start` 根 Entry；需要时执行同一套 Branch Summary 流程 |
@@ -233,6 +236,20 @@ bun dev:cli
 | `Esc` | 中断 AI 响应 / 关闭对话框 |
 | `Ctrl+C` | 复制当前选区；1 秒内连续按两次退出程序 |
 | `↑` `↓` | 导航历史消息 / 对话框列表 |
+
+### Session Inspector
+
+`/inspect` 提供统一的只读诊断工作台，当前段位如下：
+
+| 段 | 当前状态 | 内容 |
+|---|---|---|
+| **Tree** | ✅ 已交付 | 语义 Session Tree、active path / sibling 标记、类型过滤搜索、节点跳转与既有 Branch Summary 决策 |
+| **Context** | ✅ 已交付 | current input、context window、input budget、reserved output、safety margin、token counter 与 exact/estimated 质量 |
+| **Usage** | ✅ 已交付 | Provider-reported input/output/cache usage、Session cache hit、API cost、coverage、integrity 与持久化完整性 |
+| **Runtime** | ⏳ P1-B | 当前仅保留稳定入口，不展示未完成诊断 |
+| **Security** | ⏳ P1-B | 当前仅保留稳定入口，不展示未完成审计 UI |
+
+Inspector 内使用 `Tab` / `Shift+Tab` 切换段，`Esc` 优先关闭 Inspector。Tree 段支持直接键入过滤词、`Backspace` 编辑、`↑` / `↓` 选择、`Enter` 导航。Inspector 的打开、关闭、切段、搜索和选择均为 process-local presentation state，不创建 Session Entry 或 Runtime Event；Tree 的 O(history) 投影仅在 Inspector 打开时物化，避免给普通长会话热路径增加持续扫描成本。
 
 ---
 
@@ -419,7 +436,11 @@ Session Entry Tree 中每个 Entry 都是一个可恢复的语义历史点。CLI
 
 | 命令 | 说明 |
 |------|------|
-| `bun dev:cli` | 启动 TUI 客户端（watch 模式） |
+| `bun dev:cli` | 启动 TUI 客户端 |
+| `bun dev:cli:watch` | 以 Bun watch 模式启动 TUI 客户端 |
+| `bun run build:cli` | 构建 CLI production bundle |
+| `bun run tui:soak` | 运行 OpenTUI 稳定性 soak 场景 |
+| `bun run tui:stress` | 运行 OpenTUI 稳定性压力套件 |
 | `bun run --cwd packages/session-store test` | 运行本地 Session Store migrations/事务/topology/idempotency 测试 |
 | `bun run --cwd packages/runtime-store db:generate` | 重新生成本地 Runtime Store Prisma Client |
 | `bun run --cwd packages/runtime-store db:validate` | 校验本地 Runtime Store Prisma schema |
