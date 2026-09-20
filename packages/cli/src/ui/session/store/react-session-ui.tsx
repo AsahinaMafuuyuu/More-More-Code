@@ -29,11 +29,15 @@ export function SessionUiStoreProvider({
 }
 
 export function useSessionUiStore(): SessionUiStore {
-  const store = useContext(SessionUiStoreContext);
+  const store = useOptionalSessionUiStore();
   if (!store) {
     throw new Error("SessionUiStoreProvider is required for Session UI consumers");
   }
   return store;
+}
+
+export function useOptionalSessionUiStore(): SessionUiStore | null {
+  return useContext(SessionUiStoreContext);
 }
 
 export function useSessionUiSelector<T>(

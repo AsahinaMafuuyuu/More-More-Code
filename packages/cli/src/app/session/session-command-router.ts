@@ -6,14 +6,16 @@ export type SessionDialogIntent =
   | "models"
   | "providers"
   | "sessions"
-  | "tree"
   | "jump"
   | "settings"
   | "theme";
 
+export type SessionInspectorSection = "tree" | "context" | "usage" | "runtime" | "security";
+
 export type SessionCommandIntent =
   | { type: "new-session" }
   | { type: "open-dialog"; dialog: SessionDialogIntent }
+  | { type: "open-inspector"; section: SessionInspectorSection }
   | { type: "navigate-tree"; target: "parent" | "root" }
   | { type: "compact-context" }
   | { type: "change-mode"; mode: ModeType }
@@ -22,6 +24,7 @@ export type SessionCommandIntent =
 export type SessionCommandRouterDependencies = {
   navigate(path: string): void;
   openDialog(dialog: SessionDialogIntent): void;
+  openInspector(section: SessionInspectorSection): void;
   changeMode(mode: ModeType): void | Promise<void>;
   compact(): void | Promise<void>;
   navigateTree(target: "parent" | "root"): void | Promise<void>;
@@ -36,7 +39,8 @@ const COMMAND_INTENTS: Readonly<Record<string, SessionCommandIntent>> = {
   models: { type: "open-dialog", dialog: "models" },
   providers: { type: "open-dialog", dialog: "providers" },
   sessions: { type: "open-dialog", dialog: "sessions" },
-  tree: { type: "open-dialog", dialog: "tree" },
+  tree: { type: "open-inspector", section: "tree" },
+  inspect: { type: "open-inspector", section: "tree" },
   jump: { type: "open-dialog", dialog: "jump" },
   parent: { type: "navigate-tree", target: "parent" },
   root: { type: "navigate-tree", target: "root" },
@@ -63,6 +67,9 @@ export function createSessionCommandRouter(dependencies: SessionCommandRouterDep
           return;
         case "open-dialog":
           dependencies.openDialog(intent.dialog);
+          return;
+        case "open-inspector":
+          dependencies.openInspector(intent.section);
           return;
         case "navigate-tree":
           await dependencies.navigateTree(intent.target);

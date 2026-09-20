@@ -8,6 +8,7 @@ import {
   projectToolUsesFromIndex,
 } from "../../../lib/tool-use-projection";
 import { projectTranscriptWindow } from "../../../lib/transcript-window";
+import { projectSessionNavigationTree } from "../../../lib/session-navigation-projection";
 import { usePromptConfig } from "../../../providers/prompt-config";
 import type { SessionController } from "../../../app/session/session-controller";
 import type { SessionUiStore } from "../store/session-ui-store";
@@ -23,6 +24,11 @@ import {
   projectSessionStatusView,
   type ChatPresentationStatus,
 } from "../projections/session-ui-projections";
+import {
+  projectInspectorContextView,
+  projectInspectorTreeView,
+  projectInspectorUsageView,
+} from "../inspector/inspector-projections";
 
 export function SessionRuntimeBridge({
   controller,
@@ -131,6 +137,21 @@ export function SessionRuntimeBridge({
     observability,
   }), [mode, model, observability]);
 
+  const inspectorContext = useMemo(
+    () => projectInspectorContextView(controllerState.contextUsage),
+    [controllerState.contextUsage],
+  );
+  const inspectorUsage = useMemo(() => projectInspectorUsageView({
+    usage: controllerState.sessionUsage,
+    usagePersistenceIncomplete: controllerState.usagePersistenceIncomplete,
+  }), [controllerState.sessionUsage, controllerState.usagePersistenceIncomplete]);
+  const inspectorTree = useMemo(() => {
+    if (!store.getSnapshot().inspector.open) {
+      return store.getSnapshot().inspectorTree;
+    }
+    return projectInspectorTreeView(projectSessionNavigationTree(controllerState.sessionTree));
+  }, [controllerState.sessionTree, store]);
+
   const composerRuntime = useMemo(() => projectComposerRuntimeView({
     busy: controllerState.busy,
     runStatus: controllerState.run?.status ?? null,
@@ -172,8 +193,19 @@ export function SessionRuntimeBridge({
       conversation,
       activity,
       status,
+      inspectorContext,
+      inspectorUsage,
+      inspectorTree,
     });
-  }, [activity, commitScheduler, conversation, status]);
+  }, [
+    activity,
+    commitScheduler,
+    conversation,
+    inspectorContext,
+    inspectorTree,
+    inspectorUsage,
+    status,
+  ]);
 
   useEffect(() => {
     commitScheduler.commitImmediate({

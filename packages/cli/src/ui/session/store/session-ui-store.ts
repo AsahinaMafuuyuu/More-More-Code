@@ -4,6 +4,11 @@ import type { AgentActivityView } from "../../../lib/agent-activity-projection";
 import type { Message } from "../../../lib/chat-types";
 import type { ConversationRunView } from "../../../lib/conversation-rounds";
 import type { ToolUseView } from "../../../lib/tool-use-projection";
+import type {
+  InspectorContextView,
+  InspectorTreeView,
+  InspectorUsageView,
+} from "../inspector/inspector-projections";
 
 export type ConversationView = Readonly<{
   messages: readonly Message[];
@@ -112,6 +117,9 @@ export type SessionUiState = Readonly<{
   approval: ApprovalUiView | null;
   recovery: RecoveryUiView | null;
   inspector: InspectorShellState;
+  inspectorContext: InspectorContextView;
+  inspectorUsage: InspectorUsageView;
+  inspectorTree: InspectorTreeView;
 }>;
 
 export type SessionUiSlice = keyof SessionUiState;
@@ -176,6 +184,35 @@ export function createInitialSessionUiState(
       open: false,
       section: "tree",
     },
+    inspectorContext: {
+      available: false,
+      currentInput: "—",
+      contextWindow: "—",
+      utilization: "—",
+      utilizationRatio: null,
+      inputBudget: "—",
+      reservedOutput: "—",
+      safetyMargin: "—",
+      counterId: "—",
+      quality: "unavailable",
+    },
+    inspectorUsage: {
+      inputTotal: "—",
+      inputNoCache: "—",
+      cacheRead: "—",
+      cacheWrite: "—",
+      outputTotal: "—",
+      outputText: "—",
+      outputReasoning: "—",
+      cacheHit: "—",
+      cacheCoverage: "none",
+      apiCost: "—",
+      costCoverage: "none",
+      completedSteps: "0",
+      integrity: "valid",
+      persistenceIncomplete: false,
+    },
+    inspectorTree: { entries: [] },
     ...overrides,
   });
 }
@@ -290,5 +327,16 @@ function freezeSnapshot(
     inspector: previous && state.inspector === previous.inspector
       ? previous.inspector
       : Object.freeze({ ...state.inspector }),
+    inspectorContext: previous && state.inspectorContext === previous.inspectorContext
+      ? previous.inspectorContext
+      : Object.freeze({ ...state.inspectorContext }),
+    inspectorUsage: previous && state.inspectorUsage === previous.inspectorUsage
+      ? previous.inspectorUsage
+      : Object.freeze({ ...state.inspectorUsage }),
+    inspectorTree: previous && state.inspectorTree === previous.inspectorTree
+      ? previous.inspectorTree
+      : Object.freeze({
+          entries: Object.freeze(state.inspectorTree.entries.map((entry) => Object.freeze({ ...entry }))),
+        }),
   });
 }

@@ -6,6 +6,22 @@ All notable changes to MORE MORE CODE are recorded here.
 
 ### Added
 
+- UI Slice 2 / P1-A Session Inspector with one stable Tree / Context / Usage /
+  Runtime / Security section model. Tree, Context and Usage are delivered now;
+  Runtime and Security remain explicit P1-B placeholders instead of exposing
+  incomplete diagnostics. `/inspect` opens the unified Inspector and `/tree`
+  routes directly to its semantic Tree section while `/jump` remains the fast
+  direct navigation dialog.
+- Read-only Context and Usage/Cost Inspector projections over existing authority:
+  Context preserves exact-vs-estimated quality and current input/window/budget
+  fields; Usage preserves Provider-reported token/cache buckets, unknown-vs-zero,
+  partial persistence coverage, Session cache hit, stable calculated Cost and
+  integrity without treating Context estimates as billable Usage.
+- Semantic Tree Inspector presentation with active-node/active-path/sibling
+  markers, bounded previews, viewport culling, type-to-filter keyboard search,
+  selector-isolated state and existing Branch Summary Carry / No Carry / Cancel
+  navigation semantics. The O(history) Tree projection is lazy while Inspector is
+  closed so diagnostics do not regress the long-context Session hot path.
 - Stage C C1–C6 Context Cache Stability & Reliable Compaction Runtime: permanent
   `CacheFamilyId` / `ContextEpochId` / wire-level `RenderedPrefixDigest`, typed
   cache-miss classification, capability-aware Provider cache compilation,
@@ -163,6 +179,15 @@ All notable changes to MORE MORE CODE are recorded here.
 
 ### Fixed
 
+- DeepSeek V4 thinking-mode Chat Completions now serialize `reasoning_content`
+  on every assistant history message whenever DeepSeek Tool definitions are
+  present. Existing reasoning is replayed verbatim and assistant records with
+  no reasoning block emit `reasoning_content: ""`, covering Tool continuations
+  and synthetic compaction-checkpoint assistant history that otherwise caused
+  Provider HTTP 400 responses.
+- Native Provider HTTP failures now expose only bounded allowlisted fields from
+  standard JSON error envelopes (`type`, `code`, `param`, `message`) while
+  continuing to withhold arbitrary response bodies and unrelated payload fields.
 - OpenTUI terminal dimensions now use one application-level resize subscription
   shared through `TerminalDimensionsProvider`; persistent historical ToolUse
   rows no longer add one `CliRenderer` `resize` listener each, preventing

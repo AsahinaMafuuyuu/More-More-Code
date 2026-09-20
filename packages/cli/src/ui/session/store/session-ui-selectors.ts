@@ -11,3 +11,6 @@ export const selectActiveRuntime = (state: SessionUiState) => state.activeRuntim
 export const selectApproval = (state: SessionUiState) => state.approval;
 export const selectRecovery = (state: SessionUiState) => state.recovery;
 export const selectInspector = (state: SessionUiState) => state.inspector;
+export const selectInspectorContext = (state: SessionUiState) => state.inspectorContext;
+export const selectInspectorUsage = (state: SessionUiState) => state.inspectorUsage;
+export const selectInspectorTree = (state: SessionUiState) => state.inspectorTree;

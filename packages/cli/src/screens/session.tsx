@@ -93,7 +93,7 @@ function SessionChat({
         composer={<ComposerSurface controller={controller} />}
         status={<StatusSurface />}
         hints={<InteractionHintsSurface />}
-        inspector={<InspectorSurface />}
+        inspector={<InspectorSurface controller={controller} />}
       />
     </SessionUiStoreProvider>
   );

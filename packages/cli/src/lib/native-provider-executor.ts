@@ -676,9 +676,7 @@ function openAIChatMessages(
             .map((item) => item.text);
         const calls = message.content.filter((item) => item.type === "tool-call");
         const includeReasoning = options.includeAssistantReasoning
-            && message.role === "assistant"
-            && reasoning.length > 0
-            && calls.length > 0;
+            && message.role === "assistant";
         if (texts.length === 0 && calls.length === 0 && !includeReasoning) continue;
         output.push({
             role: message.role,

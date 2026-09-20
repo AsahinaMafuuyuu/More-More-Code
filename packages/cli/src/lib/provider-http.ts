@@ -1,5 +1,6 @@
 const MAX_ERROR_BODY_BYTES = 4_096;
 const DEFAULT_MAX_RETRY_DELAY_MS = 60_000;
+const MAX_PROVIDER_DIAGNOSTIC_FIELD_CHARS = 512;
 
 export class NativeProviderHttpError extends Error {
     constructor(
@@ -61,6 +62,40 @@ async function readBoundedBody(response: Response, signal: AbortSignal) {
     } finally {
         void reader.cancel();
     }
+}
+
+function sanitizeProviderDiagnosticField(value: unknown) {
+    if (typeof value !== "string") return undefined;
+    const normalized = value.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+    if (!normalized) return undefined;
+    return normalized.length > MAX_PROVIDER_DIAGNOSTIC_FIELD_CHARS
+        ? `${normalized.slice(0, MAX_PROVIDER_DIAGNOSTIC_FIELD_CHARS)}…`
+        : normalized;
+}
+
+function structuredProviderDiagnostic(body: string, contentType: string | null) {
+    if (!body || !contentType?.toLowerCase().includes("json")) return undefined;
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(body);
+    } catch {
+        return undefined;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+    const envelope = (parsed as Record<string, unknown>).error;
+    if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) return undefined;
+    const error = envelope as Record<string, unknown>;
+    const type = sanitizeProviderDiagnosticField(error.type);
+    const code = sanitizeProviderDiagnosticField(error.code);
+    const param = sanitizeProviderDiagnosticField(error.param);
+    const message = sanitizeProviderDiagnosticField(error.message);
+    const fields = [
+        type ? `type=${type}` : undefined,
+        code && code !== type ? `code=${code}` : undefined,
+        param ? `param=${param}` : undefined,
+        message ? `message=${message}` : undefined,
+    ].filter((value): value is string => Boolean(value));
+    return fields.length > 0 ? fields.join("; ") : undefined;
 }
 
 function retryable(error: unknown) {
@@ -127,8 +162,15 @@ export async function fetchProvider(input: {
             });
             if (response.ok) return response;
             const marker = await readBoundedBody(response, merged.signal);
+            const diagnostic = structuredProviderDiagnostic(marker, response.headers.get("content-type"));
             const error = new NativeProviderHttpError(
-                `Provider request failed (HTTP ${response.status})${marker ? ": response body withheld" : ""}`,
+                `Provider request failed (HTTP ${response.status})${
+                    diagnostic
+                        ? `: ${diagnostic}`
+                        : marker
+                            ? ": response body withheld"
+                            : ""
+                }`,
                 response.status,
                 response.headers,
             );
